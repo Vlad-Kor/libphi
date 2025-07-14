@@ -1,0 +1,11 @@
+[wrap-git]
+url = https://github.com/ArtifexSoftware/mupdf.git
+push-url = git@github.com:ArtifexSoftware/mupdf.git
+revision = cd6d235f2de9b945c449e8c686d849d2517cb75e
+depth = 1
+clone-recursive = true
+
+patch_directory = mupdf
+
+[provide]
+dependency_names = mupdf
