@@ -18,6 +18,8 @@
 
 #include "phi/phinodedeviceprivate.h"
 
+#include <gtk/gtk.h>
+
 typedef enum {
 	PHI_RENDER_STATE_NONE,
 	PHI_RENDER_STATE_CLIP_PATH_FILL,
@@ -82,6 +84,41 @@ static void phi_node_device_drop(fz_context*, fz_device* dev) {
 	g_array_unref(self->stack);
 }
 
+static GskTransform* phi_node_device_transform_from_matrix(const fz_matrix* ctm) {
+#if GTK_CHECK_VERSION(4, 20, 0)
+	return gsk_transform_matrix_2d(NULL,
+	                               ctm->a, ctm->b,
+	                               ctm->c, ctm->d,
+	                               ctm->e, ctm->f);
+#else
+	// fast-path
+	if (ctm->b == 0. && ctm->c == 0.) {
+		graphene_point_t offset;
+		graphene_point_init(&offset, ctm->e, ctm->f);
+		return gsk_transform_scale(gsk_transform_translate(NULL, &offset), ctm->a, ctm->d);
+	}
+
+	graphene_matrix_t mat;
+	graphene_matrix_init_from_2d(&mat,
+		ctm->a, ctm->b,
+		ctm->c, ctm->d,
+		ctm->e, ctm->f);
+	return gsk_transform_matrix(NULL, &mat);
+#endif
+}
+
+static GskRenderNode* phi_node_device_transform_child(GskRenderNode* child, const fz_matrix* ctm) {
+	GskTransform* transform = phi_node_device_transform_from_matrix(ctm);
+	if (!transform)
+		return child;
+
+	GskRenderNode* transformed = gsk_transform_node_new(child, transform);
+
+	gsk_transform_unref(transform);
+	gsk_render_node_unref(child);
+	return transformed;
+}
+
 static void phi_node_device_path_walker_moveto(fz_context*, void* arg, float x, float y) {
 	GskPathBuilder* builder = (GskPathBuilder*)arg;
 	gsk_path_builder_move_to(builder, x, y);
@@ -136,33 +173,13 @@ static GskRenderNode* phi_node_device_make_color(fz_context* ctx, fz_colorspace*
 }
 
 static GskRenderNode* phi_node_device_node_from_fillpath(GskRenderNode* child, GskPath* path, int even_odd, const fz_matrix* child_ctm, const fz_matrix* ctm) {
-	graphene_matrix_t mat;
-	if (!fz_is_identity(*child_ctm)) {
-		GskRenderNode* root = child;
-		
-		graphene_matrix_init_from_2d(&mat,
-			child_ctm->a, child_ctm->b,
-			child_ctm->c, child_ctm->d,
-			child_ctm->e, child_ctm->f);
-		GskTransform* transform = gsk_transform_matrix(NULL, &mat);
-		child = gsk_transform_node_new(child, transform);
-		gsk_transform_unref(transform);
-		gsk_render_node_unref(root);
-	}
+	if (!fz_is_identity(*child_ctm))
+		child = phi_node_device_transform_child(child, child_ctm);
 
 	GskRenderNode* node = gsk_fill_node_new(child, path, even_odd ? GSK_FILL_RULE_EVEN_ODD : GSK_FILL_RULE_WINDING);
 	gsk_render_node_unref(child);
 	
-	graphene_matrix_init_from_2d(&mat,
-		ctm->a, ctm->b,
-		ctm->c, ctm->d,
-		ctm->e, ctm->f);
-	GskTransform* transform = gsk_transform_matrix(NULL, &mat);
-	GskRenderNode* transformed = gsk_transform_node_new(node, transform);
-	gsk_transform_unref(transform);
-	gsk_render_node_unref(node);
-
-	return transformed;
+	return phi_node_device_transform_child(node, ctm);
 }
 
 static void phi_node_device_fill_path(fz_context* ctx, fz_device* dev, const fz_path* path, int even_odd, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params) {
@@ -226,20 +243,12 @@ static void phi_node_device_stroke_path(fz_context* ctx, fz_device* dev, const f
 		graphene_rect_init(&bounds, 0.f, 0.f, 0.f, 0.f);
 	GskRenderNode* fill = phi_node_device_make_color(ctx, cs, color, alpha, &bounds);
 	
-	GskRenderNode* stroke_node = gsk_stroke_node_new(fill, cpath, stroke);
+	GskRenderNode* node = gsk_stroke_node_new(fill, cpath, stroke);
 	gsk_stroke_free(stroke);
 	gsk_render_node_unref(fill);
 	gsk_path_unref(cpath);
 
-	graphene_matrix_t mat;
-	graphene_matrix_init_from_2d(&mat,
-		ctm.a, ctm.b,
-		ctm.c, ctm.d,
-		ctm.e, ctm.f);
-	GskTransform* transform = gsk_transform_matrix(NULL, &mat);
-	GskRenderNode* node = gsk_transform_node_new(stroke_node, transform);
-	gsk_transform_unref(transform);
-	gsk_render_node_unref(stroke_node);
+	node = phi_node_device_transform_child(node, &ctm);
 
 	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
 	g_ptr_array_add(current->children, node);
@@ -324,17 +333,11 @@ static GskRenderNode* phi_node_device_node_from_image(fz_context* ctx, fz_image*
 	g_object_unref(texture);
 
 	// mat = inv([width 0 0; 0 height 0; 0 0 1])*ctm
-	graphene_matrix_t mat;
-	graphene_matrix_init_from_2d(&mat,
+	fz_matrix mat = fz_make_matrix(
 		ctm.a / width, ctm.b / width,
 		ctm.c / height, ctm.d / height,
 		ctm.e, ctm.f);
-
-	GskTransform* transform = gsk_transform_matrix(NULL, &mat);
-	GskRenderNode* node = gsk_transform_node_new(texture_node, transform);
-	gsk_transform_unref(transform);
-	gsk_render_node_unref(texture_node);
-	return node;
+	return phi_node_device_transform_child(texture_node, &mat);
 }
 
 static void phi_node_device_fill_image(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, float alpha, fz_color_params) {
