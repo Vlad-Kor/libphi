@@ -21,7 +21,7 @@ project('phi', 'c',
 
 cc = meson.get_compiler('c')
 
-gtk_dep = dependency('gtk4', version: '>= 4.14')
+gtk_dep = dependency('gtk4', version: '>= 4.17.4')
 gio_dep = dependency('gio-2.0')
 mupdf_dep = dependency('mupdf')
 

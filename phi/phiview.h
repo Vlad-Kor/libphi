@@ -31,6 +31,9 @@ GtkWidget* phi_view_new(GskRenderNode* node);
 GskRenderNode* phi_view_get_node(PhiView* self);
 void phi_view_set_node(PhiView* self, GskRenderNode* node);
 
+guint phi_view_get_high_res_timeout(PhiView* self);
+void phi_view_set_high_res_timeout(PhiView* self, guint timeout);
+
 gboolean phi_view_is_inverted(PhiView* self);
 void phi_view_set_inverted(PhiView* self, gboolean inverted);
 
