@@ -34,14 +34,17 @@ static void app_open(GtkApplication* app, GFile** files, gint n_files, gchar*, g
 	PhiPage* page = phi_document_get_page(doc, 0, &err);
 	if (err)
 		g_error("Failed loading page: %s", err->message);
-	GdkPaintable* paintable = phi_page_render_to_paintable(page, &err);
+	GskRenderNode* node = phi_page_render_to_node(page, &err);
 	if (err)
-		g_error("Failed to draw paintable: %s", err->message);
+		g_error("Failed to render to node: %s", err->message);
 
-	GtkWidget* view = phi_view_new(paintable);
-	
+	GtkWidget* view = phi_view_new(node);
+	gtk_widget_set_hexpand(view, TRUE);
+	gtk_widget_set_vexpand(view, TRUE);
+	gtk_widget_set_overflow(view, GTK_OVERFLOW_HIDDEN);
+
 	g_object_unref (page);
-	g_object_unref (paintable);
+	gsk_render_node_unref (node);
 
 	gtk_window_set_child(GTK_WINDOW(window), view);
 	gtk_window_present(GTK_WINDOW(window));

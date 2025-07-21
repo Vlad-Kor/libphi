@@ -23,7 +23,7 @@
 struct _PhiView {
 	GtkWidget parent_instance;
 
-	GdkPaintable* paintable;
+	GskRenderNode* node;
 	gdouble x,y;
 	gdouble scale;
 	gdouble inverted;
@@ -36,7 +36,7 @@ struct _PhiView {
 G_DEFINE_FINAL_TYPE (PhiView, phi_view, GTK_TYPE_WIDGET)
 
 enum {
-	PROP_PAINTABLE = 1,
+	PROP_NODE = 1,
 	PROP_INVERTED,
 	N_PROPERTIES
 };
@@ -44,15 +44,15 @@ static GParamSpec* obj_properties[N_PROPERTIES] = { 0, };
 
 static void phi_view_object_dispose(GObject* object) {
 	PhiView* self = PHI_VIEW(object);
-	g_clear_object(&self->paintable);
+	g_clear_pointer(&self->node, gsk_render_node_unref);
 	G_OBJECT_CLASS(phi_view_parent_class)->dispose(object);
 }
 
 static void phi_view_object_get_property(GObject* object, guint prop_id, GValue* val, GParamSpec* pspec) {
 	PhiView* self = PHI_VIEW(object);
 	switch (prop_id) {
-		case PROP_PAINTABLE:
-			g_value_set_object(val, phi_view_get_paintable(self));
+		case PROP_NODE:
+			g_value_set_pointer(val, phi_view_get_node(self));
 			break;
 		case PROP_INVERTED:
 			g_value_set_boolean(val, phi_view_is_inverted(self));
@@ -64,8 +64,8 @@ static void phi_view_object_get_property(GObject* object, guint prop_id, GValue*
 static void phi_view_object_set_property(GObject* object, guint prop_id, const GValue* val, GParamSpec* pspec) {
 	PhiView* self = PHI_VIEW(object);
 	switch (prop_id) {
-		case PROP_PAINTABLE:
-			phi_view_set_paintable(self, g_value_get_object(val));
+		case PROP_NODE:
+			phi_view_set_node(self, g_value_get_pointer(val));
 			break;
 		case PROP_INVERTED:
 			phi_view_set_inverted(self, g_value_get_boolean(val));
@@ -77,7 +77,7 @@ static void phi_view_object_set_property(GObject* object, guint prop_id, const G
 
 static void phi_view_widget_snapshot(GtkWidget* widget, GtkSnapshot* snapshot) {
 	PhiView* self = PHI_VIEW(widget);
-	if (!self->paintable)
+	if (!self->node)
 		return;
 
 	if (self->inverted) {
@@ -88,12 +88,14 @@ static void phi_view_widget_snapshot(GtkWidget* widget, GtkSnapshot* snapshot) {
 		gtk_snapshot_push_color_matrix(snapshot, &mat, &off);
 	}
 
-	double w = gdk_paintable_get_intrinsic_width(self->paintable) * self->scale;
-	double h = gdk_paintable_get_intrinsic_height(self->paintable) * self->scale;
-
 	gtk_snapshot_translate(snapshot, &GRAPHENE_POINT_INIT(self->x, self->y));
 	gtk_snapshot_scale(snapshot, self->scale, self->scale);
-	gdk_paintable_snapshot(self->paintable, snapshot, w / self->scale, h / self->scale);
+
+	graphene_rect_t bounds;
+	gsk_render_node_get_bounds(self->node, &bounds);
+	gtk_snapshot_push_clip(snapshot, &bounds);
+	gtk_snapshot_append_node(snapshot, self->node);
+	gtk_snapshot_pop(snapshot);
 
 	if (self->inverted)
 		gtk_snapshot_pop(snapshot);
@@ -108,7 +110,7 @@ static void phi_view_class_init(PhiViewClass* klass) {
 	object_class->set_property = phi_view_object_set_property;
 	widget_class->snapshot = phi_view_widget_snapshot;
 
-	obj_properties[PROP_PAINTABLE] = g_param_spec_object("paintable", NULL, NULL, GDK_TYPE_PAINTABLE, G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
+	obj_properties[PROP_NODE] = g_param_spec_pointer("node", NULL, NULL, G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
 	obj_properties[PROP_INVERTED] = g_param_spec_boolean("inverted", NULL, NULL, FALSE, G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
 	g_object_class_install_properties(object_class, N_PROPERTIES, obj_properties);
 }
@@ -177,21 +179,23 @@ static void phi_view_init(PhiView* self) {
 	gtk_widget_add_controller(GTK_WIDGET(self), GTK_EVENT_CONTROLLER(drag));
 }
 
-GtkWidget* phi_view_new(GdkPaintable* paintable) {
-	return g_object_new(PHI_TYPE_VIEW, "paintable", paintable, NULL);
+GtkWidget* phi_view_new(GskRenderNode* node) {
+	return g_object_new(PHI_TYPE_VIEW, "node", node, NULL);
 }
 
-GdkPaintable* phi_view_get_paintable(PhiView* self) {
+GskRenderNode* phi_view_get_node(PhiView* self) {
 	g_return_val_if_fail(PHI_IS_VIEW(self), NULL);
-	return self->paintable;
+	return self->node;
 }
 
-void phi_view_set_paintable(PhiView* self, GdkPaintable* paintable) {
+void phi_view_set_node(PhiView* self, GskRenderNode* node) {
 	g_return_if_fail(PHI_IS_VIEW(self));
-	g_clear_object(&self->paintable);
-	if (paintable)
-		self->paintable = g_object_ref(paintable);
-	g_object_notify_by_pspec(G_OBJECT(self), obj_properties[PROP_PAINTABLE]);
+	g_clear_pointer(&self->node, gsk_render_node_unref);
+
+	if (node)
+		self->node = gsk_render_node_ref(node);
+
+	g_object_notify_by_pspec(G_OBJECT(self), obj_properties[PROP_NODE]);
 	gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 

@@ -26,10 +26,10 @@ G_BEGIN_DECLS
 #define PHI_TYPE_VIEW (phi_view_get_type())
 G_DECLARE_FINAL_TYPE (PhiView, phi_view, PHI, VIEW, GtkWidget)
 
-GtkWidget* phi_view_new(GdkPaintable* paintable);
+GtkWidget* phi_view_new(GskRenderNode* node);
 
-GdkPaintable* phi_view_get_paintable(PhiView* self);
-void phi_view_set_paintable(PhiView* self, GdkPaintable* paintable);
+GskRenderNode* phi_view_get_node(PhiView* self);
+void phi_view_set_node(PhiView* self, GskRenderNode* node);
 
 gboolean phi_view_is_inverted(PhiView* self);
 void phi_view_set_inverted(PhiView* self, gboolean inverted);
