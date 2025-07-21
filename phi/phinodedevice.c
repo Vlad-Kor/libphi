@@ -388,14 +388,15 @@ static void phi_node_device_pop_clip(fz_context* ctx, fz_device* dev) {
 	switch (current->state) {
 		case PHI_RENDER_STATE_NONE:
 			break;
-		case PHI_RENDER_STATE_CLIP_PATH_FILL:
-			/* This produces transform(fill(transform(node, ctm), fill_path), ctm).
-			 * Transforming it twice (with the same matrix!) seems to make it work, but it is a total
-			 * mystery to me, why that might be the case...
-			 */
-			node = phi_node_device_node_from_fillpath(node, current->clip_path_fill.path, current->clip_path_fill.even_odd, &current->clip_path_fill.ctm, &current->clip_path_fill.ctm);
+		case PHI_RENDER_STATE_CLIP_PATH_FILL: {
+			fz_matrix inv;
+			if (fz_try_invert_matrix(&inv, current->clip_path_fill.ctm) != 0) {
+				fz_warn(ctx, "Failed to invert matrix, using identity");
+				inv = fz_identity;
+			}
+			node = phi_node_device_node_from_fillpath(node, current->clip_path_fill.path, current->clip_path_fill.even_odd, &inv, &current->clip_path_fill.ctm);
 			node = phi_node_device_scissor_clip(node, &current->clip_path_fill.scissor);
-		break;
+		} break;
 		case PHI_RENDER_STATE_MASK: {
 			GskRenderNode *source = node;
 			node = gsk_mask_node_new(source, current->mask.mask, current->mask.mode);
