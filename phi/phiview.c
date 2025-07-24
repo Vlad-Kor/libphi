@@ -39,6 +39,11 @@ struct _PhiView {
 	gdouble pointer_x,pointer_y;
 	gdouble drag_start_x, drag_start_y;
 	gdouble scale_zoom_start;
+
+	gdouble pan_start_x;
+	gdouble pan_start_y;
+	gdouble gesture_center_start_x;
+	gdouble gesture_center_start_y;
 };
 
 G_DEFINE_FINAL_TYPE (PhiView, phi_view, GTK_TYPE_WIDGET)
@@ -263,14 +268,28 @@ static void phi_view_motion_leave(GtkEventController*, PhiView* self) {
 	self->pointer_y = NAN;
 }
 
-static void phi_view_zoom_begin(GtkGesture*, GdkEventSequence*, PhiView* self) {
+static void phi_view_zoom_begin(GtkGesture* gesture, GdkEventSequence*, PhiView* self) {
 	self->scale_zoom_start = self->scale;
+	self->pan_start_x = self->x;
+	self->pan_start_y = self->y;
+	gtk_gesture_get_bounding_box_center(gesture,
+										&self->gesture_center_start_x,
+										&self->gesture_center_start_y);
 }
-static void phi_view_zoom_update(GtkGesture*, gdouble scale, PhiView* self) {
+static void
+phi_view_zoom_update(GtkGesture* gesture, gdouble scale, PhiView* self)
+{
 	gdouble old = self->scale;
 	self->scale = scale * self->scale_zoom_start;
-	
-	if (!isnan(self->pointer_x) && !isnan(self->pointer_y)) {
+
+	gdouble current_center_x, current_center_y;
+	if (gtk_gesture_get_bounding_box_center(gesture, &current_center_x, &current_center_y)) {
+		gdouble world_invariant_x = (self->gesture_center_start_x - self->pan_start_x) / self->scale_zoom_start;
+		gdouble world_invariant_y = (self->gesture_center_start_y - self->pan_start_y) / self->scale_zoom_start;
+
+		self->x = current_center_x - (world_invariant_x * self->scale);
+		self->y = current_center_y - (world_invariant_y * self->scale);
+	} else if (!isnan(self->pointer_x) && !isnan(self->pointer_y)) {
 		gdouble cx = self->pointer_x;
 		gdouble cy = self->pointer_y;
 		// $\frac{s'}{s}*(o-c)+c$, where $s'=\texttt{scale}, s=\texttt{old}, o=(x\ y)^T, c=(\texttt{cx}\ \texttt{cy})^T$
