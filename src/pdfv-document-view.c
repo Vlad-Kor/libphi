@@ -379,8 +379,14 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         if (y_offset > view_bottom)
             break;
         
-        /* Get page dimensions */
+        /* Get page - may not be loaded yet */
         PhiPage* page = g_ptr_array_index(self->pages, i);
+        if (!page) {
+            y_offset += g_array_index(self->page_heights, gdouble, i) + PAGE_GAP;
+            continue;
+        }
+        
+        /* Get page dimensions */
         gfloat pw_f, ph_f;
         phi_page_get_size(page, &pw_f, &ph_f);
         gdouble pw = pw_f * self->zoom;
@@ -823,7 +829,7 @@ pdfv_document_view_init(PdfvDocumentView* self)
     self->inverted = FALSE;
     self->current_page = 0;
     
-    self->pages = g_ptr_array_new_with_free_func(g_object_unref);
+    self->pages = g_ptr_array_new();  /* We don't own the pages, document does */
     self->page_heights = g_array_new(FALSE, TRUE, sizeof(gdouble));
     self->history = g_array_new(FALSE, FALSE, sizeof(HistoryEntry));
     self->history_pos = -1;
