@@ -1,0 +1,7 @@
+.idea/
+subprojects/gtk
+subprojects/libsass
+subprojects/mupdf
+subprojects/sassc
+subprojects/wayland-protocols
+*.patch
