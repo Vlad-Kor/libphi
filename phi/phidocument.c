@@ -105,6 +105,13 @@ static void phi_document_ctx_lock_unlock(void* user, int lock) {
 	g_mutex_unlock(&self->ctx_locks[lock]);
 }
 
+/* Custom warning handler to suppress noisy MuPDF warnings */
+static void phi_document_warn_handler(void* user, const char* message) {
+	(void)user;
+	/* Only log as debug, don't spam the console */
+	g_debug("MuPDF: %s", message);
+}
+
 PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* magic, GError** error) {
 	PhiDocument* self = g_object_new(PHI_TYPE_DOCUMENT, NULL);
 
@@ -115,6 +122,9 @@ PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* mag
 	};
 	self->ctx = fz_new_context(NULL, &locks, FZ_STORE_DEFAULT);
 	fz_register_document_handlers(self->ctx);
+	
+	/* Set custom warning handler to reduce console spam */
+	fz_set_warning_callback(self->ctx, phi_document_warn_handler, NULL);
 	
 	// TODO: autodetect magic if it is NULL
 
