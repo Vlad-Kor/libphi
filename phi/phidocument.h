@@ -33,7 +33,30 @@ G_DECLARE_FINAL_TYPE(PhiDocument, phi_document, PHI, DOCUMENT, GObject)
 PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* magic, GError** error);
 PhiDocument* phi_document_new_from_file(GFile* file, GError** error);
 
+gint phi_document_get_n_pages(PhiDocument* self);
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error);
+
+/* Outline (Table of Contents) */
+typedef struct _PhiOutlineItem PhiOutlineItem;
+struct _PhiOutlineItem {
+	gchar* title;
+	gchar* uri;
+	gint page;
+	PhiOutlineItem* children;
+	PhiOutlineItem* next;
+};
+
+PhiOutlineItem* phi_document_get_outline(PhiDocument* self);
+void phi_outline_item_free(PhiOutlineItem* item);
+
+/* Link destination resolution */
+typedef struct {
+	gint page;
+	gfloat x, y;
+	gfloat zoom;
+} PhiLinkDest;
+
+gboolean phi_document_resolve_link(PhiDocument* self, const gchar* uri, PhiLinkDest* dest);
 
 G_END_DECLS
 

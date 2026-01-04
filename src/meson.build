@@ -14,9 +14,19 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pdfv_app = executable('pdfv', 'app.c',
+adw_dep = dependency('libadwaita-1', version: '>= 1.4')
+
+pdfv_sources = [
+	'main.c',
+	'pdfv-application.c',
+	'pdfv-window.c',
+	'pdfv-document-view.c',
+]
+
+pdfv_app = executable('pdfv', pdfv_sources,
 	dependencies: [
 		gtk_dep,
+		adw_dep,
 		phi_dep
 	],
 	install: true

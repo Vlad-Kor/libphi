@@ -43,6 +43,16 @@ static void phi_page_init(PhiPage* self) {
 	self->page = NULL;
 }
 
+void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height) {
+	g_return_if_fail(PHI_IS_PAGE(self));
+	
+	fz_rect bounds = fz_bound_page(self->document->ctx, self->page);
+	if (width)
+		*width = bounds.x1 - bounds.x0;
+	if (height)
+		*height = bounds.y1 - bounds.y0;
+}
+
 GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	
@@ -77,4 +87,46 @@ GdkPaintable* phi_page_render_to_paintable(PhiPage* self, GError** error) {
 	gsk_render_node_unref(node);
 	GdkPaintable* ret = gtk_snapshot_free_to_paintable(snapshot, NULL);
 	return ret;
+}
+
+PhiLink* phi_page_get_links(PhiPage* self) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
+	
+	fz_link* links = NULL;
+	PhiLink* result = NULL;
+	PhiLink** tail = &result;
+	
+	fz_try(self->document->ctx) {
+		links = fz_load_links(self->document->ctx, self->page);
+		
+		for (fz_link* link = links; link; link = link->next) {
+			PhiLink* phi_link = g_new0(PhiLink, 1);
+			graphene_rect_init(&phi_link->rect, 
+				link->rect.x0, link->rect.y0,
+				link->rect.x1 - link->rect.x0,
+				link->rect.y1 - link->rect.y0);
+			phi_link->uri = g_strdup(link->uri);
+			phi_link->next = NULL;
+			
+			*tail = phi_link;
+			tail = &phi_link->next;
+		}
+	} fz_always(self->document->ctx) {
+		if (links)
+			fz_drop_link(self->document->ctx, links);
+	} fz_catch(self->document->ctx) {
+		phi_link_free(result);
+		return NULL;
+	}
+	
+	return result;
+}
+
+void phi_link_free(PhiLink* link) {
+	while (link) {
+		PhiLink* next = link->next;
+		g_free(link->uri);
+		g_free(link);
+		link = next;
+	}
 }
