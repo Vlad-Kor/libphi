@@ -705,6 +705,14 @@ on_zoom_out_clicked(GtkButton* button, PdfvWindow* self)
 }
 
 static void
+on_zoom_label_clicked(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y, PdfvWindow* self)
+{
+    (void)gesture; (void)n_press; (void)x; (void)y;
+    if (self->current_view)
+        pdfv_document_view_zoom_fit_width(self->current_view);
+}
+
+static void
 on_sidebar_show_changed(AdwOverlaySplitView* split_view, GParamSpec* pspec, PdfvWindow* self)
 {
     (void)pspec;
@@ -908,8 +916,7 @@ pdfv_window_init(PdfvWindow* self)
     adw_toolbar_view_set_content(self->toolbar_view, content_overlay);
     
     /* Floating zoom controls */
-    self->zoom_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_add_css_class(self->zoom_box, "linked");
+    self->zoom_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(self->zoom_box, "osd");
     gtk_widget_add_css_class(self->zoom_box, "toolbar");
     gtk_widget_set_halign(self->zoom_box, GTK_ALIGN_END);
@@ -918,18 +925,22 @@ pdfv_window_init(PdfvWindow* self)
     gtk_widget_set_margin_bottom(self->zoom_box, 12);
     
     self->zoom_out_btn = GTK_BUTTON(gtk_button_new_from_icon_name("zoom-out-symbolic"));
-    gtk_widget_add_css_class(GTK_WIDGET(self->zoom_out_btn), "flat");
+    gtk_widget_add_css_class(GTK_WIDGET(self->zoom_out_btn), "circular");
     g_signal_connect(self->zoom_out_btn, "clicked", G_CALLBACK(on_zoom_out_clicked), self);
     gtk_box_append(GTK_BOX(self->zoom_box), GTK_WIDGET(self->zoom_out_btn));
     
+    /* Zoom label - clickable to fit width */
     self->zoom_label = GTK_LABEL(gtk_label_new("100%"));
-    gtk_widget_set_margin_start(GTK_WIDGET(self->zoom_label), 6);
-    gtk_widget_set_margin_end(GTK_WIDGET(self->zoom_label), 6);
+    gtk_widget_set_tooltip_text(GTK_WIDGET(self->zoom_label), "Click to fit width");
     gtk_label_set_width_chars(self->zoom_label, 5);
+    GtkGesture* zoom_click = gtk_gesture_click_new();
+    g_signal_connect(zoom_click, "pressed", G_CALLBACK(on_zoom_label_clicked), self);
+    gtk_widget_add_controller(GTK_WIDGET(self->zoom_label), GTK_EVENT_CONTROLLER(zoom_click));
+    gtk_widget_set_cursor_from_name(GTK_WIDGET(self->zoom_label), "pointer");
     gtk_box_append(GTK_BOX(self->zoom_box), GTK_WIDGET(self->zoom_label));
     
     self->zoom_in_btn = GTK_BUTTON(gtk_button_new_from_icon_name("zoom-in-symbolic"));
-    gtk_widget_add_css_class(GTK_WIDGET(self->zoom_in_btn), "flat");
+    gtk_widget_add_css_class(GTK_WIDGET(self->zoom_in_btn), "circular");
     g_signal_connect(self->zoom_in_btn, "clicked", G_CALLBACK(on_zoom_in_clicked), self);
     gtk_box_append(GTK_BOX(self->zoom_box), GTK_WIDGET(self->zoom_in_btn));
     
