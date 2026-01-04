@@ -121,8 +121,8 @@ typedef struct {
 static void
 thumbnail_data_free(ThumbnailData* data)
 {
-    if (data->page)
-        g_object_unref(data->page);
+    /* Note: We don't unref page because phi_document_get_page returns
+     * a borrowed reference - the document owns the page */
     g_free(data);
 }
 
@@ -280,7 +280,15 @@ on_tab_selected(AdwTabView* tab_view, GParamSpec* pspec, PdfvWindow* self)
 static gboolean
 on_tab_close_page(AdwTabView* tab_view, AdwTabPage* page, PdfvWindow* self)
 {
-    (void)self;
+    /* Clear current_view if we're closing its tab */
+    GtkWidget* scrolled = adw_tab_page_get_child(page);
+    PdfvDocumentView* view = g_object_get_data(G_OBJECT(scrolled), "document-view");
+    if (view == self->current_view) {
+        /* Disconnect signals before destruction */
+        g_signal_handlers_disconnect_by_data(view, self);
+        self->current_view = NULL;
+    }
+    
     adw_tab_view_close_page_finish(tab_view, page, TRUE);
     return GDK_EVENT_STOP;
 }
@@ -458,6 +466,14 @@ static GActionEntry win_actions[] = {
     { "page-prev", action_page_prev, NULL, NULL, NULL },
 };
 
+static void
+on_tab_overview_button_clicked(GtkButton* button, PdfvWindow* self)
+{
+    (void)button;
+    gboolean is_open = adw_tab_overview_get_open(self->tab_overview);
+    adw_tab_overview_set_open(self->tab_overview, !is_open);
+}
+
 static AdwTabPage*
 on_tab_overview_create_tab(AdwTabOverview* overview, PdfvWindow* self)
 {
@@ -570,9 +586,11 @@ pdfv_window_init(PdfvWindow* self)
     gtk_actionable_set_action_name(GTK_ACTIONABLE(self->sidebar_button), "win.toggle-sidebar");
     adw_header_bar_pack_start(self->header_bar, GTK_WIDGET(self->sidebar_button));
     
-    /* Tab overview button in header - shows when tab bar is hidden */
-    GtkWidget* tab_overview_btn = adw_tab_button_new();
-    adw_header_bar_pack_end(self->header_bar, tab_overview_btn);
+    /* New tab button */
+    GtkWidget* new_tab_btn = gtk_button_new_from_icon_name("tab-new-symbolic");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(new_tab_btn), "win.new-tab");
+    gtk_widget_set_tooltip_text(new_tab_btn, "New Tab (Ctrl+T)");
+    adw_header_bar_pack_start(self->header_bar, new_tab_btn);
     
     /* Menu button */
     self->menu_button = GTK_MENU_BUTTON(gtk_menu_button_new());
@@ -656,7 +674,14 @@ pdfv_window_init(PdfvWindow* self)
     self->tab_view = ADW_TAB_VIEW(adw_tab_view_new());
     adw_tab_bar_set_view(self->tab_bar, self->tab_view);
     adw_tab_overview_set_view(self->tab_overview, self->tab_view);
+    
+    /* Tab overview button - must be set after tab_view exists */
+    GtkWidget* tab_overview_btn = adw_tab_button_new();
     adw_tab_button_set_view(ADW_TAB_BUTTON(tab_overview_btn), self->tab_view);
+    gtk_widget_set_tooltip_text(tab_overview_btn, "View Open Tabs");
+    g_signal_connect(tab_overview_btn, "clicked",
+        G_CALLBACK(on_tab_overview_button_clicked), self);
+    adw_header_bar_pack_end(self->header_bar, tab_overview_btn);
     
     g_signal_connect(self->tab_view, "notify::selected-page",
         G_CALLBACK(on_tab_selected), self);
