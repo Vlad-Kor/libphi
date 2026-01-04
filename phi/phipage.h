@@ -28,8 +28,20 @@ G_BEGIN_DECLS
 #define PHI_TYPE_PAGE (phi_page_get_type())
 G_DECLARE_FINAL_TYPE(PhiPage, phi_page, PHI, PAGE, GObject)
 
+void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height);
 GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error);
 GdkPaintable* phi_page_render_to_paintable(PhiPage* self, GError** error);
+
+/* Links on page */
+typedef struct _PhiLink PhiLink;
+struct _PhiLink {
+	graphene_rect_t rect;
+	gchar* uri;
+	PhiLink* next;
+};
+
+PhiLink* phi_page_get_links(PhiPage* self);
+void phi_link_free(PhiLink* link);
 
 G_END_DECLS
 

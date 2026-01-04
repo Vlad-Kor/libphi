@@ -157,6 +157,11 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
 	return ret;
 }
 
+gint phi_document_get_n_pages(PhiDocument* self) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), 0);
+	return self->n_pages;
+}
+
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
 	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
@@ -178,4 +183,72 @@ PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error) {
 	cpage->page = page;
 	self->pages[pageno] = cpage; // transfers ownership
 	return cpage;
+}
+
+static PhiOutlineItem* phi_outline_convert(fz_context* ctx, fz_outline* outline) {
+	if (!outline)
+		return NULL;
+	
+	PhiOutlineItem* item = g_new0(PhiOutlineItem, 1);
+	item->title = g_strdup(outline->title);
+	item->uri = outline->uri ? g_strdup(outline->uri) : NULL;
+	item->page = outline->page.page;
+	item->children = phi_outline_convert(ctx, outline->down);
+	item->next = phi_outline_convert(ctx, outline->next);
+	
+	return item;
+}
+
+PhiOutlineItem* phi_document_get_outline(PhiDocument* self) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
+	
+	fz_outline* outline = NULL;
+	PhiOutlineItem* result = NULL;
+	
+	fz_try(self->ctx) {
+		outline = fz_load_outline(self->ctx, self->document);
+		result = phi_outline_convert(self->ctx, outline);
+	} fz_always(self->ctx) {
+		if (outline)
+			fz_drop_outline(self->ctx, outline);
+	} fz_catch(self->ctx) {
+		return NULL;
+	}
+	
+	return result;
+}
+
+void phi_outline_item_free(PhiOutlineItem* item) {
+	if (!item)
+		return;
+	
+	phi_outline_item_free(item->children);
+	phi_outline_item_free(item->next);
+	g_free(item->title);
+	g_free(item->uri);
+	g_free(item);
+}
+
+gboolean phi_document_resolve_link(PhiDocument* self, const gchar* uri, PhiLinkDest* dest) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), FALSE);
+	g_return_val_if_fail(uri != NULL, FALSE);
+	g_return_val_if_fail(dest != NULL, FALSE);
+	
+	fz_link_dest link_dest;
+	
+	fz_try(self->ctx) {
+		link_dest = fz_resolve_link_dest(self->ctx, self->document, uri);
+	} fz_catch(self->ctx) {
+		return FALSE;
+	}
+	
+	if (link_dest.loc.page < 0)
+		return FALSE;
+	
+	dest->page = link_dest.loc.page;
+	dest->x = link_dest.x;
+	dest->y = link_dest.y;
+	dest->zoom = link_dest.zoom;
+	
+	return TRUE;
 }
