@@ -70,7 +70,7 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.first-page", first_page_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.last-page", last_page_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.toggle-sidebar", toggle_sidebar_accels);
-	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.invert", invert_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.invert-colors", invert_accels);
 }
 
 static void pdfv_application_quit_action(GSimpleAction* action, GVariant* param, gpointer app) {
