@@ -19,12 +19,15 @@
 #include "phi/phinodedeviceprivate.h"
 
 #include <gtk/gtk.h>
+#include <math.h>
 
 typedef enum {
 	PHI_RENDER_STATE_NONE,
 	PHI_RENDER_STATE_CLIP_PATH_FILL,
 	PHI_RENDER_STATE_MASK,
 	PHI_RENDER_STATE_IN_MASK,
+	PHI_RENDER_STATE_GROUP,
+	PHI_RENDER_STATE_TILE,
 } PhiRenderContextState;
 
 typedef struct {
@@ -48,6 +51,21 @@ typedef struct {
 			GskMaskMode mask_mode;
 			fz_rect area;
 		} in_mask;
+		struct {
+			fz_rect area;
+			int isolated;
+			int knockout;
+			int blendmode;
+			float alpha;
+		} group;
+		struct {
+			fz_rect area;
+			fz_rect view;
+			float xstep;
+			float ystep;
+			fz_matrix ctm;
+			int id;
+		} tile;
 	};
 } PhiRenderContext;
 
@@ -68,6 +86,12 @@ static void phi_render_context_clear(PhiRenderContext* self) {
 			gsk_render_node_unref(self->mask.mask);
 			break;
 		case PHI_RENDER_STATE_IN_MASK:
+			break;
+		case PHI_RENDER_STATE_GROUP:
+			/* No resources to free */
+			break;
+		case PHI_RENDER_STATE_TILE:
+			/* No resources to free */
 			break;
 	}
 }
@@ -160,6 +184,8 @@ static GskPath* phi_node_device_convert_path(fz_context* ctx, const fz_path* pat
 }
 
 static GskRenderNode* phi_node_device_make_color(fz_context* ctx, fz_colorspace* cs, const float* color, float alpha, const graphene_rect_t *bounds) {
+	float rgb[3];
+	
 	switch (fz_colorspace_type(ctx, cs)) {
 		case FZ_COLORSPACE_RGB:
 			return gsk_color_node_new(&(GdkRGBA){ .red = color[0], .green = color[1], .blue = color[2], .alpha = alpha }, bounds);
@@ -167,9 +193,32 @@ static GskRenderNode* phi_node_device_make_color(fz_context* ctx, fz_colorspace*
 			return gsk_color_node_new(&(GdkRGBA){ .red = color[2], .green = color[1], .blue = color[0], .alpha = alpha }, bounds);
 		case FZ_COLORSPACE_GRAY:
 			return gsk_color_node_new(&(GdkRGBA){ .red = color[0], .green = color[0], .blue = color[0], .alpha = alpha }, bounds);
-	default:
+		case FZ_COLORSPACE_CMYK:
+			/* Convert CMYK to RGB using simple formula */
+			/* R = (1-C) * (1-K), G = (1-M) * (1-K), B = (1-Y) * (1-K) */
+			{
+				float c = color[0], m = color[1], y = color[2], k = color[3];
+				float r = (1.0f - c) * (1.0f - k);
+				float g = (1.0f - m) * (1.0f - k);
+				float b = (1.0f - y) * (1.0f - k);
+				return gsk_color_node_new(&(GdkRGBA){ .red = r, .green = g, .blue = b, .alpha = alpha }, bounds);
+			}
+		case FZ_COLORSPACE_LAB:
+			/* Convert Lab to RGB - use MuPDF's conversion */
+			fz_convert_color(ctx, cs, color, fz_device_rgb(ctx), rgb, NULL, fz_default_color_params);
+			return gsk_color_node_new(&(GdkRGBA){ .red = rgb[0], .green = rgb[1], .blue = rgb[2], .alpha = alpha }, bounds);
+		default:
+			break;
+	}
+	
+	/* Try generic conversion for other colorspaces */
+	fz_try(ctx) {
+		fz_convert_color(ctx, cs, color, fz_device_rgb(ctx), rgb, NULL, fz_default_color_params);
+	} fz_catch(ctx) {
+		fz_warn(ctx, "Failed to convert colorspace type %d", fz_colorspace_type(ctx, cs));
 		return NULL;
-	}	
+	}
+	return gsk_color_node_new(&(GdkRGBA){ .red = rgb[0], .green = rgb[1], .blue = rgb[2], .alpha = alpha }, bounds);
 }
 
 static GskRenderNode* phi_node_device_node_from_fillpath(GskRenderNode* child, GskPath* path, int even_odd, const fz_matrix* child_ctm, const fz_matrix* ctm) {
@@ -268,14 +317,24 @@ static void phi_node_device_clip_path(fz_context* ctx, fz_device* dev, const fz_
 	g_array_append_val(self->stack, new);
 }
 
-static void phi_node_device_clip_stroke_path(fz_context*, fz_device* dev, const fz_path*, const fz_stroke_state*, fz_matrix, fz_rect) {
+static void phi_node_device_clip_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* ss, fz_matrix ctm, fz_rect scissor) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
-
-	g_critical("unimplemented: clip_stroke_path");
+	(void)ss; /* We can't easily clip to stroked paths in GSK without rasterizing */
+	
+	/* For stroke clipping, we use the scissor rect as the clip region.
+	 * This is an approximation - proper stroke clipping would require
+	 * rasterizing the stroke, but that would hurt performance.
+	 * Most PDFs don't use stroke clipping extensively.
+	 */
+	GskPath* cpath = phi_node_device_convert_path(ctx, path);
 	
 	PhiRenderContext new;
 	phi_render_context_init(&new);
-	new.state = PHI_RENDER_STATE_NONE;
+	new.state = PHI_RENDER_STATE_CLIP_PATH_FILL;
+	new.clip_path_fill.path = cpath;
+	new.clip_path_fill.even_odd = 0;
+	new.clip_path_fill.ctm = ctm;
+	new.clip_path_fill.scissor = scissor;
 
 	g_array_append_val(self->stack, new);
 }
@@ -298,25 +357,73 @@ static void phi_pixmap_storage_free(PhiPixmapStorage* self) {
 	g_free(self);
 }
 static GskRenderNode* phi_node_device_node_from_image(fz_context* ctx, fz_image* img, fz_matrix ctm) {
-	fz_pixmap* pixmap = fz_get_pixmap_from_image(ctx, img, NULL, NULL, NULL, NULL);
+	fz_pixmap* pixmap = NULL;
+	fz_pixmap* converted = NULL;
+	
+	fz_try(ctx) {
+		pixmap = fz_get_pixmap_from_image(ctx, img, NULL, NULL, NULL, NULL);
+	} fz_catch(ctx) {
+		fz_rethrow(ctx);
+	}
+	
 	gint components = fz_pixmap_components(ctx, pixmap);
 	gint colorants = fz_pixmap_colorants(ctx, pixmap);
 	gint spots = fz_pixmap_spots(ctx, pixmap);
 	gint alphas = fz_pixmap_alpha(ctx, pixmap);
-	if (components > 256)
+	
+	if (components > 256) {
+		fz_drop_pixmap(ctx, pixmap);
 		fz_throw(ctx, FZ_ERROR_LIMIT, "Pixmap has too many components (%d)", components);
+	}
 	
 	guint32 fingerprint = (((guint8)components) << 24) | (((guint8)colorants) << 16) | (((guint8)spots) << 8) | ((guint8)alphas);
 	GdkMemoryFormat format;
+	gboolean needs_conversion = FALSE;
+	
 	switch (fingerprint) {
-		case 0x03030000:
+		case 0x03030000: /* RGB without alpha */
 			format = GDK_MEMORY_R8G8B8;
 			break;
-		case 0x01000001:
+		case 0x04030001: /* RGB with alpha */
+			format = GDK_MEMORY_R8G8B8A8;
+			break;
+		case 0x01010000: /* Gray without alpha */
+			format = GDK_MEMORY_G8;
+			break;
+		case 0x02010001: /* Gray with alpha */
+			format = GDK_MEMORY_G8A8;
+			break;
+		case 0x01000001: /* Alpha only */
 			format = GDK_MEMORY_A8;
 			break;
+		case 0x04040000: /* CMYK without alpha */
+		case 0x05040001: /* CMYK with alpha */
+			/* Convert CMYK to RGB */
+			needs_conversion = TRUE;
+			break;
 		default:
-			fz_throw(ctx, FZ_ERROR_UNSUPPORTED, "Format of pixmap %p is unsupported (%x)", pixmap, fingerprint);
+			/* Try to convert unknown formats to RGB */
+			needs_conversion = TRUE;
+			break;
+	}
+	
+	if (needs_conversion) {
+		/* Convert to RGB(A) */
+		fz_colorspace* rgb = fz_device_rgb(ctx);
+		gint has_alpha = alphas > 0;
+		
+		fz_try(ctx) {
+			converted = fz_convert_pixmap(ctx, pixmap, rgb, NULL, NULL, fz_default_color_params, has_alpha);
+			fz_drop_pixmap(ctx, pixmap);
+			pixmap = converted;
+			converted = NULL;
+			format = has_alpha ? GDK_MEMORY_R8G8B8A8 : GDK_MEMORY_R8G8B8;
+		} fz_catch(ctx) {
+			fz_drop_pixmap(ctx, pixmap);
+			if (converted)
+				fz_drop_pixmap(ctx, converted);
+			fz_rethrow(ctx);
+		}
 	}
 
 	gint width = fz_pixmap_width(ctx, pixmap);
@@ -360,6 +467,190 @@ static void phi_node_device_clip_image_mask(fz_context* ctx, fz_device* dev, fz_
 	new.mask.scissor = scissor;
 
 	g_array_append_val(self->stack, new);
+}
+
+static void phi_node_device_fill_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params color_params) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	/* Get image as alpha mask */
+	GskRenderNode* mask = phi_node_device_node_from_image(ctx, img, ctm);
+	
+	/* Create the color fill */
+	graphene_rect_t bounds;
+	gsk_render_node_get_bounds(mask, &bounds);
+	GskRenderNode* fill = phi_node_device_make_color(ctx, cs, color, alpha, &bounds);
+	if (!fill) {
+		gsk_render_node_unref(mask);
+		fz_warn(ctx, "Unsupported colorspace in fill_image_mask");
+		return;
+	}
+	
+	/* Apply mask to color */
+	GskRenderNode* node = gsk_mask_node_new(fill, mask, GSK_MASK_MODE_ALPHA);
+	gsk_render_node_unref(fill);
+	gsk_render_node_unref(mask);
+	
+	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	g_ptr_array_add(current->children, node);
+}
+
+/* Text rendering: convert glyphs to paths for vector rendering */
+static GskPath* phi_node_device_text_to_path(fz_context* ctx, const fz_text* text, fz_matrix ctm) {
+	GskPathBuilder* builder = gsk_path_builder_new();
+	
+	for (fz_text_span* span = text->head; span; span = span->next) {
+		fz_font* font = span->font;
+		fz_matrix trm = span->trm;
+		
+		for (int i = 0; i < span->len; i++) {
+			fz_text_item* item = &span->items[i];
+			if (item->gid < 0)
+				continue;
+			
+			/* Get glyph outline */
+			fz_matrix glyph_trm = fz_make_matrix(trm.a, trm.b, trm.c, trm.d, item->x, item->y);
+			glyph_trm = fz_concat(glyph_trm, ctm);
+			
+			fz_path* glyph_path = fz_outline_glyph(ctx, font, item->gid, glyph_trm);
+			if (glyph_path) {
+				fz_walk_path(ctx, glyph_path, &phi_node_device_path_walker, builder);
+				fz_drop_path(ctx, glyph_path);
+			}
+		}
+	}
+	
+	return gsk_path_builder_free_to_path(builder);
+}
+
+static void phi_node_device_fill_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params color_params) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
+	
+	graphene_rect_t bounds;
+	if (!gsk_path_get_bounds(path, &bounds)) {
+		gsk_path_unref(path);
+		return; /* Empty path */
+	}
+	
+	GskRenderNode* fill = phi_node_device_make_color(ctx, cs, color, alpha, &bounds);
+	if (!fill) {
+		gsk_path_unref(path);
+		fz_warn(ctx, "Unsupported colorspace in fill_text");
+		return;
+	}
+	
+	GskRenderNode* node = gsk_fill_node_new(fill, path, GSK_FILL_RULE_WINDING);
+	gsk_render_node_unref(fill);
+	gsk_path_unref(path);
+	
+	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	g_ptr_array_add(current->children, node);
+}
+
+static void phi_node_device_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text, const fz_stroke_state* ss, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params color_params) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
+	
+	GskStroke* stroke = gsk_stroke_new(ss->linewidth > 0 ? ss->linewidth : 1.);
+	gsk_stroke_set_miter_limit(stroke, ss->miterlimit);
+	switch (ss->start_cap) {
+		case FZ_LINECAP_BUTT:
+			gsk_stroke_set_line_cap(stroke, GSK_LINE_CAP_BUTT);
+			break;
+		case FZ_LINECAP_ROUND:
+			gsk_stroke_set_line_cap(stroke, GSK_LINE_CAP_ROUND);
+			break;
+		case FZ_LINECAP_SQUARE:
+			gsk_stroke_set_line_cap(stroke, GSK_LINE_CAP_SQUARE);
+			break;
+		default:
+			break;
+	}
+	switch (ss->linejoin) {
+		case FZ_LINEJOIN_MITER:
+			gsk_stroke_set_line_join(stroke, GSK_LINE_JOIN_MITER);
+			break;
+		case FZ_LINEJOIN_ROUND:
+			gsk_stroke_set_line_join(stroke, GSK_LINE_JOIN_ROUND);
+			break;
+		case FZ_LINEJOIN_BEVEL:
+			gsk_stroke_set_line_join(stroke, GSK_LINE_JOIN_BEVEL);
+			break;
+		default:
+			break;
+	}
+	gsk_stroke_set_dash(stroke, ss->dash_list, ss->dash_len);
+	gsk_stroke_set_dash_offset(stroke, ss->dash_phase);
+	
+	graphene_rect_t bounds;
+	if (!gsk_path_get_stroke_bounds(path, stroke, &bounds)) {
+		gsk_stroke_free(stroke);
+		gsk_path_unref(path);
+		return;
+	}
+	
+	GskRenderNode* fill = phi_node_device_make_color(ctx, cs, color, alpha, &bounds);
+	if (!fill) {
+		gsk_stroke_free(stroke);
+		gsk_path_unref(path);
+		fz_warn(ctx, "Unsupported colorspace in stroke_text");
+		return;
+	}
+	
+	GskRenderNode* node = gsk_stroke_node_new(fill, path, stroke);
+	gsk_stroke_free(stroke);
+	gsk_render_node_unref(fill);
+	gsk_path_unref(path);
+	
+	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	g_ptr_array_add(current->children, node);
+}
+
+static void phi_node_device_clip_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm, fz_rect scissor) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
+	
+	PhiRenderContext new;
+	phi_render_context_init(&new);
+	new.state = PHI_RENDER_STATE_CLIP_PATH_FILL;
+	new.clip_path_fill.path = path;
+	new.clip_path_fill.even_odd = 0;
+	new.clip_path_fill.ctm = fz_identity;
+	new.clip_path_fill.scissor = scissor;
+	
+	g_array_append_val(self->stack, new);
+}
+
+static void phi_node_device_clip_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text, const fz_stroke_state* ss, fz_matrix ctm, fz_rect scissor) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)ss; /* Similar to clip_stroke_path, we use the text path directly */
+	
+	/* For stroke text clipping, use the text outline path.
+	 * Proper stroke clipping would require complex path operations
+	 * that GSK doesn't support directly.
+	 */
+	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
+	
+	PhiRenderContext new;
+	phi_render_context_init(&new);
+	new.state = PHI_RENDER_STATE_CLIP_PATH_FILL;
+	new.clip_path_fill.path = path;
+	new.clip_path_fill.even_odd = 0;
+	new.clip_path_fill.ctm = fz_identity;
+	new.clip_path_fill.scissor = scissor;
+	
+	g_array_append_val(self->stack, new);
+}
+
+static void phi_node_device_ignore_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm) {
+	/* Ignore text is used for invisible text (e.g., for searchable PDFs) */
+	(void)ctx;
+	(void)dev;
+	(void)text;
+	(void)ctm;
 }
 
 static GskRenderNode* phi_node_device_scissor_clip(GskRenderNode* child, const fz_rect* clip) {
@@ -406,6 +697,12 @@ static void phi_node_device_pop_clip(fz_context* ctx, fz_device* dev) {
 		case PHI_RENDER_STATE_IN_MASK:
 			fz_throw(ctx, FZ_ERROR_ARGUMENT, "pop_clip called in mask context");
 			break;
+		case PHI_RENDER_STATE_GROUP:
+			fz_throw(ctx, FZ_ERROR_ARGUMENT, "pop_clip called in group context (use end_group)");
+			break;
+		case PHI_RENDER_STATE_TILE:
+			fz_throw(ctx, FZ_ERROR_ARGUMENT, "pop_clip called in tile context (use end_tile)");
+			break;
 	}
 	g_array_remove_index(self->stack, self->stack->len - 1);
 	current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
@@ -450,21 +747,337 @@ static void phi_node_device_end_mask(fz_context* ctx, fz_device* dev, fz_functio
 	g_array_append_val(self->stack, new);
 }
 
+/* Shading (gradients) rendering - rasterize to pixmap for complex shades */
+static void phi_node_device_fill_shade(fz_context* ctx, fz_device* dev, fz_shade* shade, fz_matrix ctm, float alpha, fz_color_params color_params) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	/* Get shade bounds */
+	fz_rect bounds = fz_bound_shade(ctx, shade, ctm);
+	if (fz_is_empty_rect(bounds) || fz_is_infinite_rect(bounds)) {
+		fz_warn(ctx, "Shade has invalid bounds");
+		return;
+	}
+	
+	/* Round to integers for pixmap */
+	fz_irect ibounds = fz_round_rect(bounds);
+	int width = ibounds.x1 - ibounds.x0;
+	int height = ibounds.y1 - ibounds.y0;
+	
+	if (width <= 0 || height <= 0)
+		return;
+	
+	/* Create RGB pixmap to render shade into */
+	fz_pixmap* pixmap = fz_new_pixmap(ctx, fz_device_rgb(ctx), width, height, NULL, 1);
+	fz_clear_pixmap(ctx, pixmap);
+	fz_set_pixmap_resolution(ctx, pixmap, 72, 72);
+	pixmap->x = ibounds.x0;
+	pixmap->y = ibounds.y0;
+	
+	fz_try(ctx) {
+		/* Paint shade into pixmap */
+		fz_paint_shade(ctx, shade, NULL, ctm, pixmap, color_params, ibounds, NULL, NULL);
+	} fz_catch(ctx) {
+		fz_drop_pixmap(ctx, pixmap);
+		fz_rethrow(ctx);
+	}
+	
+	/* Convert pixmap to GskRenderNode */
+	PhiPixmapStorage* pixmap_store = g_new(PhiPixmapStorage, 1);
+	pixmap_store->ctx = fz_clone_context(ctx);
+	pixmap_store->pixmap = pixmap;
+	
+	GBytes* bytes = g_bytes_new_with_free_func(
+		fz_pixmap_samples(ctx, pixmap),
+		fz_pixmap_size(ctx, pixmap),
+		(GDestroyNotify)phi_pixmap_storage_free,
+		pixmap_store
+	);
+	
+	GdkTexture* texture = gdk_memory_texture_new(
+		width, height,
+		GDK_MEMORY_R8G8B8A8,
+		bytes,
+		fz_pixmap_stride(ctx, pixmap)
+	);
+	g_bytes_unref(bytes);
+	
+	graphene_rect_t grect;
+	graphene_rect_init(&grect, ibounds.x0, ibounds.y0, width, height);
+	GskRenderNode* node = gsk_texture_node_new(texture, &grect);
+	g_object_unref(texture);
+	
+	node = phi_node_device_alpha(node, alpha);
+	
+	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	g_ptr_array_add(current->children, node);
+}
+
+/* Transparency groups */
+static void phi_node_device_begin_group(fz_context* ctx, fz_device* dev, fz_rect area, fz_colorspace* cs, int isolated, int knockout, int blendmode, float alpha) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)cs; /* We ignore colorspace for now, render in device RGB */
+	
+	PhiRenderContext new;
+	phi_render_context_init(&new);
+	new.state = PHI_RENDER_STATE_GROUP;
+	new.group.area = area;
+	new.group.isolated = isolated;
+	new.group.knockout = knockout;
+	new.group.blendmode = blendmode;
+	new.group.alpha = alpha;
+	
+	g_array_append_val(self->stack, new);
+}
+
+static GskBlendMode phi_node_device_convert_blendmode(int blendmode) {
+	/* MuPDF blend modes from fz_blend_mode enum */
+	switch (blendmode) {
+		case 0: return GSK_BLEND_MODE_DEFAULT;    /* Normal */
+		case 1: return GSK_BLEND_MODE_MULTIPLY;
+		case 2: return GSK_BLEND_MODE_SCREEN;
+		case 3: return GSK_BLEND_MODE_OVERLAY;
+		case 4: return GSK_BLEND_MODE_DARKEN;
+		case 5: return GSK_BLEND_MODE_LIGHTEN;
+		case 6: return GSK_BLEND_MODE_COLOR_DODGE;
+		case 7: return GSK_BLEND_MODE_COLOR_BURN;
+		case 8: return GSK_BLEND_MODE_HARD_LIGHT;
+		case 9: return GSK_BLEND_MODE_SOFT_LIGHT;
+		case 10: return GSK_BLEND_MODE_DIFFERENCE;
+		case 11: return GSK_BLEND_MODE_EXCLUSION;
+		case 12: return GSK_BLEND_MODE_HUE;
+		case 13: return GSK_BLEND_MODE_SATURATION;
+		case 14: return GSK_BLEND_MODE_COLOR;
+		case 15: return GSK_BLEND_MODE_LUMINOSITY;
+		default: return GSK_BLEND_MODE_DEFAULT;
+	}
+}
+
+static void phi_node_device_end_group(fz_context* ctx, fz_device* dev) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	if (self->stack->len < 2)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_group called on root");
+	
+	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	if (current->state != PHI_RENDER_STATE_GROUP)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_group called in invalid state");
+	
+	GskRenderNode* node;
+	if (current->children->len == 0) {
+		g_array_remove_index(self->stack, self->stack->len - 1);
+		return;
+	} else if (current->children->len == 1) {
+		node = gsk_render_node_ref(g_ptr_array_index(current->children, 0));
+	} else {
+		node = gsk_container_node_new((GskRenderNode**)current->children->pdata, current->children->len);
+	}
+	
+	/* Apply clip to group area */
+	graphene_rect_t clip_rect;
+	graphene_rect_init(&clip_rect,
+		current->group.area.x0,
+		current->group.area.y0,
+		current->group.area.x1 - current->group.area.x0,
+		current->group.area.y1 - current->group.area.y0
+	);
+	if (!fz_is_infinite_rect(current->group.area)) {
+		GskRenderNode* clipped = gsk_clip_node_new(node, &clip_rect);
+		gsk_render_node_unref(node);
+		node = clipped;
+	}
+	
+	/* Apply alpha */
+	if (current->group.alpha < 1.0f) {
+		node = phi_node_device_alpha(node, current->group.alpha);
+	}
+	
+	/* Apply blend mode if not normal */
+	GskBlendMode blend = phi_node_device_convert_blendmode(current->group.blendmode);
+	
+	g_array_remove_index(self->stack, self->stack->len - 1);
+	PhiRenderContext* parent = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	
+	if (blend != GSK_BLEND_MODE_DEFAULT && parent->children->len > 0) {
+		/* Create blend node with previous content as bottom */
+		GskRenderNode* bottom;
+		if (parent->children->len == 1) {
+			bottom = gsk_render_node_ref(g_ptr_array_index(parent->children, 0));
+		} else {
+			bottom = gsk_container_node_new((GskRenderNode**)parent->children->pdata, parent->children->len);
+		}
+		
+		GskRenderNode* blended = gsk_blend_node_new(bottom, node, blend);
+		gsk_render_node_unref(bottom);
+		gsk_render_node_unref(node);
+		
+		/* Clear parent children and add blended result */
+		g_ptr_array_set_size(parent->children, 0);
+		g_ptr_array_add(parent->children, blended);
+	} else {
+		g_ptr_array_add(parent->children, node);
+	}
+}
+
+/* Tiling patterns */
+static int phi_node_device_begin_tile(fz_context* ctx, fz_device* dev, fz_rect area, fz_rect view, float xstep, float ystep, fz_matrix ctm, int id, int doc_id) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)doc_id;
+	
+	PhiRenderContext new;
+	phi_render_context_init(&new);
+	new.state = PHI_RENDER_STATE_TILE;
+	new.tile.area = area;
+	new.tile.view = view;
+	new.tile.xstep = xstep;
+	new.tile.ystep = ystep;
+	new.tile.ctm = ctm;
+	new.tile.id = id;
+	
+	g_array_append_val(self->stack, new);
+	
+	/* Return 0 to indicate we need the tile content rendered */
+	return 0;
+}
+
+static void phi_node_device_end_tile(fz_context* ctx, fz_device* dev) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	
+	if (self->stack->len < 2)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_tile called on root");
+	
+	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	if (current->state != PHI_RENDER_STATE_TILE)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_tile called in invalid state");
+	
+	if (current->children->len == 0) {
+		g_array_remove_index(self->stack, self->stack->len - 1);
+		return;
+	}
+	
+	/* Build tile pattern node */
+	GskRenderNode* tile_content;
+	if (current->children->len == 1) {
+		tile_content = gsk_render_node_ref(g_ptr_array_index(current->children, 0));
+	} else {
+		tile_content = gsk_container_node_new((GskRenderNode**)current->children->pdata, current->children->len);
+	}
+	
+	/* Clip to view bounds */
+	graphene_rect_t view_rect;
+	graphene_rect_init(&view_rect,
+		current->tile.view.x0,
+		current->tile.view.y0,
+		current->tile.view.x1 - current->tile.view.x0,
+		current->tile.view.y1 - current->tile.view.y0
+	);
+	GskRenderNode* clipped = gsk_clip_node_new(tile_content, &view_rect);
+	gsk_render_node_unref(tile_content);
+	tile_content = clipped;
+	
+	/* Calculate tile area in device coordinates */
+	fz_rect area = current->tile.area;
+	float xstep = current->tile.xstep;
+	float ystep = current->tile.ystep;
+	fz_matrix ctm = current->tile.ctm;
+	
+	/* Build container with repeated tiles */
+	GPtrArray* tiles = g_ptr_array_new_with_free_func((GDestroyNotify)gsk_render_node_unref);
+	
+	/* Calculate iteration range */
+	float x0 = area.x0;
+	float y0 = area.y0;
+	float x1 = area.x1;
+	float y1 = area.y1;
+	
+	/* Limit iterations for safety (very large patterns can cause issues) */
+	int max_tiles_x = (int)ceilf((x1 - x0) / fabsf(xstep)) + 1;
+	int max_tiles_y = (int)ceilf((y1 - y0) / fabsf(ystep)) + 1;
+	int max_tiles = 10000; /* Safety limit */
+	
+	if (max_tiles_x * max_tiles_y > max_tiles) {
+		fz_warn(ctx, "Tile pattern too large (%d x %d), limiting", max_tiles_x, max_tiles_y);
+		max_tiles_x = (int)sqrtf(max_tiles);
+		max_tiles_y = max_tiles_x;
+	}
+	
+	for (int iy = 0; iy < max_tiles_y; iy++) {
+		for (int ix = 0; ix < max_tiles_x; ix++) {
+			float tx = x0 + ix * xstep;
+			float ty = y0 + iy * ystep;
+			
+			/* Transform tile position */
+			fz_matrix tile_ctm = fz_concat(fz_translate(tx, ty), ctm);
+			GskTransform* transform = phi_node_device_transform_from_matrix(&tile_ctm);
+			
+			GskRenderNode* tile_instance = gsk_transform_node_new(tile_content, transform);
+			gsk_transform_unref(transform);
+			
+			g_ptr_array_add(tiles, tile_instance);
+		}
+	}
+	
+	gsk_render_node_unref(tile_content);
+	
+	GskRenderNode* result = gsk_container_node_new((GskRenderNode**)tiles->pdata, tiles->len);
+	g_ptr_array_unref(tiles);
+	
+	/* Clip to area */
+	graphene_rect_t area_rect;
+	fz_rect transformed_area = fz_transform_rect(area, ctm);
+	graphene_rect_init(&area_rect,
+		transformed_area.x0,
+		transformed_area.y0,
+		transformed_area.x1 - transformed_area.x0,
+		transformed_area.y1 - transformed_area.y0
+	);
+	GskRenderNode* final = gsk_clip_node_new(result, &area_rect);
+	gsk_render_node_unref(result);
+	
+	g_array_remove_index(self->stack, self->stack->len - 1);
+	PhiRenderContext* parent = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
+	g_ptr_array_add(parent->children, final);
+}
+
 fz_device* phi_node_device_new(fz_context* ctx) {
 	PhiNodeDevice* self = fz_new_derived_device(ctx, PhiNodeDevice);
 	self->stack = g_array_new(FALSE, FALSE, sizeof(PhiRenderContext));
 	g_array_set_clear_func(self->stack, (GDestroyNotify)phi_render_context_clear);
 
 	self->super.drop_device = phi_node_device_drop;
+	
+	/* Path operations */
 	self->super.fill_path = phi_node_device_fill_path;
 	self->super.stroke_path = phi_node_device_stroke_path;
 	self->super.clip_path = phi_node_device_clip_path;
 	self->super.clip_stroke_path = phi_node_device_clip_stroke_path;
+	
+	/* Text operations */
+	self->super.fill_text = phi_node_device_fill_text;
+	self->super.stroke_text = phi_node_device_stroke_text;
+	self->super.clip_text = phi_node_device_clip_text;
+	self->super.clip_stroke_text = phi_node_device_clip_stroke_text;
+	self->super.ignore_text = phi_node_device_ignore_text;
+	
+	/* Image operations */
 	self->super.fill_image = phi_node_device_fill_image;
+	self->super.fill_image_mask = phi_node_device_fill_image_mask;
 	self->super.clip_image_mask = phi_node_device_clip_image_mask;
+	
+	/* Shading */
+	self->super.fill_shade = phi_node_device_fill_shade;
+	
+	/* Clipping and masking */
 	self->super.pop_clip = phi_node_device_pop_clip;
 	self->super.begin_mask = phi_node_device_begin_mask;
 	self->super.end_mask = phi_node_device_end_mask;
+	
+	/* Transparency groups */
+	self->super.begin_group = phi_node_device_begin_group;
+	self->super.end_group = phi_node_device_end_group;
+	
+	/* Tiling patterns */
+	self->super.begin_tile = phi_node_device_begin_tile;
+	self->super.end_tile = phi_node_device_end_tile;
 
 	PhiRenderContext root;
 	phi_render_context_init(&root);
