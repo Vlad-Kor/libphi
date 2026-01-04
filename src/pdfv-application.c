@@ -87,7 +87,7 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	
 	adw_show_about_dialog(GTK_WIDGET(window),
 		"application-name", "Phi PDF Viewer",
-		"application-icon", "org.gnome.Evince", // TODO: custom icon
+		"application-icon", "arpa.sp1rit.phi.viewer",
 		"version", "0.1",
 		"developer-name", "sp1rit",
 		"license-type", GTK_LICENSE_AGPL_3_0,

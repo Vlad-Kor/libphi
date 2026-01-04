@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Phi PDF Viewer
+Comment=View PDF documents
+GenericName=PDF Viewer
+Exec=pdfv %U
+Icon=arpa.sp1rit.phi.viewer
+Terminal=false
+Type=Application
+Categories=Office;Viewer;GTK;
+MimeType=application/pdf;
+Keywords=PDF;document;viewer;
+StartupNotify=true
+StartupWMClass=arpa.sp1rit.phi.viewer

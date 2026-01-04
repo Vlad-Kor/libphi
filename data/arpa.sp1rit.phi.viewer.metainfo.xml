@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>arpa.sp1rit.phi.viewer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>Phi PDF Viewer</name>
+  <summary>View PDF documents</summary>
+  <description>
+    <p>
+      Phi is a high-performance PDF viewer built with GTK4 and libadwaita.
+      It uses MuPDF for fast and accurate PDF rendering.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Fast PDF rendering powered by MuPDF</li>
+      <li>Multiple tabs support</li>
+      <li>Page thumbnails sidebar</li>
+      <li>Dark mode with color inversion</li>
+      <li>Zoom controls including fit-to-width and fit-to-page</li>
+      <li>Navigation history (back/forward)</li>
+      <li>External link support</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">arpa.sp1rit.phi.viewer.desktop</launchable>
+  <url type="homepage">https://github.com/sp1ritCS/libphi</url>
+  <url type="bugtracker">https://github.com/sp1ritCS/libphi/issues</url>
+  <developer id="arpa.sp1rit">
+    <name>sp1rit</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <branding>
+    <color type="primary" scheme_preference="light">#c6262e</color>
+    <color type="primary" scheme_preference="dark">#a21822</color>
+  </branding>
+  <provides>
+    <binary>pdfv</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <releases>
+    <release version="0.1" date="2025-01-05">
+      <description>
+        <p>Initial release</p>
+      </description>
+    </release>
+  </releases>
+</component>
