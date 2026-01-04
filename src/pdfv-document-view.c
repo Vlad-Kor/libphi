@@ -418,25 +418,43 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
             gtk_snapshot_save(snapshot);
             gtk_snapshot_translate(snapshot, &GRAPHENE_POINT_INIT(x, y));
             
-            /* Apply inversion if needed */
+            /* Apply inversion with hue rotation if needed */
             if (self->inverted) {
-                /* Invert colors using color matrix */
+                /* First push hue rotation 180° */
+                /* Hue rotation matrix for 180°:
+                 * Uses the standard formula with cos(180°)=-1, sin(180°)=0
+                 * With luminance preservation weights: R=0.213, G=0.715, B=0.072
+                 */
+                graphene_matrix_t hue_matrix;
+                graphene_vec4_t hue_offset;
+                graphene_matrix_init_from_float(&hue_matrix, (float[16]){
+                    -0.574f,  0.426f,  0.426f, 0,
+                     0.285f, -0.715f,  0.285f, 0,
+                     0.928f,  0.928f, -0.072f, 0,
+                     0,       0,       0,      1
+                });
+                graphene_vec4_init(&hue_offset, 0, 0, 0, 0);
+                gtk_snapshot_push_color_matrix(snapshot, &hue_matrix, &hue_offset);
+                
+                /* Then push invert */
                 graphene_matrix_t invert_matrix;
-                graphene_vec4_t offset;
+                graphene_vec4_t invert_offset;
                 graphene_matrix_init_from_float(&invert_matrix, (float[16]){
                     -1, 0, 0, 0,
                     0, -1, 0, 0,
                     0, 0, -1, 0,
                     0, 0, 0, 1
                 });
-                graphene_vec4_init(&offset, 1, 1, 1, 0);
-                gtk_snapshot_push_color_matrix(snapshot, &invert_matrix, &offset);
+                graphene_vec4_init(&invert_offset, 1, 1, 1, 0);
+                gtk_snapshot_push_color_matrix(snapshot, &invert_matrix, &invert_offset);
             }
             
             gtk_snapshot_append_node(snapshot, self->render_cache[cache_idx]);
             
-            if (self->inverted)
-                gtk_snapshot_pop(snapshot);
+            if (self->inverted) {
+                gtk_snapshot_pop(snapshot);  /* pop invert */
+                gtk_snapshot_pop(snapshot);  /* pop hue rotate */
+            }
             
             gtk_snapshot_restore(snapshot);
         }
