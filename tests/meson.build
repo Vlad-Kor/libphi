@@ -14,18 +14,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-project('phi', 'c',
-	version: '0.1',
-	default_options: ['warning_level=2', 'c_std=gnu2x']
+test_device = executable('test-device', 'test-device.c',
+	include_directories: inc,
+	dependencies: [phi_dep, mupdf_dep],
 )
 
-cc = meson.get_compiler('c')
-
-gtk_dep = dependency('gtk4', version: '>= 4.17.4')
-gio_dep = dependency('gio-2.0')
-mupdf_dep = dependency('mupdf')
-
-inc = include_directories('.')
-subdir('phi')
-subdir('src')
-subdir('tests')
+test('device-test', test_device)
