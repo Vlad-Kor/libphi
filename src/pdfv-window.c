@@ -12,6 +12,7 @@
 #include "pdfv-document-view.h"
 #include <phi/phidocument.h>
 #include <phi/phipage.h>
+#include <gsk/gsk.h>
 
 struct _PdfvWindow {
     AdwApplicationWindow parent_instance;
@@ -137,34 +138,57 @@ on_thumbnail_draw(GtkDrawingArea* area, cairo_t* cr, int width, int height, Thum
     gfloat pw, ph;
     phi_page_get_size(data->page, &pw, &ph);
     
-    gdouble scale_x = (gdouble)width / pw;
-    gdouble scale_y = (gdouble)height / ph;
-    gdouble scale = MIN(scale_x, scale_y) * 0.85;
+    /* Calculate scale to fit within the drawing area with padding */
+    gdouble padding = 8.0;
+    gdouble avail_w = width - padding * 2;
+    gdouble avail_h = height - padding * 2;
+    gdouble scale_x = avail_w / pw;
+    gdouble scale_y = avail_h / ph;
+    gdouble scale = MIN(scale_x, scale_y);
     
-    gdouble offset_x = (width - pw * scale) / 2.0;
-    gdouble offset_y = (height - ph * scale) / 2.0;
+    gdouble scaled_w = pw * scale;
+    gdouble scaled_h = ph * scale;
+    gdouble offset_x = (width - scaled_w) / 2.0;
+    gdouble offset_y = (height - scaled_h) / 2.0;
     
+    /* Shadow */
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.15);
+    cairo_rectangle(cr, offset_x + 2, offset_y + 2, scaled_w, scaled_h);
+    cairo_fill(cr);
+    
+    /* Page background (white) */
+    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    cairo_rectangle(cr, offset_x, offset_y, scaled_w, scaled_h);
+    cairo_fill(cr);
+    
+    /* Render actual page content */
     cairo_save(cr);
     cairo_translate(cr, offset_x, offset_y);
     cairo_scale(cr, scale, scale);
     
-    /* Shadow */
-    cairo_set_source_rgba(cr, 0, 0, 0, 0.12);
-    cairo_rectangle(cr, 3, 3, pw, ph);
-    cairo_fill(cr);
-    
-    /* Page background */
-    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    /* Clip to page bounds */
     cairo_rectangle(cr, 0, 0, pw, ph);
-    cairo_fill(cr);
+    cairo_clip(cr);
     
-    /* Border */
-    cairo_set_source_rgba(cr, 0, 0, 0, 0.15);
-    cairo_set_line_width(cr, 1.0 / scale);
-    cairo_rectangle(cr, 0, 0, pw, ph);
-    cairo_stroke(cr);
+    /* Render the page using phi_page_render_to_node */
+    GError* error = NULL;
+    GskRenderNode* node = phi_page_render_to_node(data->page, &error);
+    if (node) {
+        /* Create a Cairo renderer to draw the GSK node */
+        cairo_save(cr);
+        /* The render node is at page scale, we've already scaled the context */
+        gsk_render_node_draw(node, cr);
+        cairo_restore(cr);
+        gsk_render_node_unref(node);
+    }
     
     cairo_restore(cr);
+    
+    /* Border */
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.2);
+    cairo_set_line_width(cr, 1.0);
+    cairo_rectangle(cr, offset_x + 0.5, offset_y + 0.5, scaled_w - 1, scaled_h - 1);
+    cairo_stroke(cr);
 }
 
 static GtkWidget*
@@ -533,26 +557,43 @@ pdfv_window_init(PdfvWindow* self)
     /* ===== WIDGET HIERARCHY =====
      * 
      * AdwApplicationWindow
-     *   └─ AdwTabOverview (content)
-     *        └─ AdwToolbarView (child)
-     *             ├─ AdwHeaderBar (top-bar)
-     *             ├─ AdwTabBar (top-bar)
-     *             └─ AdwOverlaySplitView (content)
-     *                  ├─ Sidebar (sidebar)
+     *   └─ AdwOverlaySplitView (content) - full height sidebar
+     *        ├─ Sidebar (sidebar)
+     *        └─ AdwTabOverview (content)
+     *             └─ AdwToolbarView (child)
+     *                  ├─ AdwHeaderBar (top-bar)
+     *                  ├─ AdwTabBar (top-bar)
      *                  └─ GtkOverlay (content)
      *                       ├─ AdwTabView (child)
      *                       └─ ZoomControls (overlay)
      */
     
-    /* Tab Overview - outermost wrapper for tab overview gesture */
+    /* Split view - outermost for full-height sidebar */
+    self->split_view = ADW_OVERLAY_SPLIT_VIEW(adw_overlay_split_view_new());
+    adw_overlay_split_view_set_sidebar_width_fraction(self->split_view, 0.22);
+    adw_overlay_split_view_set_min_sidebar_width(self->split_view, 200);
+    adw_overlay_split_view_set_max_sidebar_width(self->split_view, 280);
+    adw_overlay_split_view_set_enable_hide_gesture(self->split_view, TRUE);
+    adw_overlay_split_view_set_enable_show_gesture(self->split_view, TRUE);
+    /* Don't force collapsed - let it adapt based on window width */
+    /* When collapsed=FALSE (wide window), sidebar is inline like Nautilus */
+    /* When collapsed=TRUE (narrow window), sidebar overlays like a popup */
+    adw_overlay_split_view_set_pin_sidebar(self->split_view, FALSE);
+    g_signal_connect(self->split_view, "notify::show-sidebar", 
+        G_CALLBACK(on_sidebar_show_changed), self);
+    
+    /* Tab Overview */
     self->tab_overview = ADW_TAB_OVERVIEW(adw_tab_overview_new());
     adw_tab_overview_set_enable_new_tab(self->tab_overview, TRUE);
     g_signal_connect(self->tab_overview, "create-tab", 
         G_CALLBACK(on_tab_overview_create_tab), self);
-    adw_application_window_set_content(ADW_APPLICATION_WINDOW(self), 
-        GTK_WIDGET(self->tab_overview));
     
-    /* Main toolbar view */
+    /* Set up the hierarchy: window -> split_view -> tab_overview */
+    adw_overlay_split_view_set_content(self->split_view, GTK_WIDGET(self->tab_overview));
+    adw_application_window_set_content(ADW_APPLICATION_WINDOW(self), 
+        GTK_WIDGET(self->split_view));
+    
+    /* Main toolbar view - must be set AFTER tab_overview has a parent */
     self->toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
     adw_tab_overview_set_child(self->tab_overview, GTK_WIDGET(self->toolbar_view));
     
@@ -630,28 +671,16 @@ pdfv_window_init(PdfvWindow* self)
     adw_tab_bar_set_autohide(self->tab_bar, TRUE);
     adw_toolbar_view_add_top_bar(self->toolbar_view, GTK_WIDGET(self->tab_bar));
     
-    /* Split view */
-    self->split_view = ADW_OVERLAY_SPLIT_VIEW(adw_overlay_split_view_new());
-    adw_overlay_split_view_set_sidebar_width_fraction(self->split_view, 0.18);
-    adw_overlay_split_view_set_min_sidebar_width(self->split_view, 160);
-    adw_overlay_split_view_set_max_sidebar_width(self->split_view, 260);
-    adw_overlay_split_view_set_enable_hide_gesture(self->split_view, TRUE);
-    adw_overlay_split_view_set_enable_show_gesture(self->split_view, TRUE);
-    g_signal_connect(self->split_view, "notify::show-sidebar", 
-        G_CALLBACK(on_sidebar_show_changed), self);
-    adw_toolbar_view_set_content(self->toolbar_view, GTK_WIDGET(self->split_view));
-    
-    /* Sidebar content */
+    /* Sidebar content - full height with proper Adwaita styling */
     GtkWidget* sidebar_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(sidebar_box, "view");
+    gtk_widget_add_css_class(sidebar_box, "sidebar-pane");
     
-    GtkWidget* sidebar_header = gtk_label_new("Pages");
-    gtk_widget_add_css_class(sidebar_header, "title-4");
-    gtk_widget_set_margin_top(sidebar_header, 12);
-    gtk_widget_set_margin_bottom(sidebar_header, 8);
-    gtk_box_append(GTK_BOX(sidebar_box), sidebar_header);
-    
-    gtk_box_append(GTK_BOX(sidebar_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    /* Sidebar toolbar/header */
+    AdwHeaderBar* sidebar_header = ADW_HEADER_BAR(adw_header_bar_new());
+    adw_header_bar_set_show_title(sidebar_header, TRUE);
+    adw_header_bar_set_title_widget(sidebar_header, gtk_label_new("Pages"));
+    gtk_widget_add_css_class(GTK_WIDGET(sidebar_header), "flat");
+    gtk_box_append(GTK_BOX(sidebar_box), GTK_WIDGET(sidebar_header));
     
     GtkWidget* thumb_scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(thumb_scroll),
@@ -691,6 +720,7 @@ pdfv_window_init(PdfvWindow* self)
     /* Content overlay for floating controls */
     GtkWidget* content_overlay = gtk_overlay_new();
     gtk_overlay_set_child(GTK_OVERLAY(content_overlay), GTK_WIDGET(self->tab_view));
+    adw_toolbar_view_set_content(self->toolbar_view, content_overlay);
     
     /* Floating zoom controls */
     self->zoom_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -719,8 +749,6 @@ pdfv_window_init(PdfvWindow* self)
     gtk_box_append(GTK_BOX(self->zoom_box), GTK_WIDGET(self->zoom_in_btn));
     
     gtk_overlay_add_overlay(GTK_OVERLAY(content_overlay), self->zoom_box);
-    
-    adw_overlay_split_view_set_content(self->split_view, content_overlay);
     
     /* Window setup */
     gtk_window_set_default_size(GTK_WINDOW(self), 900, 700);
