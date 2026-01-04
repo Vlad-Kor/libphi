@@ -595,6 +595,8 @@ pdfv_window_init(PdfvWindow* self)
     
     /* Main toolbar view - must be set AFTER tab_overview has a parent */
     self->toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
+    /* Ensure content doesn't scroll under the header bar */
+    adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_RAISED);
     adw_tab_overview_set_child(self->tab_overview, GTK_WIDGET(self->toolbar_view));
     
     /* Header bar */
