@@ -117,14 +117,139 @@ typedef struct {
     GtkWidget* drawing_area;
     PhiPage* page;
     gint page_num;
+    cairo_surface_t* cached_surface;  /* Cached thumbnail render */
+    guint render_idle_id;             /* Pending idle render callback */
+    gboolean visible;                 /* Whether thumbnail is currently visible */
 } ThumbnailData;
+
+/* Global queue for thumbnail rendering - only one at a time */
+static GQueue* thumbnail_render_queue = NULL;
+static guint thumbnail_render_source_id = 0;
+
+static void thumbnail_process_queue(void);
 
 static void
 thumbnail_data_free(ThumbnailData* data)
 {
-    /* Note: We don't unref page because phi_document_get_page returns
-     * a borrowed reference - the document owns the page */
+    if (data->render_idle_id) {
+        g_source_remove(data->render_idle_id);
+        data->render_idle_id = 0;
+    }
+    /* Remove from render queue if present */
+    if (thumbnail_render_queue)
+        g_queue_remove(thumbnail_render_queue, data);
+    if (data->cached_surface)
+        cairo_surface_destroy(data->cached_surface);
     g_free(data);
+}
+
+/* Idle callback to render ONE thumbnail from queue */
+static gboolean
+thumbnail_render_one(gpointer user_data)
+{
+    (void)user_data;
+    thumbnail_render_source_id = 0;
+    
+    if (!thumbnail_render_queue || g_queue_is_empty(thumbnail_render_queue))
+        return G_SOURCE_REMOVE;
+    
+    ThumbnailData* data = g_queue_pop_head(thumbnail_render_queue);
+    
+    /* Skip if no longer valid or not visible */
+    if (!data || !data->page || !data->drawing_area || 
+        !gtk_widget_get_parent(data->drawing_area) ||
+        data->cached_surface || !data->visible) {
+        /* Process next in queue */
+        thumbnail_process_queue();
+        return G_SOURCE_REMOVE;
+    }
+    
+    /* Get page size */
+    gfloat pw, ph;
+    phi_page_get_size(data->page, &pw, &ph);
+    
+    /* Calculate scale for thumbnail (render at thumbnail size, not full page) */
+    gint target_width = 120;
+    gint target_height = 160;
+    gdouble scale_x = (gdouble)target_width / pw;
+    gdouble scale_y = (gdouble)target_height / ph;
+    gdouble scale = MIN(scale_x, scale_y);
+    
+    gint render_w = (gint)(pw * scale);
+    gint render_h = (gint)(ph * scale);
+    
+    if (render_w < 1) render_w = 1;
+    if (render_h < 1) render_h = 1;
+    
+    /* Create surface for thumbnail */
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, render_w, render_h);
+    cairo_t* cr = cairo_create(surface);
+    
+    /* White background */
+    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    cairo_paint(cr);
+    
+    /* Scale and render page */
+    cairo_scale(cr, scale, scale);
+    
+    GError* error = NULL;
+    GskRenderNode* node = phi_page_render_to_node(data->page, &error);
+    if (node) {
+        gsk_render_node_draw(node, cr);
+        gsk_render_node_unref(node);
+    }
+    if (error)
+        g_error_free(error);
+    
+    cairo_destroy(cr);
+    
+    /* Store cached surface and trigger redraw */
+    data->cached_surface = surface;
+    
+    if (data->drawing_area && gtk_widget_get_parent(data->drawing_area))
+        gtk_widget_queue_draw(data->drawing_area);
+    
+    /* Schedule next render after a short delay to keep UI responsive */
+    thumbnail_process_queue();
+    
+    return G_SOURCE_REMOVE;
+}
+
+/* Process next item in thumbnail queue */
+static void
+thumbnail_process_queue(void)
+{
+    if (thumbnail_render_source_id)
+        return;  /* Already scheduled */
+    
+    if (!thumbnail_render_queue || g_queue_is_empty(thumbnail_render_queue))
+        return;
+    
+    /* Schedule with timeout to allow UI events to process between renders */
+    thumbnail_render_source_id = g_timeout_add(50, thumbnail_render_one, NULL);
+}
+
+/* Queue thumbnail for rendering when visible */
+static void
+thumbnail_queue_render(ThumbnailData* data)
+{
+    if (!data->page || data->cached_surface)
+        return;
+    
+    if (!thumbnail_render_queue)
+        thumbnail_render_queue = g_queue_new();
+    
+    /* Don't add duplicates */
+    if (g_queue_find(thumbnail_render_queue, data))
+        return;
+    
+    /* Add visible thumbnails to front, others to back */
+    if (data->visible)
+        g_queue_push_head(thumbnail_render_queue, data);
+    else
+        g_queue_push_tail(thumbnail_render_queue, data);
+    
+    thumbnail_process_queue();
 }
 
 static void
@@ -134,6 +259,13 @@ on_thumbnail_draw(GtkDrawingArea* area, cairo_t* cr, int width, int height, Thum
     
     if (!data->page)
         return;
+    
+    /* Mark as visible and queue render if needed */
+    if (!data->visible) {
+        data->visible = TRUE;
+        if (!data->cached_surface)
+            thumbnail_queue_render(data);
+    }
     
     gfloat pw, ph;
     phi_page_get_size(data->page, &pw, &ph);
@@ -161,28 +293,18 @@ on_thumbnail_draw(GtkDrawingArea* area, cairo_t* cr, int width, int height, Thum
     cairo_rectangle(cr, offset_x, offset_y, scaled_w, scaled_h);
     cairo_fill(cr);
     
-    /* Render actual page content */
-    cairo_save(cr);
-    cairo_translate(cr, offset_x, offset_y);
-    cairo_scale(cr, scale, scale);
-    
-    /* Clip to page bounds */
-    cairo_rectangle(cr, 0, 0, pw, ph);
-    cairo_clip(cr);
-    
-    /* Render the page using phi_page_render_to_node */
-    GError* error = NULL;
-    GskRenderNode* node = phi_page_render_to_node(data->page, &error);
-    if (node) {
-        /* Create a Cairo renderer to draw the GSK node */
+    /* For performance, only render cached thumbnails or simple placeholder
+     * Full page rendering is expensive for complex PDFs */
+    if (data->cached_surface) {
+        /* Draw cached thumbnail */
         cairo_save(cr);
-        /* The render node is at page scale, we've already scaled the context */
-        gsk_render_node_draw(node, cr);
+        cairo_translate(cr, offset_x, offset_y);
+        gdouble cache_scale = scaled_w / cairo_image_surface_get_width(data->cached_surface);
+        cairo_scale(cr, cache_scale, cache_scale);
+        cairo_set_source_surface(cr, data->cached_surface, 0, 0);
+        cairo_paint(cr);
         cairo_restore(cr);
-        gsk_render_node_unref(node);
     }
-    
-    cairo_restore(cr);
     
     /* Border */
     cairo_set_source_rgba(cr, 0, 0, 0, 0.2);
@@ -223,6 +345,8 @@ create_thumbnail_row(PhiDocument* doc, gint page_num)
     gtk_box_append(GTK_BOX(box), label);
     
     gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
+    
+    /* Thumbnail will be rendered when it becomes visible */
     
     return row;
 }
@@ -579,6 +703,7 @@ pdfv_window_init(PdfvWindow* self)
     /* When collapsed=FALSE (wide window), sidebar is inline like Nautilus */
     /* When collapsed=TRUE (narrow window), sidebar overlays like a popup */
     adw_overlay_split_view_set_pin_sidebar(self->split_view, FALSE);
+    adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);  /* Start hidden */
     g_signal_connect(self->split_view, "notify::show-sidebar", 
         G_CALLBACK(on_sidebar_show_changed), self);
     
