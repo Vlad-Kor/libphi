@@ -85,11 +85,12 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	
 	GtkWindow* window = gtk_application_get_active_window(GTK_APPLICATION(app));
 	
+	const char* developers[] = { "sp1rit", "Vlad-Kor", NULL };
 	adw_show_about_dialog(GTK_WIDGET(window),
 		"application-name", "Phi PDF Viewer",
 		"application-icon", "arpa.sp1rit.phi.viewer",
 		"version", "0.1",
-		"developer-name", "sp1rit",
+		"developers", developers,
 		"license-type", GTK_LICENSE_AGPL_3_0,
 		"comments", "A high-performance PDF viewer powered by MuPDF and GTK4",
 		"website", "https://github.com/sp1ritCS/libphi",

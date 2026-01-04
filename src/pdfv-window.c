@@ -851,12 +851,17 @@ pdfv_window_init(PdfvWindow* self)
     g_menu_append(view_section, "Fullscreen", "win.fullscreen");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(view_section));
     
+    GMenu* about_section = g_menu_new();
+    g_menu_append(about_section, "About Phi PDF Viewer", "app.about");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(about_section));
+    
     gtk_menu_button_set_menu_model(self->menu_button, G_MENU_MODEL(menu));
     adw_header_bar_pack_end(self->header_bar, GTK_WIDGET(self->menu_button));
     
     g_object_unref(file_section);
     g_object_unref(zoom_section);
     g_object_unref(view_section);
+    g_object_unref(about_section);
     g_object_unref(menu);
     
     /* Tab bar - below header bar */
