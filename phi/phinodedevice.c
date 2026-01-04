@@ -186,6 +186,7 @@ static GskPath* phi_node_device_convert_path(fz_context* ctx, const fz_path* pat
 static GskRenderNode* phi_node_device_make_color(fz_context* ctx, fz_colorspace* cs, const float* color, float alpha, const graphene_rect_t *bounds) {
 	float rgb[3];
 	
+	/* Fast path for common colorspaces */
 	switch (fz_colorspace_type(ctx, cs)) {
 		case FZ_COLORSPACE_RGB:
 			return gsk_color_node_new(&(GdkRGBA){ .red = color[0], .green = color[1], .blue = color[2], .alpha = alpha }, bounds);
@@ -193,25 +194,11 @@ static GskRenderNode* phi_node_device_make_color(fz_context* ctx, fz_colorspace*
 			return gsk_color_node_new(&(GdkRGBA){ .red = color[2], .green = color[1], .blue = color[0], .alpha = alpha }, bounds);
 		case FZ_COLORSPACE_GRAY:
 			return gsk_color_node_new(&(GdkRGBA){ .red = color[0], .green = color[0], .blue = color[0], .alpha = alpha }, bounds);
-		case FZ_COLORSPACE_CMYK:
-			/* Convert CMYK to RGB using simple formula */
-			/* R = (1-C) * (1-K), G = (1-M) * (1-K), B = (1-Y) * (1-K) */
-			{
-				float c = color[0], m = color[1], y = color[2], k = color[3];
-				float r = (1.0f - c) * (1.0f - k);
-				float g = (1.0f - m) * (1.0f - k);
-				float b = (1.0f - y) * (1.0f - k);
-				return gsk_color_node_new(&(GdkRGBA){ .red = r, .green = g, .blue = b, .alpha = alpha }, bounds);
-			}
-		case FZ_COLORSPACE_LAB:
-			/* Convert Lab to RGB - use MuPDF's conversion */
-			fz_convert_color(ctx, cs, color, fz_device_rgb(ctx), rgb, NULL, fz_default_color_params);
-			return gsk_color_node_new(&(GdkRGBA){ .red = rgb[0], .green = rgb[1], .blue = rgb[2], .alpha = alpha }, bounds);
 		default:
 			break;
 	}
 	
-	/* Try generic conversion for other colorspaces */
+	/* Use MuPDF's color conversion for accurate results (CMYK, Lab, ICC profiles, etc.) */
 	fz_try(ctx) {
 		fz_convert_color(ctx, cs, color, fz_device_rgb(ctx), rgb, NULL, fz_default_color_params);
 	} fz_catch(ctx) {
@@ -671,10 +658,15 @@ static void phi_node_device_pop_clip(fz_context* ctx, fz_device* dev) {
 	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
 
 	GskRenderNode* node;
-	if (current->children->len == 1)
+	if (current->children->len == 0) {
+		/* Empty clip - just pop and return */
+		g_array_remove_index(self->stack, self->stack->len - 1);
+		return;
+	} else if (current->children->len == 1) {
 		node = gsk_render_node_ref(g_ptr_array_index(current->children, 0));
-	else
+	} else {
 		node = gsk_container_node_new((GskRenderNode**)current->children->pdata, current->children->len);
+	}
 	
 	switch (current->state) {
 		case PHI_RENDER_STATE_NONE:
@@ -709,16 +701,25 @@ static void phi_node_device_pop_clip(fz_context* ctx, fz_device* dev) {
 	g_ptr_array_add(current->children, node);
 }
 
-static void phi_node_device_begin_mask(fz_context*, fz_device* dev, fz_rect area, int luminosity, fz_colorspace*, G_GNUC_UNUSED const float* bc, fz_color_params) {
+static void phi_node_device_begin_mask(fz_context* ctx, fz_device* dev, fz_rect area, int luminosity, fz_colorspace* cs, const float* bc, fz_color_params color_params) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
-	
-	// TODO: background color
+	(void)color_params;
 
 	PhiRenderContext new;
 	phi_render_context_init(&new);
 	new.state = PHI_RENDER_STATE_IN_MASK;
 	new.in_mask.mask_mode = luminosity ? GSK_MASK_MODE_LUMINANCE : GSK_MASK_MODE_ALPHA;
 	new.in_mask.area = area;
+	
+	/* If background color is specified for the soft mask, add it as the first child */
+	if (bc && cs && !fz_is_empty_rect(area)) {
+		graphene_rect_t bounds;
+		graphene_rect_init(&bounds, area.x0, area.y0, 
+			area.x1 - area.x0, area.y1 - area.y0);
+		GskRenderNode* bg = phi_node_device_make_color(ctx, cs, bc, 1.0f, &bounds);
+		if (bg)
+			g_ptr_array_add(new.children, bg);
+	}
 
 	g_array_append_val(self->stack, new);
 }
@@ -731,10 +732,19 @@ static void phi_node_device_end_mask(fz_context* ctx, fz_device* dev, fz_functio
 		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_mask called in invalid state");
 	
 	GskRenderNode* node;
-	if (current->children->len == 1)
+	if (current->children->len == 0) {
+		/* Empty mask - create transparent rect */
+		graphene_rect_t bounds;
+		graphene_rect_init(&bounds, 
+			current->in_mask.area.x0, current->in_mask.area.y0,
+			current->in_mask.area.x1 - current->in_mask.area.x0,
+			current->in_mask.area.y1 - current->in_mask.area.y0);
+		node = gsk_color_node_new(&(GdkRGBA){0, 0, 0, 0}, &bounds);
+	} else if (current->children->len == 1) {
 		node = gsk_render_node_ref(g_ptr_array_index(current->children, 0));
-	else
+	} else {
 		node = gsk_container_node_new((GskRenderNode**)current->children->pdata, current->children->len);
+	}
 
 	PhiRenderContext new;
 	phi_render_context_init(&new);
@@ -753,8 +763,20 @@ static void phi_node_device_fill_shade(fz_context* ctx, fz_device* dev, fz_shade
 	
 	/* Get shade bounds */
 	fz_rect bounds = fz_bound_shade(ctx, shade, ctm);
-	if (fz_is_empty_rect(bounds) || fz_is_infinite_rect(bounds)) {
-		fz_warn(ctx, "Shade has invalid bounds");
+	
+	/* Get current scissor from device */
+	fz_rect scissor = fz_device_current_scissor(ctx, dev);
+	
+	/* For infinite bounds, use the device scissor */
+	if (fz_is_infinite_rect(bounds)) {
+		bounds = scissor;
+	}
+	
+	/* Intersect with device scissor to ensure we don't render outside clip */
+	bounds = fz_intersect_rect(bounds, scissor);
+	
+	/* Skip if still invalid */
+	if (fz_is_infinite_rect(bounds) || fz_is_empty_rect(bounds)) {
 		return;
 	}
 	
@@ -766,8 +788,13 @@ static void phi_node_device_fill_shade(fz_context* ctx, fz_device* dev, fz_shade
 	if (width <= 0 || height <= 0)
 		return;
 	
-	/* Create RGB pixmap to render shade into */
+	/* Limit size to prevent huge allocations */
+	if (width > 4096) width = 4096;
+	if (height > 4096) height = 4096;
+	
+	/* Create RGB pixmap with alpha to render shade into */
 	fz_pixmap* pixmap = fz_new_pixmap(ctx, fz_device_rgb(ctx), width, height, NULL, 1);
+	/* Clear to transparent - the shade will draw on top */
 	fz_clear_pixmap(ctx, pixmap);
 	fz_set_pixmap_resolution(ctx, pixmap, 72, 72);
 	pixmap->x = ibounds.x0;
