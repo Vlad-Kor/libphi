@@ -382,9 +382,39 @@ on_thumbnail_row_activated(GtkListBox* box, GtkListBoxRow* row, PdfvWindow* self
     }
 }
 
+/* Create empty state widget (shown when no document is open) */
+static GtkWidget*
+create_empty_state(PdfvWindow* self)
+{
+    GtkWidget* status = adw_status_page_new();
+    adw_status_page_set_icon_name(ADW_STATUS_PAGE(status), "document-open-symbolic");
+    adw_status_page_set_title(ADW_STATUS_PAGE(status), "No Document Open");
+    adw_status_page_set_description(ADW_STATUS_PAGE(status), 
+        "Open a PDF file to view it");
+    
+    GtkWidget* button = gtk_button_new_with_label("Open File…");
+    gtk_widget_add_css_class(button, "pill");
+    gtk_widget_add_css_class(button, "suggested-action");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(button), "win.open");
+    gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
+    adw_status_page_set_child(ADW_STATUS_PAGE(status), button);
+    
+    (void)self;
+    return status;
+}
+
 static GtkWidget*
 create_tab_content(PdfvWindow* self)
 {
+    /* Create a stack to switch between empty state and document */
+    GtkWidget* stack = gtk_stack_new();
+    gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    
+    /* Empty state */
+    GtkWidget* empty = create_empty_state(self);
+    gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
+    
+    /* Document view */
     PdfvDocumentView* view = pdfv_document_view_new();
     setup_document_view_signals(self, view);
     
@@ -392,10 +422,15 @@ create_tab_content(PdfvWindow* self)
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), GTK_WIDGET(view));
     gtk_widget_set_hexpand(scrolled, TRUE);
     gtk_widget_set_vexpand(scrolled, TRUE);
+    gtk_stack_add_named(GTK_STACK(stack), scrolled, "document");
     
-    g_object_set_data(G_OBJECT(scrolled), "document-view", view);
+    /* Start with empty state */
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
     
-    return scrolled;
+    g_object_set_data(G_OBJECT(stack), "document-view", view);
+    g_object_set_data(G_OBJECT(stack), "scrolled-window", scrolled);
+    
+    return stack;
 }
 
 static void
@@ -409,19 +444,26 @@ on_tab_selected(AdwTabView* tab_view, GParamSpec* pspec, PdfvWindow* self)
         self->current_view = NULL;
         update_navigation_buttons(self);
         update_zoom_info(self);
+        /* Hide sidebar when no tab */
+        adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
         return;
     }
     
-    GtkWidget* scrolled = adw_tab_page_get_child(page);
-    self->current_view = g_object_get_data(G_OBJECT(scrolled), "document-view");
+    GtkWidget* stack = adw_tab_page_get_child(page);
+    self->current_view = g_object_get_data(G_OBJECT(stack), "document-view");
     
     update_navigation_buttons(self);
     update_zoom_info(self);
     
     if (self->current_view) {
         PhiDocument* doc = pdfv_document_view_get_document(self->current_view);
-        if (doc)
+        if (doc) {
             populate_thumbnails(self, doc);
+        } else {
+            /* No document - hide sidebar */
+            adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+            populate_thumbnails(self, NULL);
+        }
     }
 }
 
@@ -429,8 +471,8 @@ static gboolean
 on_tab_close_page(AdwTabView* tab_view, AdwTabPage* page, PdfvWindow* self)
 {
     /* Clear current_view if we're closing its tab */
-    GtkWidget* scrolled = adw_tab_page_get_child(page);
-    PdfvDocumentView* view = g_object_get_data(G_OBJECT(scrolled), "document-view");
+    GtkWidget* stack = adw_tab_page_get_child(page);
+    PdfvDocumentView* view = g_object_get_data(G_OBJECT(stack), "document-view");
     if (view == self->current_view) {
         /* Disconnect signals before destruction */
         g_signal_handlers_disconnect_by_data(view, self);
@@ -562,8 +604,12 @@ static void action_toggle_sidebar(GSimpleAction* action, GVariant* parameter, gp
 {
     (void)action; (void)parameter;
     PdfvWindow* self = PDFV_WINDOW(user_data);
-    gboolean visible = adw_overlay_split_view_get_show_sidebar(self->split_view);
-    adw_overlay_split_view_set_show_sidebar(self->split_view, !visible);
+    
+    /* Only toggle if there's a document loaded */
+    if (self->current_view && pdfv_document_view_get_document(self->current_view)) {
+        gboolean visible = adw_overlay_split_view_get_show_sidebar(self->split_view);
+        adw_overlay_split_view_set_show_sidebar(self->split_view, !visible);
+    }
 }
 
 static void action_invert_colors(GSimpleAction* action, GVariant* parameter, gpointer user_data)
@@ -620,6 +666,16 @@ on_tab_overview_button_clicked(GtkButton* button, PdfvWindow* self)
     (void)button;
     gboolean is_open = adw_tab_overview_get_open(self->tab_overview);
     adw_tab_overview_set_open(self->tab_overview, !is_open);
+}
+
+/* Hide sidebar when tab overview opens to avoid weird interactions */
+static void
+on_tab_overview_open_changed(AdwTabOverview* overview, GParamSpec* pspec, PdfvWindow* self)
+{
+    (void)pspec;
+    if (adw_tab_overview_get_open(overview)) {
+        adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+    }
 }
 
 static AdwTabPage*
@@ -712,6 +768,8 @@ pdfv_window_init(PdfvWindow* self)
     adw_tab_overview_set_enable_new_tab(self->tab_overview, TRUE);
     g_signal_connect(self->tab_overview, "create-tab", 
         G_CALLBACK(on_tab_overview_create_tab), self);
+    g_signal_connect(self->tab_overview, "notify::open",
+        G_CALLBACK(on_tab_overview_open_changed), self);
     
     /* Set up the hierarchy: window -> split_view -> tab_overview */
     adw_overlay_split_view_set_content(self->split_view, GTK_WIDGET(self->tab_overview));
@@ -919,18 +977,23 @@ pdfv_window_open_file(PdfvWindow* self, GFile* file)
     
     PdfvDocumentView* view = NULL;
     AdwTabPage* page = adw_tab_view_get_selected_page(self->tab_view);
+    GtkWidget* stack = NULL;
     
     if (page && self->current_view && 
         !pdfv_document_view_get_document(self->current_view)) {
         view = self->current_view;
+        stack = adw_tab_page_get_child(page);
     } else {
-        GtkWidget* content = create_tab_content(self);
-        view = g_object_get_data(G_OBJECT(content), "document-view");
-        page = adw_tab_view_append(self->tab_view, content);
+        stack = create_tab_content(self);
+        view = g_object_get_data(G_OBJECT(stack), "document-view");
+        page = adw_tab_view_append(self->tab_view, stack);
         adw_tab_view_set_selected_page(self->tab_view, page);
     }
     
     pdfv_document_view_set_document(view, doc);
+    
+    /* Switch from empty state to document view */
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
     
     gchar* basename = g_file_get_basename(file);
     adw_tab_page_set_title(page, basename);
