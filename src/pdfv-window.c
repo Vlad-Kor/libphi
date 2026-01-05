@@ -569,6 +569,13 @@ static void action_close_tab(GSimpleAction* action, GVariant* parameter, gpointe
 {
     (void)action; (void)parameter;
     PdfvWindow* self = PDFV_WINDOW(user_data);
+    
+    /* If this is the last tab, close the window instead */
+    if (adw_tab_view_get_n_pages(self->tab_view) <= 1) {
+        gtk_window_close(GTK_WINDOW(self));
+        return;
+    }
+    
     AdwTabPage* page = adw_tab_view_get_selected_page(self->tab_view);
     if (page)
         adw_tab_view_close_page(self->tab_view, page);
