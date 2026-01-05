@@ -127,10 +127,24 @@ on_link_activated(PdfvDocumentView* view, const gchar* uri, PdfvWindow* self)
 }
 
 static void
+on_search_completed(PdfvDocumentView* view, gint match_count, PdfvWindow* self)
+{
+    (void)view;
+    gchar* status;
+    if (match_count == 0)
+        status = g_strdup("No matches");
+    else
+        status = g_strdup_printf("%d match%s", match_count, match_count == 1 ? "" : "es");
+    gtk_label_set_text(self->search_status, status);
+    g_free(status);
+}
+
+static void
 setup_document_view_signals(PdfvWindow* self, PdfvDocumentView* view)
 {
     g_signal_connect(view, "notify", G_CALLBACK(on_view_notify), self);
     g_signal_connect(view, "link-activated", G_CALLBACK(on_link_activated), self);
+    g_signal_connect(view, "search-completed", G_CALLBACK(on_search_completed), self);
 }
 
 /* Thumbnail data for sidebar */
@@ -719,18 +733,13 @@ on_search_changed(GtkSearchEntry* entry, PdfvWindow* self)
     if (self->current_view) {
         pdfv_document_view_search(self->current_view, text);
         
-        /* Update status label */
-        gint count = pdfv_document_view_get_search_match_count(self->current_view);
-        if (text && *text) {
-            gchar* status;
-            if (count == 0)
-                status = g_strdup("No matches");
-            else
-                status = g_strdup_printf("%d match%s", count, count == 1 ? "" : "es");
-            gtk_label_set_text(self->search_status, status);
-            g_free(status);
-        } else {
+        /* Update status label - show immediate feedback */
+        if (!text || !*text) {
             gtk_label_set_text(self->search_status, "");
+        } else if (g_utf8_strlen(text, -1) < 2) {
+            gtk_label_set_text(self->search_status, "Type more...");
+        } else {
+            gtk_label_set_text(self->search_status, "Searching...");
         }
     }
 }

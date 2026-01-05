@@ -106,6 +106,7 @@ struct _PdfvDocumentView {
     GArray* search_results;  /* Array of SearchPageResult */
     gint search_current_match;
     gint search_total_matches;
+    guint search_debounce_id;  /* Debounce timeout source */
 };
 
 enum {
@@ -128,6 +129,7 @@ enum {
 
 enum {
     SIGNAL_LINK_ACTIVATED,
+    SIGNAL_SEARCH_COMPLETED,
     N_SIGNALS
 };
 
@@ -1105,6 +1107,12 @@ pdfv_document_view_dispose(GObject* object)
 {
     PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(object);
     
+    /* Cancel any pending search */
+    if (self->search_debounce_id) {
+        g_source_remove(self->search_debounce_id);
+        self->search_debounce_id = 0;
+    }
+    
     clear_render_cache(self);
     g_clear_object(&self->document);
     g_clear_pointer(&self->pages, g_ptr_array_unref);
@@ -1182,6 +1190,12 @@ pdfv_document_view_class_init(PdfvDocumentViewClass* klass)
         G_SIGNAL_RUN_LAST,
         0, NULL, NULL, NULL,
         G_TYPE_NONE, 1, G_TYPE_STRING);
+    
+    signals[SIGNAL_SEARCH_COMPLETED] = g_signal_new("search-completed",
+        G_TYPE_FROM_CLASS(klass),
+        G_SIGNAL_RUN_LAST,
+        0, NULL, NULL, NULL,
+        G_TYPE_NONE, 1, G_TYPE_INT);  /* match count */
 }
 
 static void
@@ -1629,11 +1643,139 @@ clear_search_results(PdfvDocumentView* self)
     self->search_total_matches = 0;
 }
 
+/* Incremental search state */
+typedef struct {
+    PdfvDocumentView* view;
+    gchar* search_text;
+    gint current_page;
+    gint n_pages;
+    GArray* results;
+    gint total_matches;
+} IncrementalSearchData;
+
+static void
+incremental_search_data_free(IncrementalSearchData* data)
+{
+    g_free(data->search_text);
+    if (data->results) {
+        for (guint i = 0; i < data->results->len; i++) {
+            SearchPageResult* r = &g_array_index(data->results, SearchPageResult, i);
+            g_free(r->quads);
+        }
+        g_array_free(data->results, TRUE);
+    }
+    g_slice_free(IncrementalSearchData, data);
+}
+
+/* Idle callback for incremental search - processes a few pages at a time */
+static gboolean
+search_idle_callback(gpointer user_data)
+{
+    IncrementalSearchData* data = user_data;
+    PdfvDocumentView* self = data->view;
+    
+    /* Check if search was cancelled (text changed) */
+    if (!self->search_text || g_strcmp0(self->search_text, data->search_text) != 0) {
+        incremental_search_data_free(data);
+        return G_SOURCE_REMOVE;
+    }
+    
+    /* Process a batch of pages (5 at a time to keep UI responsive) */
+    gint pages_to_process = MIN(5, data->n_pages - data->current_page);
+    
+    for (gint i = 0; i < pages_to_process; i++) {
+        gint page_idx = data->current_page + i;
+        
+        PhiPage* page = g_ptr_array_index(self->pages, page_idx);
+        if (!page) {
+            page = phi_document_get_page(self->document, page_idx, NULL);
+            g_ptr_array_index(self->pages, page_idx) = page;
+        }
+        
+        if (!page)
+            continue;
+        
+        PhiTextQuad quads[100];  /* Max 100 matches per page */
+        gint count = phi_page_search_text(page, data->search_text, quads, 100);
+        
+        if (count > 0) {
+            SearchPageResult pr = {
+                .page = page_idx,
+                .quad_count = count,
+                .quads = g_memdup2(quads, count * sizeof(PhiTextQuad))
+            };
+            g_array_append_val(data->results, pr);
+            data->total_matches += count;
+        }
+    }
+    
+    data->current_page += pages_to_process;
+    
+    /* Check if we're done */
+    if (data->current_page >= data->n_pages) {
+        /* Search complete - transfer results */
+        clear_search_results(self);
+        self->search_results = data->results;
+        self->search_total_matches = data->total_matches;
+        data->results = NULL;  /* Ownership transferred */
+        
+        /* Jump to first match */
+        if (self->search_results && self->search_results->len > 0) {
+            self->search_current_match = 0;
+            SearchPageResult* first = &g_array_index(self->search_results, SearchPageResult, 0);
+            pdfv_document_view_go_to_page(self, first->page);
+        }
+        
+        /* Emit signal for UI to update status */
+        g_signal_emit(self, signals[SIGNAL_SEARCH_COMPLETED], 0, self->search_total_matches);
+        
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+        g_free(data->search_text);
+        g_slice_free(IncrementalSearchData, data);
+        return G_SOURCE_REMOVE;
+    }
+    
+    /* Continue searching */
+    return G_SOURCE_CONTINUE;
+}
+
+/* Debounce callback - starts incremental search */
+static gboolean
+search_debounce_callback(gpointer user_data)
+{
+    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(user_data);
+    self->search_debounce_id = 0;
+    
+    if (!self->document || !self->search_text || !*self->search_text)
+        return G_SOURCE_REMOVE;
+    
+    /* Set up incremental search */
+    IncrementalSearchData* data = g_slice_new0(IncrementalSearchData);
+    data->view = self;
+    data->search_text = g_strdup(self->search_text);
+    data->current_page = 0;
+    data->n_pages = phi_document_get_n_pages(self->document);
+    data->results = g_array_new(FALSE, TRUE, sizeof(SearchPageResult));
+    data->total_matches = 0;
+    
+    /* Use high priority idle to process quickly but still allow UI events */
+    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, search_idle_callback, data, NULL);
+    
+    return G_SOURCE_REMOVE;
+}
+
 void
 pdfv_document_view_search(PdfvDocumentView* self, const gchar* text)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
     
+    /* Cancel pending debounce */
+    if (self->search_debounce_id) {
+        g_source_remove(self->search_debounce_id);
+        self->search_debounce_id = 0;
+    }
+    
+    /* Clear current results */
     clear_search_results(self);
     g_free(self->search_text);
     self->search_text = NULL;
@@ -1643,42 +1785,16 @@ pdfv_document_view_search(PdfvDocumentView* self, const gchar* text)
         return;
     }
     
+    /* Require minimum 2 characters to avoid searching entire doc for single letters */
+    if (g_utf8_strlen(text, -1) < 2) {
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+        return;
+    }
+    
     self->search_text = g_strdup(text);
-    self->search_results = g_array_new(FALSE, TRUE, sizeof(SearchPageResult));
     
-    gint n_pages = phi_document_get_n_pages(self->document);
-    
-    /* Search all pages */
-    for (gint i = 0; i < n_pages; i++) {
-        PhiPage* page = g_ptr_array_index(self->pages, i);
-        if (!page) {
-            page = phi_document_get_page(self->document, i, NULL);
-            g_ptr_array_index(self->pages, i) = page;
-        }
-        
-        if (!page)
-            continue;
-        
-        PhiTextQuad quads[100];  /* Max 100 matches per page */
-        gint count = phi_page_search_text(page, text, quads, 100);
-        
-        if (count > 0) {
-            SearchPageResult result = {
-                .page = i,
-                .quad_count = count,
-                .quads = g_memdup2(quads, count * sizeof(PhiTextQuad))
-            };
-            g_array_append_val(self->search_results, result);
-            self->search_total_matches += count;
-        }
-    }
-    
-    /* Jump to first match */
-    if (self->search_results->len > 0) {
-        self->search_current_match = 0;
-        SearchPageResult* first = &g_array_index(self->search_results, SearchPageResult, 0);
-        pdfv_document_view_go_to_page(self, first->page);
-    }
+    /* Debounce: wait 250ms after last keystroke before searching */
+    self->search_debounce_id = g_timeout_add(250, search_debounce_callback, self);
     
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
