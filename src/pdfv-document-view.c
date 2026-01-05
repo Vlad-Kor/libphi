@@ -23,6 +23,13 @@ typedef struct {
     gdouble scroll_y;
 } HistoryEntry;
 
+/* Search result for a single page */
+typedef struct {
+    gint page;
+    gint quad_count;
+    PhiTextQuad* quads;
+} SearchPageResult;
+
 struct _PdfvDocumentView {
     GtkWidget parent_instance;
     
@@ -59,6 +66,7 @@ struct _PdfvDocumentView {
     
     /* Gestures */
     GtkGesture* click_gesture;
+    GtkGesture* drag_gesture;
     GtkGesture* zoom_gesture;
     GtkEventController* scroll_controller;
     GtkEventController* motion_controller;
@@ -73,6 +81,21 @@ struct _PdfvDocumentView {
     GskRenderNode** render_cache;
     gint cache_first_page;
     gint cache_size;
+    
+    /* Text selection */
+    gboolean selecting;
+    gint selection_start_page;
+    graphene_point_t selection_start;
+    gint selection_end_page;
+    graphene_point_t selection_end;
+    PhiTextQuad* selection_quads;
+    gint selection_quad_count;
+    
+    /* Search */
+    gchar* search_text;
+    GArray* search_results;  /* Array of SearchPageResult */
+    gint search_current_match;
+    gint search_total_matches;
 };
 
 enum {
@@ -456,6 +479,46 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
                 gtk_snapshot_pop(snapshot);  /* pop hue rotate */
             }
             
+            /* Render search highlights for this page */
+            if (self->search_results && self->search_results->len > 0) {
+                for (guint sr = 0; sr < self->search_results->len; sr++) {
+                    SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, sr);
+                    if (result->page == i) {
+                        GdkRGBA highlight_color = {1.0, 1.0, 0.0, 0.4}; /* Yellow */
+                        for (gint q = 0; q < result->quad_count; q++) {
+                            PhiTextQuad* quad = &result->quads[q];
+                            float min_x = MIN(MIN(quad->ul.x, quad->ur.x), MIN(quad->ll.x, quad->lr.x));
+                            float max_x = MAX(MAX(quad->ul.x, quad->ur.x), MAX(quad->ll.x, quad->lr.x));
+                            float min_y = MIN(MIN(quad->ul.y, quad->ur.y), MIN(quad->ll.y, quad->lr.y));
+                            float max_y = MAX(MAX(quad->ul.y, quad->ur.y), MAX(quad->ll.y, quad->lr.y));
+                            gtk_snapshot_append_color(snapshot, &highlight_color,
+                                &GRAPHENE_RECT_INIT(min_x * self->zoom, min_y * self->zoom,
+                                                    (max_x - min_x) * self->zoom,
+                                                    (max_y - min_y) * self->zoom));
+                        }
+                        break;
+                    }
+                }
+            }
+            
+            /* Render text selection for this page */
+            if (self->selection_quad_count > 0 && 
+                (i == self->selection_start_page || i == self->selection_end_page ||
+                 (i > self->selection_start_page && i < self->selection_end_page))) {
+                GdkRGBA select_color = {0.2, 0.5, 1.0, 0.4}; /* Blue */
+                for (gint q = 0; q < self->selection_quad_count; q++) {
+                    PhiTextQuad* quad = &self->selection_quads[q];
+                    float min_x = MIN(MIN(quad->ul.x, quad->ur.x), MIN(quad->ll.x, quad->lr.x));
+                    float max_x = MAX(MAX(quad->ul.x, quad->ur.x), MAX(quad->ll.x, quad->lr.x));
+                    float min_y = MIN(MIN(quad->ul.y, quad->ur.y), MIN(quad->ll.y, quad->lr.y));
+                    float max_y = MAX(MAX(quad->ul.y, quad->ur.y), MAX(quad->ll.y, quad->lr.y));
+                    gtk_snapshot_append_color(snapshot, &select_color,
+                        &GRAPHENE_RECT_INIT(min_x * self->zoom, min_y * self->zoom,
+                                            (max_x - min_x) * self->zoom,
+                                            (max_y - min_y) * self->zoom));
+                }
+            }
+            
             gtk_snapshot_restore(snapshot);
         }
         
@@ -643,6 +706,142 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
     }
     
     return FALSE; /* Let default scrolling happen */
+}
+
+/* Helper to convert screen coordinates to page coordinates */
+static gboolean
+screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y,
+                      gint* page_num, graphene_point_t* page_point)
+{
+    if (!self->document)
+        return FALSE;
+    
+    gint width = gtk_widget_get_width(GTK_WIDGET(self));
+    
+    /* Find which page we're on */
+    gdouble page_offset;
+    gint pn = get_page_at_offset(self, self->scroll_y + screen_y, &page_offset);
+    
+    PhiPage* page = g_ptr_array_index(self->pages, pn);
+    if (!page)
+        return FALSE;
+    
+    gfloat pw, ph;
+    phi_page_get_size(page, &pw, &ph);
+    gdouble scaled_pw = pw * self->zoom;
+    
+    /* Convert to page coordinates */
+    gdouble page_x = (screen_x + self->scroll_x - (width - scaled_pw) / 2.0) / self->zoom;
+    gdouble page_y = (self->scroll_y + screen_y - page_offset) / self->zoom;
+    
+    if (page_num)
+        *page_num = pn;
+    if (page_point) {
+        page_point->x = page_x;
+        page_point->y = page_y;
+    }
+    
+    return TRUE;
+}
+
+static void
+update_selection_quads(PdfvDocumentView* self)
+{
+    g_free(self->selection_quads);
+    self->selection_quads = NULL;
+    self->selection_quad_count = 0;
+    
+    if (self->selection_start_page < 0 || self->selection_end_page < 0)
+        return;
+    
+    /* For now, only support selection within single page */
+    if (self->selection_start_page != self->selection_end_page)
+        return;
+    
+    PhiPage* page = g_ptr_array_index(self->pages, self->selection_start_page);
+    if (!page)
+        return;
+    
+    /* Get selection quads */
+    PhiTextQuad quads[256];
+    gint count = phi_page_get_selection_quads(page, &self->selection_start, 
+                                               &self->selection_end, quads, 256);
+    
+    if (count > 0) {
+        self->selection_quads = g_memdup2(quads, count * sizeof(PhiTextQuad));
+        self->selection_quad_count = count;
+    }
+}
+
+static void
+on_drag_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* self)
+{
+    (void)gesture;
+    
+    /* Check if we're over a link - don't start selection */
+    PhiLink* link = find_link_at(self, x, y);
+    if (link)
+        return;
+    
+    self->selecting = TRUE;
+    
+    gint page_num;
+    graphene_point_t page_point;
+    if (screen_to_page_coords(self, x, y, &page_num, &page_point)) {
+        self->selection_start_page = page_num;
+        self->selection_start = page_point;
+        self->selection_end_page = page_num;
+        self->selection_end = page_point;
+    }
+    
+    /* Clear previous selection */
+    g_free(self->selection_quads);
+    self->selection_quads = NULL;
+    self->selection_quad_count = 0;
+    
+    gtk_widget_set_cursor_from_name(GTK_WIDGET(self), "text");
+}
+
+static void
+on_drag_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+{
+    if (!self->selecting)
+        return;
+    
+    gdouble start_x, start_y;
+    gtk_gesture_drag_get_start_point(gesture, &start_x, &start_y);
+    
+    gdouble x = start_x + offset_x;
+    gdouble y = start_y + offset_y;
+    
+    gint page_num;
+    graphene_point_t page_point;
+    if (screen_to_page_coords(self, x, y, &page_num, &page_point)) {
+        self->selection_end_page = page_num;
+        self->selection_end = page_point;
+        
+        update_selection_quads(self);
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+    }
+}
+
+static void
+on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+{
+    (void)gesture;
+    (void)offset_x;
+    (void)offset_y;
+    
+    self->selecting = FALSE;
+    gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
+    
+    /* Copy selection to clipboard if we have selected text */
+    gchar* text = pdfv_document_view_get_selected_text(self);
+    if (text && *text) {
+        GdkClipboard* clipboard = gtk_widget_get_clipboard(GTK_WIDGET(self));
+        gdk_clipboard_set_text(clipboard, text);
+    }
+    g_free(text);
 }
 
 static void
@@ -858,6 +1057,18 @@ pdfv_document_view_init(PdfvDocumentView* self)
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(self->click_gesture), GDK_BUTTON_PRIMARY);
     g_signal_connect(self->click_gesture, "pressed", G_CALLBACK(on_click_pressed), self);
     gtk_widget_add_controller(GTK_WIDGET(self), GTK_EVENT_CONTROLLER(self->click_gesture));
+    
+    /* Drag gesture for text selection */
+    self->drag_gesture = gtk_gesture_drag_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(self->drag_gesture), GDK_BUTTON_PRIMARY);
+    g_signal_connect(self->drag_gesture, "drag-begin", G_CALLBACK(on_drag_begin), self);
+    g_signal_connect(self->drag_gesture, "drag-update", G_CALLBACK(on_drag_update), self);
+    g_signal_connect(self->drag_gesture, "drag-end", G_CALLBACK(on_drag_end), self);
+    gtk_widget_add_controller(GTK_WIDGET(self), GTK_EVENT_CONTROLLER(self->drag_gesture));
+    
+    /* Initialize selection state */
+    self->selection_start_page = -1;
+    self->selection_end_page = -1;
     
     /* Pinch-to-zoom gesture for touchpad/touchscreen */
     self->zoom_gesture = gtk_gesture_zoom_new();
@@ -1184,4 +1395,169 @@ pdfv_document_view_activate_link(PdfvDocumentView* self, const gchar* uri)
         /* External URI */
         g_signal_emit(self, signals[SIGNAL_LINK_ACTIVATED], 0, uri);
     }
+}
+
+/* Clear search results */
+static void
+clear_search_results(PdfvDocumentView* self)
+{
+    if (self->search_results) {
+        for (guint i = 0; i < self->search_results->len; i++) {
+            SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, i);
+            g_free(result->quads);
+        }
+        g_array_free(self->search_results, TRUE);
+        self->search_results = NULL;
+    }
+    self->search_current_match = -1;
+    self->search_total_matches = 0;
+}
+
+void
+pdfv_document_view_search(PdfvDocumentView* self, const gchar* text)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    
+    clear_search_results(self);
+    g_free(self->search_text);
+    self->search_text = NULL;
+    
+    if (!text || !*text || !self->document) {
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+        return;
+    }
+    
+    self->search_text = g_strdup(text);
+    self->search_results = g_array_new(FALSE, TRUE, sizeof(SearchPageResult));
+    
+    gint n_pages = phi_document_get_n_pages(self->document);
+    
+    /* Search all pages */
+    for (gint i = 0; i < n_pages; i++) {
+        PhiPage* page = g_ptr_array_index(self->pages, i);
+        if (!page) {
+            page = phi_document_get_page(self->document, i, NULL);
+            g_ptr_array_index(self->pages, i) = page;
+        }
+        
+        if (!page)
+            continue;
+        
+        PhiTextQuad quads[100];  /* Max 100 matches per page */
+        gint count = phi_page_search_text(page, text, quads, 100);
+        
+        if (count > 0) {
+            SearchPageResult result = {
+                .page = i,
+                .quad_count = count,
+                .quads = g_memdup2(quads, count * sizeof(PhiTextQuad))
+            };
+            g_array_append_val(self->search_results, result);
+            self->search_total_matches += count;
+        }
+    }
+    
+    /* Jump to first match */
+    if (self->search_results->len > 0) {
+        self->search_current_match = 0;
+        SearchPageResult* first = &g_array_index(self->search_results, SearchPageResult, 0);
+        pdfv_document_view_go_to_page(self, first->page);
+    }
+    
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void
+pdfv_document_view_search_next(PdfvDocumentView* self)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    
+    if (!self->search_results || self->search_results->len == 0)
+        return;
+    
+    self->search_current_match++;
+    if (self->search_current_match >= (gint)self->search_results->len)
+        self->search_current_match = 0;
+    
+    SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, 
+                                               self->search_current_match);
+    pdfv_document_view_go_to_page(self, result->page);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void
+pdfv_document_view_search_prev(PdfvDocumentView* self)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    
+    if (!self->search_results || self->search_results->len == 0)
+        return;
+    
+    self->search_current_match--;
+    if (self->search_current_match < 0)
+        self->search_current_match = self->search_results->len - 1;
+    
+    SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, 
+                                               self->search_current_match);
+    pdfv_document_view_go_to_page(self, result->page);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void
+pdfv_document_view_clear_search(PdfvDocumentView* self)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    
+    clear_search_results(self);
+    g_free(self->search_text);
+    self->search_text = NULL;
+    
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+gint
+pdfv_document_view_get_search_match_count(PdfvDocumentView* self)
+{
+    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), 0);
+    return self->search_total_matches;
+}
+
+gint
+pdfv_document_view_get_search_current_match(PdfvDocumentView* self)
+{
+    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), -1);
+    return self->search_current_match;
+}
+
+gchar*
+pdfv_document_view_get_selected_text(PdfvDocumentView* self)
+{
+    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), NULL);
+    
+    if (self->selection_start_page < 0 || self->selection_end_page < 0)
+        return NULL;
+    
+    /* For now, only support selection within single page */
+    if (self->selection_start_page != self->selection_end_page)
+        return NULL;
+    
+    PhiPage* page = g_ptr_array_index(self->pages, self->selection_start_page);
+    if (!page)
+        return NULL;
+    
+    return phi_page_copy_selection(page, &self->selection_start, &self->selection_end);
+}
+
+void
+pdfv_document_view_clear_selection(PdfvDocumentView* self)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    
+    g_free(self->selection_quads);
+    self->selection_quads = NULL;
+    self->selection_quad_count = 0;
+    self->selection_start_page = -1;
+    self->selection_end_page = -1;
+    
+    gtk_widget_queue_draw(GTK_WIDGET(self));
 }

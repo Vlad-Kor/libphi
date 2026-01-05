@@ -43,6 +43,27 @@ struct _PhiLink {
 PhiLink* phi_page_get_links(PhiPage* self);
 void phi_link_free(PhiLink* link);
 
+/* Text selection and search */
+typedef struct _PhiTextQuad PhiTextQuad;
+struct _PhiTextQuad {
+	graphene_point_t ul;  /* upper left */
+	graphene_point_t ur;  /* upper right */
+	graphene_point_t ll;  /* lower left */
+	graphene_point_t lr;  /* lower right */
+};
+
+/* Search for text on page, returns array of quads for highlighting matches */
+gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads, gint max_quads);
+
+/* Get highlighted quads for text selection between two points */
+gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphene_point_t* end, PhiTextQuad* quads, gint max_quads);
+
+/* Copy selected text between two points */
+gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_point_t* end);
+
+/* Get all text on page */
+gchar* phi_page_get_text(PhiPage* self);
+
 G_END_DECLS
 
 #endif // __PHIPAGE_H__

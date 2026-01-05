@@ -45,6 +45,8 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* zoom_reset_accels[] = { "<Control>0", NULL };
 	const char* fullscreen_accels[] = { "F11", NULL };
 	const char* find_accels[] = { "<Control>f", "slash", NULL };
+	const char* find_next_accels[] = { "F3", "<Control>g", NULL };
+	const char* find_prev_accels[] = { "<Shift>F3", "<Control><Shift>g", NULL };
 	const char* go_back_accels[] = { "<Alt>Left", "BackSpace", NULL };
 	const char* go_forward_accels[] = { "<Alt>Right", NULL };
 	const char* prev_page_accels[] = { "Page_Up", "p", NULL };
@@ -63,6 +65,8 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-reset", zoom_reset_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.fullscreen", fullscreen_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find", find_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find-next", find_next_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find-prev", find_prev_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.go-back", go_back_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.go-forward", go_forward_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.prev-page", prev_page_accels);
