@@ -52,6 +52,7 @@ struct _PdfvDocumentView {
     
     /* Cached page sizes for layout */
     GArray* page_heights;
+    GArray* page_offsets;  /* Cumulative Y offset for each page */
     gdouble total_height;
     gdouble max_width;
     
@@ -163,15 +164,19 @@ calculate_layout(PdfvDocumentView* self)
         return;
     
     g_array_set_size(self->page_heights, n_pages);
+    g_array_set_size(self->page_offsets, n_pages);
     self->total_height = 0;
     self->max_width = 0;
     
+    gdouble offset = 0;
     for (gint i = 0; i < n_pages; i++) {
         PhiPage* page = g_ptr_array_index(self->pages, i);
         if (!page) {
             page = phi_document_get_page(self->document, i, NULL);
             g_ptr_array_index(self->pages, i) = page;
         }
+        
+        g_array_index(self->page_offsets, gdouble, i) = offset;
         
         if (page) {
             gfloat w, h;
@@ -180,14 +185,13 @@ calculate_layout(PdfvDocumentView* self)
             gdouble scaled_h = h * self->zoom;
             
             g_array_index(self->page_heights, gdouble, i) = scaled_h;
-            self->total_height += scaled_h + PAGE_GAP;
+            offset += scaled_h + PAGE_GAP;
             if (scaled_w > self->max_width)
                 self->max_width = scaled_w;
         }
     }
     
-    if (self->total_height > 0)
-        self->total_height -= PAGE_GAP; /* Remove last gap */
+    self->total_height = offset > 0 ? offset - PAGE_GAP : 0;
 }
 
 static void
@@ -231,21 +235,23 @@ get_page_at_offset(PdfvDocumentView* self, gdouble y, gdouble* page_offset)
         return 0;
     
     gint n_pages = phi_document_get_n_pages(self->document);
-    gdouble offset = 0;
+    if (n_pages == 0)
+        return 0;
     
-    for (gint i = 0; i < n_pages; i++) {
-        gdouble h = g_array_index(self->page_heights, gdouble, i);
-        if (y < offset + h) {
-            if (page_offset)
-                *page_offset = offset;
-            return i;
-        }
-        offset += h + PAGE_GAP;
+    /* Binary search for the page containing y */
+    gint low = 0, high = n_pages - 1;
+    while (low < high) {
+        gint mid = (low + high + 1) / 2;
+        gdouble mid_offset = g_array_index(self->page_offsets, gdouble, mid);
+        if (mid_offset <= y)
+            low = mid;
+        else
+            high = mid - 1;
     }
     
     if (page_offset)
-        *page_offset = offset - g_array_index(self->page_heights, gdouble, n_pages - 1) - PAGE_GAP;
-    return n_pages - 1;
+        *page_offset = g_array_index(self->page_offsets, gdouble, low);
+    return low;
 }
 
 static gdouble
@@ -258,11 +264,10 @@ get_page_offset(PdfvDocumentView* self, gint page)
     if (page >= n_pages)
         page = n_pages - 1;
     
-    gdouble offset = 0;
-    for (gint i = 0; i < page; i++) {
-        offset += g_array_index(self->page_heights, gdouble, i) + PAGE_GAP;
-    }
-    return offset;
+    if (self->page_offsets->len == 0)
+        return 0;
+    
+    return g_array_index(self->page_offsets, gdouble, page);
 }
 
 static void
@@ -389,34 +394,33 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     /* Ensure pages are cached */
     ensure_page_cached(self, center_page);
     
-    /* Background */
-    GdkRGBA bg_color;
-    if (self->inverted)
-        gdk_rgba_parse(&bg_color, "#1e1e1e");
-    else
-        gdk_rgba_parse(&bg_color, "#e0e0e0");
-    gtk_snapshot_append_color(snapshot, &bg_color, 
+    /* Background - use pre-parsed colors to avoid parsing every frame */
+    static const GdkRGBA bg_light = {0.878, 0.878, 0.878, 1.0};  /* #e0e0e0 */
+    static const GdkRGBA bg_dark = {0.118, 0.118, 0.118, 1.0};   /* #1e1e1e */
+    gtk_snapshot_append_color(snapshot, self->inverted ? &bg_dark : &bg_light, 
         &GRAPHENE_RECT_INIT(0, 0, width, height));
     
-    /* Render visible pages */
-    gdouble y_offset = 0;
-    for (gint i = 0; i < n_pages; i++) {
+    /* Find first visible page using binary search result */
+    gint first_visible = get_page_at_offset(self, view_top, NULL);
+    
+    /* Render visible pages - start from first visible page */
+    static const GdkRGBA shadow_color = {0, 0, 0, 0.2};
+    static const GdkRGBA page_bg_light = {1.0, 1.0, 1.0, 1.0};   /* #ffffff */
+    static const GdkRGBA page_bg_dark = {0.102, 0.102, 0.102, 1.0}; /* #1a1a1a */
+    const GdkRGBA* page_bg = self->inverted ? &page_bg_dark : &page_bg_light;
+    
+    for (gint i = first_visible; i < n_pages; i++) {
+        gdouble y_offset = g_array_index(self->page_offsets, gdouble, i);
         gdouble page_height = g_array_index(self->page_heights, gdouble, i);
         
-        /* Skip if not visible */
-        if (y_offset + page_height < view_top) {
-            y_offset += page_height + PAGE_GAP;
-            continue;
-        }
+        /* Stop if past visible area */
         if (y_offset > view_bottom)
             break;
         
         /* Get page - may not be loaded yet */
         PhiPage* page = g_ptr_array_index(self->pages, i);
-        if (!page) {
-            y_offset += g_array_index(self->page_heights, gdouble, i) + PAGE_GAP;
+        if (!page)
             continue;
-        }
         
         /* Get page dimensions */
         gfloat pw_f, ph_f;
@@ -429,17 +433,11 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         gdouble y = y_offset - self->scroll_y;
         
         /* Page shadow */
-        GdkRGBA shadow_color = {0, 0, 0, 0.2};
         gtk_snapshot_append_color(snapshot, &shadow_color,
             &GRAPHENE_RECT_INIT(x + 3, y + 3, pw, ph));
         
-        /* Page background (white) */
-        GdkRGBA page_bg;
-        if (self->inverted)
-            gdk_rgba_parse(&page_bg, "#1a1a1a");
-        else
-            gdk_rgba_parse(&page_bg, "#ffffff");
-        gtk_snapshot_append_color(snapshot, &page_bg,
+        /* Page background */
+        gtk_snapshot_append_color(snapshot, page_bg,
             &GRAPHENE_RECT_INIT(x, y, pw, ph));
         
         /* Render page content */
@@ -534,8 +532,6 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
             
             gtk_snapshot_restore(snapshot);
         }
-        
-        y_offset += page_height + PAGE_GAP;
     }
 }
 
@@ -1036,6 +1032,7 @@ pdfv_document_view_dispose(GObject* object)
     g_clear_object(&self->document);
     g_clear_pointer(&self->pages, g_ptr_array_unref);
     g_clear_pointer(&self->page_heights, g_array_unref);
+    g_clear_pointer(&self->page_offsets, g_array_unref);
     g_clear_pointer(&self->history, g_array_unref);
     g_clear_object(&self->hadjustment);
     g_clear_object(&self->vadjustment);
@@ -1128,6 +1125,7 @@ pdfv_document_view_init(PdfvDocumentView* self)
     
     self->pages = g_ptr_array_new();  /* We don't own the pages, document does */
     self->page_heights = g_array_new(FALSE, TRUE, sizeof(gdouble));
+    self->page_offsets = g_array_new(FALSE, TRUE, sizeof(gdouble));
     self->history = g_array_new(FALSE, FALSE, sizeof(HistoryEntry));
     self->history_pos = -1;
     self->page_links = g_ptr_array_new();
