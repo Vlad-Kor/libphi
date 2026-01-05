@@ -67,12 +67,17 @@ struct _PdfvDocumentView {
     /* Gestures */
     GtkGesture* click_gesture;
     GtkGesture* drag_gesture;
+    GtkGesture* pan_gesture;
     GtkGesture* zoom_gesture;
     GtkEventController* scroll_controller;
     GtkEventController* motion_controller;
     
     /* Pinch zoom state */
     gdouble pinch_start_zoom;
+    
+    /* Middle-click pan state */
+    gdouble pan_start_scroll_x;
+    gdouble pan_start_scroll_y;
     
     /* Link under cursor */
     gchar* hover_link;
@@ -782,6 +787,44 @@ update_selection_quads(PdfvDocumentView* self)
     }
 }
 
+/* Middle-click pan handlers */
+static void
+on_pan_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* self)
+{
+    (void)gesture;
+    (void)x;
+    (void)y;
+    
+    self->pan_start_scroll_x = self->scroll_x;
+    self->pan_start_scroll_y = self->scroll_y;
+    gtk_widget_set_cursor_from_name(GTK_WIDGET(self), "grabbing");
+}
+
+static void
+on_pan_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+{
+    (void)gesture;
+    
+    /* Pan in opposite direction of drag */
+    gdouble new_scroll_x = self->pan_start_scroll_x - offset_x;
+    gdouble new_scroll_y = self->pan_start_scroll_y - offset_y;
+    
+    if (self->hadjustment)
+        gtk_adjustment_set_value(self->hadjustment, new_scroll_x);
+    if (self->vadjustment)
+        gtk_adjustment_set_value(self->vadjustment, new_scroll_y);
+}
+
+static void
+on_pan_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+{
+    (void)gesture;
+    (void)offset_x;
+    (void)offset_y;
+    
+    gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
+}
+
 static void
 on_drag_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* self)
 {
@@ -1074,6 +1117,14 @@ pdfv_document_view_init(PdfvDocumentView* self)
     g_signal_connect(self->drag_gesture, "drag-update", G_CALLBACK(on_drag_update), self);
     g_signal_connect(self->drag_gesture, "drag-end", G_CALLBACK(on_drag_end), self);
     gtk_widget_add_controller(GTK_WIDGET(self), GTK_EVENT_CONTROLLER(self->drag_gesture));
+    
+    /* Middle-click pan gesture */
+    self->pan_gesture = gtk_gesture_drag_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(self->pan_gesture), GDK_BUTTON_MIDDLE);
+    g_signal_connect(self->pan_gesture, "drag-begin", G_CALLBACK(on_pan_begin), self);
+    g_signal_connect(self->pan_gesture, "drag-update", G_CALLBACK(on_pan_update), self);
+    g_signal_connect(self->pan_gesture, "drag-end", G_CALLBACK(on_pan_end), self);
+    gtk_widget_add_controller(GTK_WIDGET(self), GTK_EVENT_CONTROLLER(self->pan_gesture));
     
     /* Initialize selection state */
     self->selection_start_page = -1;
