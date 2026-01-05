@@ -1016,6 +1016,13 @@ pdfv_window_init(PdfvWindow* self)
     adw_header_bar_set_show_title(sidebar_header, TRUE);
     adw_header_bar_set_title_widget(sidebar_header, gtk_label_new("Pages"));
     gtk_widget_add_css_class(GTK_WIDGET(sidebar_header), "flat");
+    
+    /* Search button in sidebar header */
+    GtkWidget* sidebar_search_btn = gtk_button_new_from_icon_name("system-search-symbolic");
+    gtk_widget_set_tooltip_text(sidebar_search_btn, "Find in document (Ctrl+F)");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(sidebar_search_btn), "win.find");
+    adw_header_bar_pack_start(sidebar_header, sidebar_search_btn);
+    
     gtk_box_append(GTK_BOX(sidebar_box), GTK_WIDGET(sidebar_header));
     
     GtkWidget* thumb_scroll = gtk_scrolled_window_new();
