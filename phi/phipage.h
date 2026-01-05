@@ -29,6 +29,7 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE(PhiPage, phi_page, PHI, PAGE, GObject)
 
 void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height);
+void phi_page_get_bounds(PhiPage* self, gfloat* x0, gfloat* y0, gfloat* x1, gfloat* y1);
 GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error);
 GdkPaintable* phi_page_render_to_paintable(PhiPage* self, GError** error);
 

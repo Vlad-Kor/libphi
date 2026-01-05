@@ -490,7 +490,12 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
                 gtk_snapshot_pop(snapshot);  /* pop hue rotate */
             }
             
+            /* Get page bounds for coordinate offset */
+            gfloat bounds_x0, bounds_y0;
+            phi_page_get_bounds(page, &bounds_x0, &bounds_y0, NULL, NULL);
+            
             /* Render search highlights for this page */
+            /* Note: we're inside gtk_snapshot_scale context, so don't multiply by zoom */
             if (self->search_results && self->search_results->len > 0) {
                 for (guint sr = 0; sr < self->search_results->len; sr++) {
                     SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, sr);
@@ -498,14 +503,12 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
                         GdkRGBA highlight_color = {1.0, 1.0, 0.0, 0.4}; /* Yellow */
                         for (gint q = 0; q < result->quad_count; q++) {
                             PhiTextQuad* quad = &result->quads[q];
-                            float min_x = MIN(MIN(quad->ul.x, quad->ur.x), MIN(quad->ll.x, quad->lr.x));
-                            float max_x = MAX(MAX(quad->ul.x, quad->ur.x), MAX(quad->ll.x, quad->lr.x));
-                            float min_y = MIN(MIN(quad->ul.y, quad->ur.y), MIN(quad->ll.y, quad->lr.y));
-                            float max_y = MAX(MAX(quad->ul.y, quad->ur.y), MAX(quad->ll.y, quad->lr.y));
+                            float min_x = MIN(MIN(quad->ul.x, quad->ur.x), MIN(quad->ll.x, quad->lr.x)) - bounds_x0;
+                            float max_x = MAX(MAX(quad->ul.x, quad->ur.x), MAX(quad->ll.x, quad->lr.x)) - bounds_x0;
+                            float min_y = MIN(MIN(quad->ul.y, quad->ur.y), MIN(quad->ll.y, quad->lr.y)) - bounds_y0;
+                            float max_y = MAX(MAX(quad->ul.y, quad->ur.y), MAX(quad->ll.y, quad->lr.y)) - bounds_y0;
                             gtk_snapshot_append_color(snapshot, &highlight_color,
-                                &GRAPHENE_RECT_INIT(min_x * self->zoom, min_y * self->zoom,
-                                                    (max_x - min_x) * self->zoom,
-                                                    (max_y - min_y) * self->zoom));
+                                &GRAPHENE_RECT_INIT(min_x, min_y, max_x - min_x, max_y - min_y));
                         }
                         break;
                     }
@@ -519,14 +522,12 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
                 GdkRGBA select_color = {0.2, 0.5, 1.0, 0.4}; /* Blue */
                 for (gint q = 0; q < self->selection_quad_count; q++) {
                     PhiTextQuad* quad = &self->selection_quads[q];
-                    float min_x = MIN(MIN(quad->ul.x, quad->ur.x), MIN(quad->ll.x, quad->lr.x));
-                    float max_x = MAX(MAX(quad->ul.x, quad->ur.x), MAX(quad->ll.x, quad->lr.x));
-                    float min_y = MIN(MIN(quad->ul.y, quad->ur.y), MIN(quad->ll.y, quad->lr.y));
-                    float max_y = MAX(MAX(quad->ul.y, quad->ur.y), MAX(quad->ll.y, quad->lr.y));
+                    float min_x = MIN(MIN(quad->ul.x, quad->ur.x), MIN(quad->ll.x, quad->lr.x)) - bounds_x0;
+                    float max_x = MAX(MAX(quad->ul.x, quad->ur.x), MAX(quad->ll.x, quad->lr.x)) - bounds_x0;
+                    float min_y = MIN(MIN(quad->ul.y, quad->ur.y), MIN(quad->ll.y, quad->lr.y)) - bounds_y0;
+                    float max_y = MAX(MAX(quad->ul.y, quad->ur.y), MAX(quad->ll.y, quad->lr.y)) - bounds_y0;
                     gtk_snapshot_append_color(snapshot, &select_color,
-                        &GRAPHENE_RECT_INIT(min_x * self->zoom, min_y * self->zoom,
-                                            (max_x - min_x) * self->zoom,
-                                            (max_y - min_y) * self->zoom));
+                        &GRAPHENE_RECT_INIT(min_x, min_y, max_x - min_x, max_y - min_y));
                 }
             }
             
@@ -768,9 +769,13 @@ screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y
     phi_page_get_size(page, &pw, &ph);
     gdouble scaled_pw = pw * self->zoom;
     
-    /* Convert to page coordinates */
-    gdouble page_x = (screen_x + self->scroll_x - (width - scaled_pw) / 2.0) / self->zoom;
-    gdouble page_y = (self->scroll_y + screen_y - page_offset) / self->zoom;
+    /* Get page bounds - some PDFs have non-zero origin */
+    gfloat bounds_x0, bounds_y0;
+    phi_page_get_bounds(page, &bounds_x0, &bounds_y0, NULL, NULL);
+    
+    /* Convert to page coordinates, accounting for page origin */
+    gdouble page_x = (screen_x + self->scroll_x - (width - scaled_pw) / 2.0) / self->zoom + bounds_x0;
+    gdouble page_y = (self->scroll_y + screen_y - page_offset) / self->zoom + bounds_y0;
     
     if (page_num)
         *page_num = pn;
