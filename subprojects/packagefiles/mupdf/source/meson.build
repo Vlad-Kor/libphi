@@ -250,12 +250,16 @@ doc_handlers_src = [
 	html_src,
 ]
 
+# Version script to hide internal symbols (libjpeg, zlib, etc.) and only export fz_* and pdf_* API
+mupdf_version_script = meson.current_source_dir() / 'mupdf.map'
+
 mupdf_lib = library('mupdf', fitz_src, font_src, doc_handlers_src,
 	include_directories: inc,
 	dependencies: thirdparty_deps,
 	install: true,
 	soversion: version_split[1],
-	version: meson.project_version()
+	version: meson.project_version(),
+	link_args: '-Wl,--version-script=' + mupdf_version_script
 )
 
 mupdf_dep = declare_dependency(
