@@ -398,10 +398,14 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     /* Ensure pages are cached */
     ensure_page_cached(self, center_page);
     
-    /* Background - use pre-parsed colors to avoid parsing every frame */
+    /* Check if system is in dark mode */
+    AdwStyleManager* style_manager = adw_style_manager_get_default();
+    gboolean is_dark = adw_style_manager_get_dark(style_manager);
+    
+    /* Background colors based on system theme */
     static const GdkRGBA bg_light = {0.878, 0.878, 0.878, 1.0};  /* #e0e0e0 */
     static const GdkRGBA bg_dark = {0.118, 0.118, 0.118, 1.0};   /* #1e1e1e */
-    gtk_snapshot_append_color(snapshot, self->inverted ? &bg_dark : &bg_light, 
+    gtk_snapshot_append_color(snapshot, is_dark ? &bg_dark : &bg_light, 
         &GRAPHENE_RECT_INIT(0, 0, width, height));
     
     /* Find first visible page using binary search result */
