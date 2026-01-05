@@ -43,6 +43,11 @@ struct _PdfvWindow {
     GtkButton* zoom_out_btn;
     GtkLabel* zoom_label;
     
+    /* Search bar */
+    GtkSearchBar* search_bar;
+    GtkSearchEntry* search_entry;
+    GtkLabel* search_status;
+    
     /* Current view (active tab) */
     PdfvDocumentView* current_view;
     
@@ -660,6 +665,31 @@ static void action_page_prev(GSimpleAction* action, GVariant* parameter, gpointe
     }
 }
 
+static void action_find(GSimpleAction* action, GVariant* parameter, gpointer user_data)
+{
+    (void)action; (void)parameter;
+    PdfvWindow* self = PDFV_WINDOW(user_data);
+    
+    gtk_search_bar_set_search_mode(self->search_bar, TRUE);
+    gtk_widget_grab_focus(GTK_WIDGET(self->search_entry));
+}
+
+static void action_find_next(GSimpleAction* action, GVariant* parameter, gpointer user_data)
+{
+    (void)action; (void)parameter;
+    PdfvWindow* self = PDFV_WINDOW(user_data);
+    if (self->current_view)
+        pdfv_document_view_search_next(self->current_view);
+}
+
+static void action_find_prev(GSimpleAction* action, GVariant* parameter, gpointer user_data)
+{
+    (void)action; (void)parameter;
+    PdfvWindow* self = PDFV_WINDOW(user_data);
+    if (self->current_view)
+        pdfv_document_view_search_prev(self->current_view);
+}
+
 static GActionEntry win_actions[] = {
     { "open", action_open, NULL, NULL, NULL },
     { "new-tab", action_new_tab, NULL, NULL, NULL },
@@ -676,7 +706,60 @@ static GActionEntry win_actions[] = {
     { "invert-colors", action_invert_colors, NULL, NULL, NULL },
     { "page-next", action_page_next, NULL, NULL, NULL },
     { "page-prev", action_page_prev, NULL, NULL, NULL },
+    { "find", action_find, NULL, NULL, NULL },
+    { "find-next", action_find_next, NULL, NULL, NULL },
+    { "find-prev", action_find_prev, NULL, NULL, NULL },
 };
+
+static void
+on_search_changed(GtkSearchEntry* entry, PdfvWindow* self)
+{
+    const gchar* text = gtk_editable_get_text(GTK_EDITABLE(entry));
+    
+    if (self->current_view) {
+        pdfv_document_view_search(self->current_view, text);
+        
+        /* Update status label */
+        gint count = pdfv_document_view_get_search_match_count(self->current_view);
+        if (text && *text) {
+            gchar* status;
+            if (count == 0)
+                status = g_strdup("No matches");
+            else
+                status = g_strdup_printf("%d match%s", count, count == 1 ? "" : "es");
+            gtk_label_set_text(self->search_status, status);
+            g_free(status);
+        } else {
+            gtk_label_set_text(self->search_status, "");
+        }
+    }
+}
+
+static void
+on_search_next_match(GtkSearchEntry* entry, PdfvWindow* self)
+{
+    (void)entry;
+    if (self->current_view)
+        pdfv_document_view_search_next(self->current_view);
+}
+
+static void
+on_search_prev_match(GtkSearchEntry* entry, PdfvWindow* self)
+{
+    (void)entry;
+    if (self->current_view)
+        pdfv_document_view_search_prev(self->current_view);
+}
+
+static void
+on_search_stop(GtkSearchEntry* entry, PdfvWindow* self)
+{
+    (void)entry;
+    gtk_search_bar_set_search_mode(self->search_bar, FALSE);
+    if (self->current_view)
+        pdfv_document_view_clear_search(self->current_view);
+    gtk_label_set_text(self->search_status, "");
+}
 
 static void
 on_tab_overview_button_clicked(GtkButton* button, PdfvWindow* self)
@@ -886,6 +969,43 @@ pdfv_window_init(PdfvWindow* self)
     self->tab_bar = ADW_TAB_BAR(adw_tab_bar_new());
     adw_tab_bar_set_autohide(self->tab_bar, TRUE);
     adw_toolbar_view_add_top_bar(self->toolbar_view, GTK_WIDGET(self->tab_bar));
+    
+    /* Search bar */
+    self->search_bar = GTK_SEARCH_BAR(gtk_search_bar_new());
+    gtk_search_bar_set_show_close_button(self->search_bar, TRUE);
+    
+    GtkWidget* search_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    
+    self->search_entry = GTK_SEARCH_ENTRY(gtk_search_entry_new());
+    gtk_widget_set_hexpand(GTK_WIDGET(self->search_entry), TRUE);
+    gtk_box_append(GTK_BOX(search_box), GTK_WIDGET(self->search_entry));
+    
+    /* Navigation buttons */
+    GtkWidget* prev_btn = gtk_button_new_from_icon_name("go-up-symbolic");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(prev_btn), "win.find-prev");
+    gtk_widget_set_tooltip_text(prev_btn, "Previous Match (Shift+F3)");
+    gtk_box_append(GTK_BOX(search_box), prev_btn);
+    
+    GtkWidget* next_btn = gtk_button_new_from_icon_name("go-down-symbolic");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(next_btn), "win.find-next");
+    gtk_widget_set_tooltip_text(next_btn, "Next Match (F3)");
+    gtk_box_append(GTK_BOX(search_box), next_btn);
+    
+    /* Search status label */
+    self->search_status = GTK_LABEL(gtk_label_new(""));
+    gtk_widget_add_css_class(GTK_WIDGET(self->search_status), "dim-label");
+    gtk_box_append(GTK_BOX(search_box), GTK_WIDGET(self->search_status));
+    
+    gtk_search_bar_set_child(self->search_bar, search_box);
+    gtk_search_bar_connect_entry(self->search_bar, GTK_EDITABLE(self->search_entry));
+    
+    /* Connect search signals */
+    g_signal_connect(self->search_entry, "search-changed", G_CALLBACK(on_search_changed), self);
+    g_signal_connect(self->search_entry, "next-match", G_CALLBACK(on_search_next_match), self);
+    g_signal_connect(self->search_entry, "previous-match", G_CALLBACK(on_search_prev_match), self);
+    g_signal_connect(self->search_entry, "stop-search", G_CALLBACK(on_search_stop), self);
+    
+    adw_toolbar_view_add_top_bar(self->toolbar_view, GTK_WIDGET(self->search_bar));
     
     /* Sidebar content - full height with proper Adwaita styling */
     GtkWidget* sidebar_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);

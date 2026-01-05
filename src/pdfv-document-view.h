@@ -52,6 +52,18 @@ void pdfv_document_view_go_forward(PdfvDocumentView* self);
 /* Link activation */
 void pdfv_document_view_activate_link(PdfvDocumentView* self, const gchar* uri);
 
+/* Text search */
+void pdfv_document_view_search(PdfvDocumentView* self, const gchar* text);
+void pdfv_document_view_search_next(PdfvDocumentView* self);
+void pdfv_document_view_search_prev(PdfvDocumentView* self);
+void pdfv_document_view_clear_search(PdfvDocumentView* self);
+gint pdfv_document_view_get_search_match_count(PdfvDocumentView* self);
+gint pdfv_document_view_get_search_current_match(PdfvDocumentView* self);
+
+/* Text selection */
+gchar* pdfv_document_view_get_selected_text(PdfvDocumentView* self);
+void pdfv_document_view_clear_selection(PdfvDocumentView* self);
+
 G_END_DECLS
 
 #endif // __PDFV_DOCUMENT_VIEW_H__

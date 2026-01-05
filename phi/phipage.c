@@ -130,3 +130,134 @@ void phi_link_free(PhiLink* link) {
 		link = next;
 	}
 }
+
+/* Helper to convert fz_quad to PhiTextQuad */
+static void fz_quad_to_phi_quad(const fz_quad* fq, PhiTextQuad* pq) {
+	pq->ul.x = fq->ul.x;
+	pq->ul.y = fq->ul.y;
+	pq->ur.x = fq->ur.x;
+	pq->ur.y = fq->ur.y;
+	pq->ll.x = fq->ll.x;
+	pq->ll.y = fq->ll.y;
+	pq->lr.x = fq->lr.x;
+	pq->lr.y = fq->lr.y;
+}
+
+gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads, gint max_quads) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), 0);
+	g_return_val_if_fail(needle != NULL, 0);
+	
+	if (max_quads <= 0 || !quads)
+		return 0;
+	
+	fz_stext_page* stext = NULL;
+	fz_quad* fz_quads = NULL;
+	gint count = 0;
+	
+	fz_try(self->document->ctx) {
+		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		fz_quads = g_new(fz_quad, max_quads);
+		
+		count = fz_search_stext_page(self->document->ctx, stext, needle, NULL, fz_quads, max_quads);
+		
+		for (gint i = 0; i < count && i < max_quads; i++) {
+			fz_quad_to_phi_quad(&fz_quads[i], &quads[i]);
+		}
+	} fz_always(self->document->ctx) {
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+		g_free(fz_quads);
+	} fz_catch(self->document->ctx) {
+		return 0;
+	}
+	
+	return count;
+}
+
+gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphene_point_t* end, PhiTextQuad* quads, gint max_quads) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), 0);
+	g_return_val_if_fail(start != NULL && end != NULL, 0);
+	
+	if (max_quads <= 0 || !quads)
+		return 0;
+	
+	fz_stext_page* stext = NULL;
+	fz_quad* fz_quads = NULL;
+	gint count = 0;
+	
+	fz_try(self->document->ctx) {
+		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		fz_quads = g_new(fz_quad, max_quads);
+		
+		fz_point a = { start->x, start->y };
+		fz_point b = { end->x, end->y };
+		
+		count = fz_highlight_selection(self->document->ctx, stext, a, b, fz_quads, max_quads);
+		
+		for (gint i = 0; i < count && i < max_quads; i++) {
+			fz_quad_to_phi_quad(&fz_quads[i], &quads[i]);
+		}
+	} fz_always(self->document->ctx) {
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+		g_free(fz_quads);
+	} fz_catch(self->document->ctx) {
+		return 0;
+	}
+	
+	return count;
+}
+
+gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_point_t* end) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
+	g_return_val_if_fail(start != NULL && end != NULL, NULL);
+	
+	fz_stext_page* stext = NULL;
+	gchar* result = NULL;
+	
+	fz_try(self->document->ctx) {
+		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		
+		fz_point a = { start->x, start->y };
+		fz_point b = { end->x, end->y };
+		
+		char* text = fz_copy_selection(self->document->ctx, stext, a, b, 0);
+		if (text) {
+			result = g_strdup(text);
+			fz_free(self->document->ctx, text);
+		}
+	} fz_always(self->document->ctx) {
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+	} fz_catch(self->document->ctx) {
+		return NULL;
+	}
+	
+	return result;
+}
+
+gchar* phi_page_get_text(PhiPage* self) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
+	
+	fz_stext_page* stext = NULL;
+	gchar* result = NULL;
+	
+	fz_try(self->document->ctx) {
+		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		
+		/* Get page bounds and copy all text */
+		fz_rect bounds = fz_bound_page(self->document->ctx, self->page);
+		char* text = fz_copy_rectangle(self->document->ctx, stext, bounds, 0);
+		if (text) {
+			result = g_strdup(text);
+			fz_free(self->document->ctx, text);
+		}
+	} fz_always(self->document->ctx) {
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+	} fz_catch(self->document->ctx) {
+		return NULL;
+	}
+	
+	return result;
+}
