@@ -53,6 +53,16 @@ void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height) {
 		*height = bounds.y1 - bounds.y0;
 }
 
+void phi_page_get_bounds(PhiPage* self, gfloat* x0, gfloat* y0, gfloat* x1, gfloat* y1) {
+	g_return_if_fail(PHI_IS_PAGE(self));
+	
+	fz_rect bounds = fz_bound_page(self->document->ctx, self->page);
+	if (x0) *x0 = bounds.x0;
+	if (y0) *y0 = bounds.y0;
+	if (x1) *x1 = bounds.x1;
+	if (y1) *y1 = bounds.y1;
+}
+
 GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	
