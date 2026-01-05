@@ -102,6 +102,9 @@ update_sidebar_button(PdfvWindow* self)
     if (action) {
         g_simple_action_set_enabled(G_SIMPLE_ACTION(action), has_document);
     }
+    
+    /* Hide floating zoom controls when no document */
+    gtk_widget_set_visible(self->zoom_box, has_document);
 }
 
 static void
