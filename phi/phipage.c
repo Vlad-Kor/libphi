@@ -218,6 +218,91 @@ gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphe
 	return count;
 }
 
+gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphene_point_t* word_start, graphene_point_t* word_end) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), FALSE);
+	g_return_val_if_fail(point != NULL && word_start != NULL && word_end != NULL, FALSE);
+	
+	fz_stext_page* stext = NULL;
+	gboolean found = FALSE;
+	
+	fz_try(self->document->ctx) {
+		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		
+		/* Iterate through text blocks, lines, and chars to find word at point */
+		for (fz_stext_block* block = stext->first_block; block && !found; block = block->next) {
+			if (block->type != FZ_STEXT_BLOCK_TEXT)
+				continue;
+			
+			for (fz_stext_line* line = block->u.t.first_line; line && !found; line = line->next) {
+				/* Check if point is roughly on this line */
+				fz_rect line_bbox = fz_empty_rect;
+				for (fz_stext_char* ch = line->first_char; ch; ch = ch->next) {
+					fz_rect char_bbox = fz_rect_from_quad(ch->quad);
+					line_bbox = fz_union_rect(line_bbox, char_bbox);
+				}
+				
+				if (point->y < line_bbox.y0 || point->y > line_bbox.y1)
+					continue;
+				
+				/* Find the character at point */
+				fz_stext_char* target_char = NULL;
+				for (fz_stext_char* ch = line->first_char; ch; ch = ch->next) {
+					fz_rect char_bbox = fz_rect_from_quad(ch->quad);
+					if (point->x >= char_bbox.x0 && point->x <= char_bbox.x1) {
+						target_char = ch;
+						break;
+					}
+				}
+				
+				if (!target_char)
+					continue;
+				
+				/* If clicked on whitespace, skip */
+				if (g_unichar_isspace(target_char->c))
+					continue;
+				
+				/* Find word boundaries */
+				fz_stext_char* word_begin = target_char;
+				fz_stext_char* word_last = target_char;
+				
+				/* Search backwards for word start */
+				for (fz_stext_char* ch = line->first_char; ch && ch != target_char; ch = ch->next) {
+					if (g_unichar_isspace(ch->c) || g_unichar_ispunct(ch->c)) {
+						word_begin = ch->next;
+					}
+				}
+				if (!word_begin)
+					word_begin = line->first_char;
+				
+				/* Search forwards for word end */
+				for (fz_stext_char* ch = target_char; ch; ch = ch->next) {
+					if (g_unichar_isspace(ch->c) || g_unichar_ispunct(ch->c))
+						break;
+					word_last = ch;
+				}
+				
+				/* Get bounding boxes */
+				fz_rect start_bbox = fz_rect_from_quad(word_begin->quad);
+				fz_rect end_bbox = fz_rect_from_quad(word_last->quad);
+				
+				word_start->x = start_bbox.x0;
+				word_start->y = (start_bbox.y0 + start_bbox.y1) / 2;
+				word_end->x = end_bbox.x1;
+				word_end->y = (end_bbox.y0 + end_bbox.y1) / 2;
+				
+				found = TRUE;
+			}
+		}
+	} fz_always(self->document->ctx) {
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+	} fz_catch(self->document->ctx) {
+		return FALSE;
+	}
+	
+	return found;
+}
+
 gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_point_t* end) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	g_return_val_if_fail(start != NULL && end != NULL, NULL);

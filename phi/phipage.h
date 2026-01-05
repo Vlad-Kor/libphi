@@ -59,6 +59,9 @@ gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads
 /* Get highlighted quads for text selection between two points */
 gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphene_point_t* end, PhiTextQuad* quads, gint max_quads);
 
+/* Select word at point, returns start/end points of word and TRUE if found */
+gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphene_point_t* word_start, graphene_point_t* word_end);
+
 /* Copy selected text between two points */
 gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_point_t* end);
 

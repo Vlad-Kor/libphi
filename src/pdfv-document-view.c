@@ -11,6 +11,7 @@
 #include "pdfv-document-view.h"
 #include <phi/phipage.h>
 #include <phi/phidocument.h>
+#include <math.h>
 
 #define MAX_HISTORY 100
 #define MIN_ZOOM 0.1
@@ -92,6 +93,7 @@ struct _PdfvDocumentView {
     
     /* Text selection */
     gboolean selecting;
+    gboolean double_click_selected;  /* Flag to prevent drag clearing double-click selection */
     gint selection_start_page;
     graphene_point_t selection_start;
     gint selection_end_page;
@@ -134,6 +136,8 @@ static guint signals[N_SIGNALS];
 
 static void pdfv_document_view_scrollable_init(GtkScrollableInterface* iface);
 static void zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y);
+static gboolean screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y, gint* page_num, graphene_point_t* page_point);
+static void update_selection_quads(PdfvDocumentView* self);
 
 G_DEFINE_TYPE_WITH_CODE(PdfvDocumentView, pdfv_document_view, GTK_TYPE_WIDGET,
     G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, pdfv_document_view_scrollable_init))
@@ -640,6 +644,37 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
 {
     (void)gesture;
     
+    /* Double-click: select word */
+    if (n_press == 2) {
+        gint page_num;
+        graphene_point_t page_point;
+        if (screen_to_page_coords(self, x, y, &page_num, &page_point)) {
+            PhiPage* page = g_ptr_array_index(self->pages, page_num);
+            if (page) {
+                graphene_point_t word_start, word_end;
+                if (phi_page_select_word_at(page, &page_point, &word_start, &word_end)) {
+                    self->selection_start_page = page_num;
+                    self->selection_start = word_start;
+                    self->selection_end_page = page_num;
+                    self->selection_end = word_end;
+                    self->double_click_selected = TRUE;  /* Prevent drag from clearing */
+                    
+                    update_selection_quads(self);
+                    gtk_widget_queue_draw(GTK_WIDGET(self));
+                    
+                    /* Copy to clipboard */
+                    gchar* text = pdfv_document_view_get_selected_text(self);
+                    if (text && *text) {
+                        GdkClipboard* clipboard = gtk_widget_get_clipboard(GTK_WIDGET(self));
+                        gdk_clipboard_set_text(clipboard, text);
+                    }
+                    g_free(text);
+                }
+            }
+        }
+        return;
+    }
+    
     if (n_press != 1)
         return;
     
@@ -654,6 +689,16 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
         } else {
             /* External URI */
             g_signal_emit(self, signals[SIGNAL_LINK_ACTIVATED], 0, link->uri);
+        }
+    } else {
+        /* Single click not on link - clear selection */
+        if (self->selection_quad_count > 0) {
+            g_free(self->selection_quads);
+            self->selection_quads = NULL;
+            self->selection_quad_count = 0;
+            self->selection_start_page = -1;
+            self->selection_end_page = -1;
+            gtk_widget_queue_draw(GTK_WIDGET(self));
         }
     }
 }
@@ -875,10 +920,7 @@ on_drag_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* s
         self->selection_end = page_point;
     }
     
-    /* Clear previous selection */
-    g_free(self->selection_quads);
-    self->selection_quads = NULL;
-    self->selection_quad_count = 0;
+    /* Don't clear selection here - wait for drag_end to see if it's a click or drag */
     
     gtk_widget_set_cursor_from_name(GTK_WIDGET(self), "text");
 }
@@ -910,13 +952,39 @@ static void
 on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
 {
     (void)gesture;
-    (void)offset_x;
-    (void)offset_y;
+    
+    if (!self->selecting) {
+        return;
+    }
     
     self->selecting = FALSE;
     gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
     
-    /* Copy selection to clipboard if we have selected text */
+    /* If we just did a double-click selection, don't process as click */
+    if (self->double_click_selected) {
+        self->double_click_selected = FALSE;
+        return;
+    }
+    
+    /* Check if this was just a click (minimal movement) */
+    gdouble distance = sqrt(offset_x * offset_x + offset_y * offset_y);
+    if (distance < 5.0) {
+        /* This was a click, not a drag - clear selection */
+        if (self->selection_quad_count > 0) {
+            g_free(self->selection_quads);
+            self->selection_quads = NULL;
+            self->selection_quad_count = 0;
+            self->selection_start_page = -1;
+            self->selection_end_page = -1;
+            gtk_widget_queue_draw(GTK_WIDGET(self));
+        }
+        return;
+    }
+    
+    /* This was a drag - update selection and copy to clipboard */
+    update_selection_quads(self);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    
     gchar* text = pdfv_document_view_get_selected_text(self);
     if (text && *text) {
         GdkClipboard* clipboard = gtk_widget_get_clipboard(GTK_WIDGET(self));
