@@ -1337,6 +1337,9 @@ pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
     if (zoom == self->zoom)
         return;
     
+    gint width = gtk_widget_get_width(GTK_WIDGET(self));
+    gint height = gtk_widget_get_height(GTK_WIDGET(self));
+    
     gdouble old_zoom = self->zoom;
     self->zoom = zoom;
     /* Don't clear render cache - we cache base nodes now */
@@ -1346,6 +1349,15 @@ pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
     gdouble ratio = zoom / old_zoom;
     self->scroll_y *= ratio;
     self->scroll_x *= ratio;
+    
+    /* Clamp scroll values to keep document visible */
+    gdouble max_scroll_y = MAX(0, self->total_height - height);
+    self->scroll_y = CLAMP(self->scroll_y, 0, max_scroll_y);
+    
+    gdouble scroll_range = MAX(0, self->max_width - width);
+    gdouble min_scroll_x = -scroll_range / 2.0;
+    gdouble max_scroll_x = scroll_range / 2.0;
+    self->scroll_x = CLAMP(self->scroll_x, min_scroll_x, max_scroll_x);
     
     update_adjustments(self);
     gtk_widget_queue_draw(GTK_WIDGET(self));
@@ -1378,11 +1390,15 @@ zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble
     self->scroll_x = doc_x * ratio - focus_x + width / 2.0;
     self->scroll_y = doc_y * ratio - focus_y;
     
-    /* Clamp scroll values */
-    if (self->scroll_y < 0)
-        self->scroll_y = 0;
-    if (self->scroll_y > self->total_height - height)
-        self->scroll_y = MAX(0, self->total_height - height);
+    /* Clamp vertical scroll */
+    gdouble max_scroll_y = MAX(0, self->total_height - height);
+    self->scroll_y = CLAMP(self->scroll_y, 0, max_scroll_y);
+    
+    /* Clamp horizontal scroll - same logic as update_adjustments */
+    gdouble scroll_range = MAX(0, self->max_width - width);
+    gdouble min_scroll_x = -scroll_range / 2.0;
+    gdouble max_scroll_x = scroll_range / 2.0;
+    self->scroll_x = CLAMP(self->scroll_x, min_scroll_x, max_scroll_x);
     
     update_adjustments(self);
     gtk_widget_queue_draw(GTK_WIDGET(self));
