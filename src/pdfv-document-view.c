@@ -189,9 +189,18 @@ update_adjustments(PdfvDocumentView* self)
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
     
     if (self->hadjustment) {
+        /* When page is centered, scroll_x=0 means centered.
+         * To see left edge: need scroll_x = -(max_width - width) / 2
+         * To see right edge: need scroll_x = +(max_width - width) / 2
+         * If page fits in viewport (max_width <= width), no scrolling needed.
+         */
+        gdouble scroll_range = MAX(0, self->max_width - width);
+        gdouble lower = -scroll_range / 2.0;
+        gdouble upper = scroll_range / 2.0 + width;
+        
         gtk_adjustment_configure(self->hadjustment,
-            self->scroll_x,
-            0, self->max_width,
+            CLAMP(self->scroll_x, lower, upper - width),
+            lower, upper,
             width * 0.1,
             width * 0.9,
             width);
