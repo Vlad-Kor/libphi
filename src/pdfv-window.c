@@ -84,6 +84,22 @@ update_zoom_info(PdfvWindow* self)
 }
 
 static void
+update_sidebar_button(PdfvWindow* self)
+{
+    gboolean has_document = FALSE;
+    
+    if (self->current_view) {
+        PhiDocument* doc = pdfv_document_view_get_document(self->current_view);
+        has_document = (doc != NULL);
+    }
+    
+    GAction* action = g_action_map_lookup_action(G_ACTION_MAP(self), "toggle-sidebar");
+    if (action) {
+        g_simple_action_set_enabled(G_SIMPLE_ACTION(action), has_document);
+    }
+}
+
+static void
 on_view_notify(PdfvDocumentView* view, GParamSpec* pspec, PdfvWindow* self)
 {
     (void)view;
@@ -444,6 +460,7 @@ on_tab_selected(AdwTabView* tab_view, GParamSpec* pspec, PdfvWindow* self)
         self->current_view = NULL;
         update_navigation_buttons(self);
         update_zoom_info(self);
+        update_sidebar_button(self);
         /* Hide sidebar when no tab */
         adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
         return;
@@ -454,6 +471,7 @@ on_tab_selected(AdwTabView* tab_view, GParamSpec* pspec, PdfvWindow* self)
     
     update_navigation_buttons(self);
     update_zoom_info(self);
+    update_sidebar_button(self);
     
     if (self->current_view) {
         PhiDocument* doc = pdfv_document_view_get_document(self->current_view);
@@ -1015,7 +1033,11 @@ pdfv_window_open_file(PdfvWindow* self, GFile* file)
     adw_tab_page_set_title(page, basename);
     g_free(basename);
     
+    /* Update current view reference if we reused the current tab */
+    self->current_view = view;
+    
     populate_thumbnails(self, doc);
+    update_sidebar_button(self);
     
     g_object_unref(doc);
 }
