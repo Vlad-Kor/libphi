@@ -74,6 +74,8 @@ struct _PdfvDocumentView {
     
     /* Pinch zoom state */
     gdouble pinch_start_zoom;
+    gdouble pinch_center_x;
+    gdouble pinch_center_y;
     
     /* Middle-click pan state */
     gdouble pan_start_scroll_x;
@@ -130,6 +132,7 @@ static GParamSpec* props[N_PROPS];
 static guint signals[N_SIGNALS];
 
 static void pdfv_document_view_scrollable_init(GtkScrollableInterface* iface);
+static void zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y);
 
 G_DEFINE_TYPE_WITH_CODE(PdfvDocumentView, pdfv_document_view, GTK_TYPE_WIDGET,
     G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, pdfv_document_view_scrollable_init))
@@ -307,15 +310,7 @@ render_page_node(PdfvDocumentView* self, gint page_num)
         return NULL;
     }
     
-    /* Apply zoom transform */
-    if (base_node && self->zoom != 1.0) {
-        GtkSnapshot* snap = gtk_snapshot_new();
-        gtk_snapshot_scale(snap, self->zoom, self->zoom);
-        gtk_snapshot_append_node(snap, base_node);
-        gsk_render_node_unref(base_node);
-        base_node = gtk_snapshot_free_to_node(snap);
-    }
-    
+    /* Return base node without zoom - zoom applied at render time */
     return base_node;
 }
 
@@ -454,6 +449,10 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
             
             gtk_snapshot_save(snapshot);
             gtk_snapshot_translate(snapshot, &GRAPHENE_POINT_INIT(x, y));
+            
+            /* Apply zoom - cached nodes are at base resolution */
+            if (self->zoom != 1.0)
+                gtk_snapshot_scale(snapshot, self->zoom, self->zoom);
             
             /* Apply inversion with hue rotation if needed */
             if (self->inverted) {
@@ -687,19 +686,35 @@ static void
 on_zoom_begin(GtkGestureZoom* gesture, GdkEventSequence* sequence,
               PdfvDocumentView* self)
 {
-    (void)gesture;
     (void)sequence;
     self->pinch_start_zoom = self->zoom;
+    
+    /* Store the center point of the pinch gesture */
+    gdouble x, y;
+    if (gtk_gesture_get_bounding_box_center(GTK_GESTURE(gesture), &x, &y)) {
+        self->pinch_center_x = x;
+        self->pinch_center_y = y;
+    } else {
+        gint width = gtk_widget_get_width(GTK_WIDGET(self));
+        gint height = gtk_widget_get_height(GTK_WIDGET(self));
+        self->pinch_center_x = width / 2.0;
+        self->pinch_center_y = height / 2.0;
+    }
 }
 
 static void
 on_zoom_scale_changed(GtkGestureZoom* gesture, gdouble scale,
                       PdfvDocumentView* self)
 {
-    (void)gesture;
+    /* Update center point as fingers move */
+    gdouble x, y;
+    if (gtk_gesture_get_bounding_box_center(GTK_GESTURE(gesture), &x, &y)) {
+        self->pinch_center_x = x;
+        self->pinch_center_y = y;
+    }
+    
     gdouble new_zoom = self->pinch_start_zoom * scale;
-    new_zoom = CLAMP(new_zoom, MIN_ZOOM, MAX_ZOOM);
-    pdfv_document_view_set_zoom(self, new_zoom);
+    zoom_at_point(self, new_zoom, self->pinch_center_x, self->pinch_center_y);
 }
 
 static gboolean
@@ -711,11 +726,24 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
         GTK_EVENT_CONTROLLER(controller));
     
     if (state & GDK_CONTROL_MASK) {
-        /* Zoom with Ctrl+Scroll */
+        /* Zoom with Ctrl+Scroll towards cursor position */
+        gdouble x, y;
+        GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+        if (event) {
+            gdk_event_get_position(event, &x, &y);
+        } else {
+            /* Fallback to center */
+            x = gtk_widget_get_width(GTK_WIDGET(self)) / 2.0;
+            y = gtk_widget_get_height(GTK_WIDGET(self)) / 2.0;
+        }
+        
+        gdouble new_zoom;
         if (dy < 0)
-            pdfv_document_view_zoom_in(self);
-        else if (dy > 0)
-            pdfv_document_view_zoom_out(self);
+            new_zoom = self->zoom * ZOOM_STEP;
+        else
+            new_zoom = self->zoom / ZOOM_STEP;
+        
+        zoom_at_point(self, new_zoom, x, y);
         return TRUE;
     }
     
@@ -1234,18 +1262,55 @@ pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
     if (zoom == self->zoom)
         return;
     
-    /* Save current page position */
-    gint page = self->current_page;
-    
+    gdouble old_zoom = self->zoom;
     self->zoom = zoom;
-    clear_render_cache(self);
+    /* Don't clear render cache - we cache base nodes now */
     calculate_layout(self);
     
-    /* Restore page position */
-    self->scroll_y = get_page_offset(self, page);
+    /* Restore page position - scale scroll to maintain relative position */
+    gdouble ratio = zoom / old_zoom;
+    self->scroll_y *= ratio;
+    self->scroll_x *= ratio;
     
     update_adjustments(self);
-    gtk_widget_queue_resize(GTK_WIDGET(self));
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_ZOOM]);
+}
+
+/* Zoom towards a specific point in widget coordinates */
+static void
+zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    
+    new_zoom = CLAMP(new_zoom, MIN_ZOOM, MAX_ZOOM);
+    if (new_zoom == self->zoom)
+        return;
+    
+    gint width = gtk_widget_get_width(GTK_WIDGET(self));
+    gint height = gtk_widget_get_height(GTK_WIDGET(self));
+    
+    /* Calculate the document position under the focus point */
+    gdouble doc_x = self->scroll_x + focus_x - width / 2.0;
+    gdouble doc_y = self->scroll_y + focus_y;
+    
+    gdouble ratio = new_zoom / self->zoom;
+    
+    self->zoom = new_zoom;
+    calculate_layout(self);
+    
+    /* Adjust scroll so the same document position stays under the focus point */
+    self->scroll_x = doc_x * ratio - focus_x + width / 2.0;
+    self->scroll_y = doc_y * ratio - focus_y;
+    
+    /* Clamp scroll values */
+    if (self->scroll_y < 0)
+        self->scroll_y = 0;
+    if (self->scroll_y > self->total_height - height)
+        self->scroll_y = MAX(0, self->total_height - height);
+    
+    update_adjustments(self);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_ZOOM]);
 }
 
