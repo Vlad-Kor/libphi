@@ -85,6 +85,9 @@ struct _PdfvDocumentView {
     
     /* Link under cursor */
     gchar* hover_link;
+    gboolean has_pointer_position;
+    gdouble pointer_x;
+    gdouble pointer_y;
     
     /* Render cache - simple approach: cache current page ± 2 */
     GskRenderNode** render_cache;
@@ -421,7 +424,6 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     
     for (gint i = first_visible; i < n_pages; i++) {
         gdouble y_offset = g_array_index(self->page_offsets, gdouble, i);
-        gdouble page_height = g_array_index(self->page_heights, gdouble, i);
         
         /* Stop if past visible area */
         if (y_offset > view_bottom)
@@ -714,6 +716,10 @@ on_motion(GtkEventControllerMotion* controller, gdouble x, gdouble y,
           PdfvDocumentView* self)
 {
     (void)controller;
+
+    self->has_pointer_position = TRUE;
+    self->pointer_x = x;
+    self->pointer_y = y;
     
     PhiLink* link = find_link_at(self, x, y);
     
@@ -728,6 +734,23 @@ on_motion(GtkEventControllerMotion* controller, gdouble x, gdouble y,
         else
             gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
     }
+}
+
+static void
+on_motion_enter(GtkEventControllerMotion* controller, gdouble x, gdouble y,
+                PdfvDocumentView* self)
+{
+    on_motion(controller, x, y, self);
+}
+
+static void
+on_motion_leave(GtkEventControllerMotion* controller, PdfvDocumentView* self)
+{
+    (void)controller;
+
+    self->has_pointer_position = FALSE;
+    g_clear_pointer(&self->hover_link, g_free);
+    gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
 }
 
 static void
@@ -774,16 +797,19 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
         GTK_EVENT_CONTROLLER(controller));
     
     if (state & GDK_CONTROL_MASK) {
+        if (dy == 0.0)
+            return TRUE;
+
         /* Zoom with Ctrl+Scroll towards cursor position */
-        gdouble x, y;
-        GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
-        if (event) {
-            gdk_event_get_position(event, &x, &y);
-        } else {
-            /* Fallback to center */
-            x = gtk_widget_get_width(GTK_WIDGET(self)) / 2.0;
-            y = gtk_widget_get_height(GTK_WIDGET(self)) / 2.0;
-        }
+        gdouble x = self->has_pointer_position
+            ? self->pointer_x
+            : gtk_widget_get_width(GTK_WIDGET(self)) / 2.0;
+        gdouble y = self->has_pointer_position
+            ? self->pointer_y
+            : gtk_widget_get_height(GTK_WIDGET(self)) / 2.0;
+
+        x = CLAMP(x, 0, gtk_widget_get_width(GTK_WIDGET(self)));
+        y = CLAMP(y, 0, gtk_widget_get_height(GTK_WIDGET(self)));
         
         gdouble new_zoom;
         if (dy < 0)
@@ -1261,7 +1287,9 @@ pdfv_document_view_init(PdfvDocumentView* self)
     
     /* Motion controller for link hover */
     self->motion_controller = gtk_event_controller_motion_new();
+    g_signal_connect(self->motion_controller, "enter", G_CALLBACK(on_motion_enter), self);
     g_signal_connect(self->motion_controller, "motion", G_CALLBACK(on_motion), self);
+    g_signal_connect(self->motion_controller, "leave", G_CALLBACK(on_motion_leave), self);
     gtk_widget_add_controller(GTK_WIDGET(self), self->motion_controller);
     
     gtk_widget_set_focusable(GTK_WIDGET(self), TRUE);
