@@ -15,6 +15,7 @@
 #include <phi/phipage.h>
 
 #define WORKSPACE_VISIBLE_MATCHES 4
+#define WORKSPACE_PREVIEW_DELAY_MS 90
 
 struct _PdfvWindow {
   AdwApplicationWindow parent_instance;
@@ -79,6 +80,7 @@ struct _PdfvWindow {
   AdwTabPage *workspace_preview_tab;
   GFile *workspace_preview_file;
   GCancellable *workspace_preview_cancellable;
+  guint workspace_preview_delay_id;
   gint workspace_preview_page;
   guint workspace_preview_generation;
 
@@ -685,7 +687,50 @@ static void workspace_document_cache_store(PdfvWindow *self, GFile *file,
   g_free(uri);
 }
 
-static void workspace_preview_selected(PdfvWindow *self) {
+static void workspace_preview_cancel_delay(PdfvWindow *self) {
+  if (!self->workspace_preview_delay_id)
+    return;
+  g_source_remove(self->workspace_preview_delay_id);
+  self->workspace_preview_delay_id = 0;
+}
+
+static void workspace_preview_cancel_load(PdfvWindow *self) {
+  if (self->workspace_preview_cancellable)
+    g_cancellable_cancel(self->workspace_preview_cancellable);
+  g_clear_object(&self->workspace_preview_cancellable);
+  self->workspace_preview_generation++;
+}
+
+static gboolean workspace_preview_show_loaded(PdfvWindow *self, GFile *file,
+                                              gint page) {
+  if (!self->workspace_preview_tab)
+    return FALSE;
+  GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
+  GFile *loaded_file = g_object_get_data(G_OBJECT(stack), "document-file");
+  PdfvDocumentView *view =
+      g_object_get_data(G_OBJECT(stack), "document-view");
+  if (!loaded_file || !g_file_equal(loaded_file, file) ||
+      !pdfv_document_view_get_document(view))
+    return FALSE;
+
+  /* A request for another file may have hidden this already-loaded document.
+   * Cancel it and restore the document without doing any PDF work. */
+  GCancellable *opening =
+      g_object_get_data(G_OBJECT(stack), "open-cancellable");
+  if (opening)
+    g_cancellable_cancel(opening);
+  g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+  gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
+  pdfv_document_view_go_to_page(view, page);
+  adw_tab_view_set_selected_page(self->tab_view, self->workspace_preview_tab);
+  self->current_view = view;
+  update_navigation_buttons(self);
+  update_zoom_info(self);
+  update_sidebar_button(self);
+  return TRUE;
+}
+
+static void workspace_preview_selected_now(PdfvWindow *self) {
   PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
   PdfvWorkspaceMatch *match = workspace_selected_match(self);
   if (!group || !match)
@@ -698,31 +743,24 @@ static void workspace_preview_selected(PdfvWindow *self) {
   }
   self->workspace_preview_page = match->page;
 
-  if (self->workspace_preview_file &&
-      g_file_equal(self->workspace_preview_file, group->file)) {
-    GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
-    PdfvDocumentView *view =
-        g_object_get_data(G_OBJECT(stack), "document-view");
-    if (pdfv_document_view_get_document(view)) {
-      adw_tab_view_set_selected_page(self->tab_view,
-                                     self->workspace_preview_tab);
-      pdfv_document_view_go_to_page(view, match->page);
-    }
+  if (workspace_preview_show_loaded(self, group->file, match->page))
     return;
-  }
 
-  g_clear_object(&self->workspace_preview_file);
-  self->workspace_preview_file = g_object_ref(group->file);
-  if (self->workspace_preview_cancellable)
-    g_cancellable_cancel(self->workspace_preview_cancellable);
-  g_clear_object(&self->workspace_preview_cancellable);
+  GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
+  GCancellable *opening =
+      g_object_get_data(G_OBJECT(stack), "open-cancellable");
+  if (self->workspace_preview_file &&
+      g_file_equal(self->workspace_preview_file, group->file) && opening &&
+      !g_cancellable_is_cancelled(opening))
+    return;
+
+  g_set_object(&self->workspace_preview_file, group->file);
+  workspace_preview_cancel_load(self);
   self->workspace_preview_cancellable = g_cancellable_new();
-  self->workspace_preview_generation++;
 
   PhiDocument *cached =
       workspace_document_cache_lookup(self, group->file);
   if (cached) {
-    GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
     PdfvDocumentView *view =
         g_object_get_data(G_OBJECT(stack), "document-view");
@@ -742,6 +780,7 @@ static void workspace_preview_selected(PdfvWindow *self) {
     update_navigation_buttons(self);
     update_zoom_info(self);
     update_sidebar_button(self);
+    g_clear_object(&self->workspace_preview_cancellable);
     g_object_unref(cached);
     return;
   }
@@ -758,6 +797,64 @@ static void workspace_preview_selected(PdfvWindow *self) {
   open_file_in_tab_async(self, group->file, self->workspace_preview_tab,
                          match->page, TRUE, TRUE,
                          self->workspace_preview_generation);
+}
+
+static gboolean workspace_preview_delay_elapsed(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  self->workspace_preview_delay_id = 0;
+  if (gtk_widget_get_visible(self->workspace_search_overlay))
+    workspace_preview_selected_now(self);
+  return G_SOURCE_REMOVE;
+}
+
+static void workspace_preview_selected(PdfvWindow *self) {
+  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
+  PdfvWorkspaceMatch *match = workspace_selected_match(self);
+  if (!group || !match)
+    return;
+
+  self->workspace_preview_page = match->page;
+  gboolean target_changed =
+      !self->workspace_preview_file ||
+      !g_file_equal(self->workspace_preview_file, group->file);
+  if (target_changed) {
+    workspace_preview_cancel_load(self);
+    g_set_object(&self->workspace_preview_file, group->file);
+  }
+
+  workspace_preview_cancel_delay(self);
+  if (workspace_preview_show_loaded(self, group->file, match->page))
+    return;
+
+  if (target_changed &&
+      adw_tab_view_get_selected_page(self->tab_view) ==
+          self->workspace_preview_tab &&
+      self->workspace_return_tab &&
+      adw_tab_view_get_page_position(self->tab_view,
+                                     self->workspace_return_tab) >= 0)
+    adw_tab_view_set_selected_page(self->tab_view,
+                                   self->workspace_return_tab);
+
+  if (self->workspace_preview_tab) {
+    GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
+    GCancellable *opening =
+        g_object_get_data(G_OBJECT(stack), "open-cancellable");
+    if (!target_changed && opening &&
+        !g_cancellable_is_cancelled(opening)) {
+      g_object_set_data(G_OBJECT(stack), "open-target-page",
+                        GINT_TO_POINTER(match->page + 1));
+      return;
+    }
+  }
+
+  self->workspace_preview_delay_id = g_timeout_add_full(
+      G_PRIORITY_DEFAULT_IDLE, WORKSPACE_PREVIEW_DELAY_MS,
+      workspace_preview_delay_elapsed, self, NULL);
+}
+
+static void workspace_preview_flush(PdfvWindow *self) {
+  workspace_preview_cancel_delay(self);
+  workspace_preview_selected_now(self);
 }
 
 static void workspace_results_render(PdfvWindow *self);
@@ -858,6 +955,9 @@ static void workspace_result_row_activated(GtkListBox *box,
 }
 
 static void workspace_results_clear(PdfvWindow *self) {
+  workspace_preview_cancel_delay(self);
+  workspace_preview_cancel_load(self);
+  g_clear_object(&self->workspace_preview_file);
   if (self->workspace_group_select_id) {
     g_source_remove(self->workspace_group_select_id);
     self->workspace_group_select_id = 0;
@@ -1262,6 +1362,10 @@ static void workspace_search_open(PdfvWindow *self) {
 static void workspace_search_close(PdfvWindow *self, gboolean commit) {
   if (!gtk_widget_get_visible(self->workspace_search_overlay))
     return;
+  if (commit && workspace_selected_match(self))
+    workspace_preview_flush(self);
+  else
+    workspace_preview_cancel_delay(self);
   gtk_widget_set_visible(self->workspace_search_overlay, FALSE);
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
@@ -1284,9 +1388,7 @@ static void workspace_search_close(PdfvWindow *self, gboolean commit) {
      * Future previews must not cancel that now-independent tab. */
     g_clear_object(&self->workspace_preview_cancellable);
   } else if (!commit) {
-    if (self->workspace_preview_cancellable)
-      g_cancellable_cancel(self->workspace_preview_cancellable);
-    self->workspace_preview_generation++;
+    workspace_preview_cancel_load(self);
     if (self->workspace_preview_tab) {
       AdwTabPage *preview = self->workspace_preview_tab;
       self->workspace_preview_tab = NULL;
@@ -1377,6 +1479,12 @@ typedef struct {
   guint settled_frames;
 } FitWidthRequest;
 
+typedef struct {
+  OpenRequest *request;
+  PhiDocument *document;
+  GError *error;
+} OpenCompletion;
+
 static gboolean fit_width_after_allocate(GtkWidget *widget,
                                          GdkFrameClock *frame_clock,
                                          gpointer user_data) {
@@ -1404,18 +1512,19 @@ static void open_request_free(OpenRequest *request) {
   g_free(request);
 }
 
-static void on_document_loaded(GObject *source, GAsyncResult *result,
-                               gpointer user_data) {
-  (void)source;
-  OpenRequest *request = user_data;
+static gboolean finish_document_load_idle(gpointer user_data) {
+  OpenCompletion *completion = user_data;
+  OpenRequest *request = completion->request;
   PdfvWindow *self = request->window;
-  GError *error = NULL;
-  PhiDocument *document =
-      pdfv_workspace_load_document_finish(result, &error);
+  PhiDocument *document = completion->document;
+  GError *error = completion->error;
   gboolean page_is_open =
       adw_tab_view_get_page_position(self->tab_view, request->page) >= 0;
+  gboolean active_preview =
+      request->preview && request->page == self->workspace_preview_tab;
   gboolean stale_preview =
-      request->preview && request->generation != self->workspace_preview_generation;
+      active_preview &&
+      request->generation != self->workspace_preview_generation;
   if (document && request->preview && !stale_preview && self->workspace)
     workspace_document_cache_store(self, request->file, document);
   GtkWidget *target_stack =
@@ -1427,12 +1536,18 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
 
   if (document && current_request && !stale_preview) {
     GtkWidget *stack = target_stack;
+    if (request->preview &&
+        self->workspace_preview_cancellable == request->cancellable)
+      g_clear_object(&self->workspace_preview_cancellable);
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
     PdfvDocumentView *view =
         g_object_get_data(G_OBJECT(stack), "document-view");
     pdfv_document_view_set_document(view, document);
-    gint target_page = request->preview ? self->workspace_preview_page
-                                       : request->target_page;
+    gpointer target_page_data =
+        g_object_get_data(G_OBJECT(stack), "open-target-page");
+    gint target_page = target_page_data
+                           ? GPOINTER_TO_INT(target_page_data) - 1
+                           : request->target_page;
     pdfv_document_view_go_to_page(view, target_page);
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
     if (request->fit_width) {
@@ -1446,7 +1561,7 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
     adw_tab_page_set_title(request->page, basename);
     g_free(basename);
 
-    if (request->preview)
+    if (active_preview)
       adw_tab_view_set_selected_page(self->tab_view, request->page);
 
     if (adw_tab_view_get_selected_page(self->tab_view) == request->page) {
@@ -1460,6 +1575,9 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
              !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED) &&
              current_request && !stale_preview) {
     GtkWidget *stack = target_stack;
+    if (request->preview &&
+        self->workspace_preview_cancellable == request->cancellable)
+      g_clear_object(&self->workspace_preview_cancellable);
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
     AdwDialog *dialog = adw_alert_dialog_new("Error Opening File",
@@ -1471,6 +1589,23 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
   g_clear_error(&error);
   g_clear_object(&document);
   open_request_free(request);
+  g_free(completion);
+  return G_SOURCE_REMOVE;
+}
+
+static void on_document_loaded(GObject *source, GAsyncResult *result,
+                               gpointer user_data) {
+  (void)source;
+  OpenCompletion *completion = g_new0(OpenCompletion, 1);
+  completion->request = user_data;
+  completion->document =
+      pdfv_workspace_load_document_finish(result, &completion->error);
+
+  /* Installing a long document still performs layout bookkeeping on the main
+   * thread. Do it only when input is idle so arrow-key selection always wins
+   * over a preview completion that became ready at the same moment. */
+  g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, finish_document_load_idle,
+                  completion, NULL);
 }
 
 static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
@@ -1486,6 +1621,8 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
   gchar *basename = g_file_get_basename(file);
   adw_tab_page_set_title(page, basename);
   g_free(basename);
+  g_object_set_data(G_OBJECT(stack), "open-target-page",
+                    GINT_TO_POINTER(target_page + 1));
 
   OpenRequest *request = g_new0(OpenRequest, 1);
   request->window = g_object_ref(self);
@@ -1543,10 +1680,9 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
 static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
                                   PdfvWindow *self) {
   if (page == self->workspace_preview_tab) {
+    workspace_preview_cancel_delay(self);
+    workspace_preview_cancel_load(self);
     self->workspace_preview_tab = NULL;
-    self->workspace_preview_generation++;
-    if (self->workspace_preview_cancellable)
-      g_cancellable_cancel(self->workspace_preview_cancellable);
     g_clear_object(&self->workspace_preview_file);
   }
   if (page == self->workspace_return_tab)
@@ -2107,6 +2243,7 @@ static void on_sidebar_show_changed(AdwOverlaySplitView *split_view,
 
 static gboolean on_window_close_request(GtkWindow *window, PdfvWindow *self) {
   (void)window;
+  workspace_preview_cancel_delay(self);
   if (self->workspace_scan_cancellable)
     g_cancellable_cancel(self->workspace_scan_cancellable);
   if (self->workspace_search_cancellable)
@@ -2132,6 +2269,7 @@ static gboolean on_window_close_request(GtkWindow *window, PdfvWindow *self) {
 static void pdfv_window_dispose(GObject *object) {
   PdfvWindow *self = PDFV_WINDOW(object);
 
+  workspace_preview_cancel_delay(self);
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
     self->workspace_search_debounce_id = 0;
