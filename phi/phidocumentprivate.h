@@ -32,6 +32,12 @@ struct _PhiDocument {
 
 	fz_context* ctx;
 	fz_document* document;
+
+	/* Independent, serialized renderer used only by the thumbnail worker. */
+	GMutex thumbnail_lock;
+	GFile* source_file;
+	fz_context* thumbnail_ctx;
+	fz_document* thumbnail_document;
 	
 	gint n_pages;
 	PhiPage** pages;

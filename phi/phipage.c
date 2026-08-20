@@ -153,6 +153,104 @@ static void fz_quad_to_phi_quad(const fz_quad* fq, PhiTextQuad* pq) {
 	pq->lr.y = fq->lr.y;
 }
 
+/*
+ * Some PDF generators paint accents as separate spacing glyphs before the
+ * character they decorate.  MuPDF quite reasonably preserves that content
+ * stream order, which turns "präsentiert" into "pr¨asentiert"
+ * when copied and also prevents a search for the correctly composed word.
+ *
+ * Only repair pairs whose glyph boxes overlap and whose base/combining form
+ * has a canonical composition.  The geometry check is important: a literal
+ * spacing accent followed by a letter must remain two separate characters.
+ */
+static gunichar phi_spacing_diacritic_to_combining(gunichar c) {
+	switch (c) {
+	case 0x005e: return 0x0302; /* CIRCUMFLEX ACCENT */
+	case 0x0060: return 0x0300; /* GRAVE ACCENT */
+	case 0x007e: return 0x0303; /* TILDE */
+	case 0x00a8: return 0x0308; /* DIAERESIS */
+	case 0x00af: return 0x0304; /* MACRON */
+	case 0x00b4: return 0x0301; /* ACUTE ACCENT */
+	case 0x00b8: return 0x0327; /* CEDILLA */
+	case 0x02c6: return 0x0302; /* MODIFIER LETTER CIRCUMFLEX */
+	case 0x02c7: return 0x030c; /* CARON */
+	case 0x02d8: return 0x0306; /* BREVE */
+	case 0x02d9: return 0x0307; /* DOT ABOVE */
+	case 0x02da: return 0x030a; /* RING ABOVE */
+	case 0x02db: return 0x0328; /* OGONEK */
+	case 0x02dc: return 0x0303; /* SMALL TILDE */
+	case 0x02dd: return 0x030b; /* DOUBLE ACUTE ACCENT */
+	default: return 0;
+	}
+}
+
+static gboolean phi_diacritic_overlaps_base(const fz_stext_char* mark,
+		const fz_stext_char* base) {
+	fz_rect mr = fz_rect_from_quad(mark->quad);
+	fz_rect br = fz_rect_from_quad(base->quad);
+	float mark_center_x = (mr.x0 + mr.x1) / 2.0f;
+
+	return br.x1 > br.x0 && mark_center_x >= br.x0 && mark_center_x <= br.x1;
+}
+
+static gunichar phi_compose_diacritic(gunichar base, gunichar combining) {
+	gchar source[12];
+	gint length = g_unichar_to_utf8(base, source);
+	length += g_unichar_to_utf8(combining, source + length);
+	source[length] = '\0';
+
+	gchar* normalized = g_utf8_normalize(source, length, G_NORMALIZE_NFC);
+	gunichar composed = normalized && g_utf8_strlen(normalized, -1) == 1
+		? g_utf8_get_char(normalized) : 0;
+	g_free(normalized);
+	return composed;
+}
+
+static void phi_stext_fix_separate_diacritics(fz_stext_page* page) {
+	for (fz_stext_block* block = page->first_block; block; block = block->next) {
+		if (block->type != FZ_STEXT_BLOCK_TEXT)
+			continue;
+
+		for (fz_stext_line* line = block->u.t.first_line; line; line = line->next) {
+			for (fz_stext_char* mark = line->first_char; mark && mark->next; mark = mark->next) {
+				fz_stext_char* base = mark->next;
+				gunichar combining = phi_spacing_diacritic_to_combining(mark->c);
+				gunichar composed = combining
+					? phi_compose_diacritic(base->c, combining) : 0;
+
+				if (!combining || !g_unichar_isalpha(base->c) ||
+					!phi_diacritic_overlaps_base(mark, base) ||
+					!composed)
+					continue;
+
+				/* Collapse the overlaid pair so text and quad indexes remain 1:1. */
+				mark->c = composed;
+				mark->bidi = base->bidi;
+				mark->flags = base->flags;
+				mark->argb = base->argb;
+				mark->origin = base->origin;
+				mark->quad = base->quad;
+				mark->size = base->size;
+				mark->font = base->font;
+				mark->next = base->next;
+				if (line->last_char == base)
+					line->last_char = mark;
+			}
+		}
+	}
+}
+
+static fz_stext_page* phi_page_extract_stext(PhiPage* self) {
+	fz_stext_page* page = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+	phi_stext_fix_separate_diacritics(page);
+	return page;
+}
+
+static gchar* phi_normalize_extracted_text(const char* text) {
+	gchar* normalized = g_utf8_normalize(text, -1, G_NORMALIZE_NFC);
+	return normalized ? normalized : g_strdup(text);
+}
+
 gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads, gint max_quads) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), 0);
 	g_return_val_if_fail(needle != NULL, 0);
@@ -165,7 +263,7 @@ gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads
 	gint count = 0;
 	
 	fz_try(self->document->ctx) {
-		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		stext = phi_page_extract_stext(self);
 		fz_quads = g_new(fz_quad, max_quads);
 		
 		count = fz_search_stext_page(self->document->ctx, stext, needle, NULL, fz_quads, max_quads);
@@ -196,7 +294,7 @@ gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphe
 	gint count = 0;
 	
 	fz_try(self->document->ctx) {
-		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		stext = phi_page_extract_stext(self);
 		fz_quads = g_new(fz_quad, max_quads);
 		
 		fz_point a = { start->x, start->y };
@@ -226,7 +324,7 @@ gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphen
 	gboolean found = FALSE;
 	
 	fz_try(self->document->ctx) {
-		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		stext = phi_page_extract_stext(self);
 		
 		/* Iterate through text blocks, lines, and chars to find word at point */
 		for (fz_stext_block* block = stext->first_block; block && !found; block = block->next) {
@@ -311,14 +409,14 @@ gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_
 	gchar* result = NULL;
 	
 	fz_try(self->document->ctx) {
-		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		stext = phi_page_extract_stext(self);
 		
 		fz_point a = { start->x, start->y };
 		fz_point b = { end->x, end->y };
 		
 		char* text = fz_copy_selection(self->document->ctx, stext, a, b, 0);
 		if (text) {
-			result = g_strdup(text);
+			result = phi_normalize_extracted_text(text);
 			fz_free(self->document->ctx, text);
 		}
 	} fz_always(self->document->ctx) {
@@ -338,13 +436,13 @@ gchar* phi_page_get_text(PhiPage* self) {
 	gchar* result = NULL;
 	
 	fz_try(self->document->ctx) {
-		stext = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
+		stext = phi_page_extract_stext(self);
 		
 		/* Get page bounds and copy all text */
 		fz_rect bounds = fz_bound_page(self->document->ctx, self->page);
 		char* text = fz_copy_rectangle(self->document->ctx, stext, bounds, 0);
 		if (text) {
-			result = g_strdup(text);
+			result = phi_normalize_extracted_text(text);
 			fz_free(self->document->ctx, text);
 		}
 	} fz_always(self->document->ctx) {

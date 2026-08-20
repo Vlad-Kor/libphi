@@ -10,7 +10,6 @@
 
 #include "pdfv-window.h"
 #include "pdfv-document-view.h"
-#include <gsk/gsk.h>
 #include <phi/phidocument.h>
 #include <phi/phipage.h>
 
@@ -35,7 +34,8 @@ struct _PdfvWindow {
   GtkMenuButton *menu_button;
 
   /* Sidebar */
-  GtkListBox *thumbnail_list;
+  GtkListView *thumbnail_list;
+  GtkSingleSelection *thumbnail_selection;
 
   /* Floating zoom controls */
   GtkWidget *zoom_box;
@@ -144,280 +144,217 @@ static void setup_document_view_signals(PdfvWindow *self,
                    self);
 }
 
-/* Thumbnail data for sidebar */
+/* Thumbnail rendering is serialized on one worker. Each document uses a
+ * background-only MuPDF context, separate from the one used by the view. */
+typedef struct _ThumbnailJob ThumbnailJob;
+
 typedef struct {
+  gint ref_count;
   GtkWidget *drawing_area;
-  PhiPage *page;
+  GtkLabel *page_label;
+  PhiDocument *document;
   gint page_num;
-  cairo_surface_t *cached_surface; /* Cached thumbnail render */
-  guint render_idle_id;            /* Pending idle render callback */
-  gboolean visible;                /* Whether thumbnail is currently visible */
-  PhiDocument *document;           /* Reference for lazy page loading */
+  guint generation;
+  cairo_surface_t *cached_surface;
+  ThumbnailJob *job;
 } ThumbnailData;
 
-/* State for batched thumbnail population */
-typedef struct {
-  GtkListBox *list;
+struct _ThumbnailJob {
+  ThumbnailData *data;
   PhiDocument *document;
-  gint current;
-  gint n_pages;
-} ThumbnailPopulateState;
+  gint page_num;
+  guint generation;
+  gint cancelled;
+  cairo_surface_t *surface;
+  GError *error;
+};
 
-/* Global queue for thumbnail rendering - process one at a time */
-static GQueue *thumbnail_render_queue = NULL;
-static guint thumbnail_render_idle_id = 0;
+static void thumbnail_render_worker(gpointer user_data, gpointer pool_data);
 
-static void thumbnail_process_queue(void);
-
-static void thumbnail_data_free(ThumbnailData *data) {
-  if (data->render_idle_id) {
-    g_source_remove(data->render_idle_id);
-    data->render_idle_id = 0;
+static gpointer thumbnail_pool_init(gpointer user_data) {
+  (void)user_data;
+  GError *error = NULL;
+  GThreadPool *pool =
+      g_thread_pool_new(thumbnail_render_worker, NULL, 1, TRUE, &error);
+  if (!pool) {
+    g_warning("Could not create thumbnail worker: %s",
+              error ? error->message : "unknown error");
+    g_clear_error(&error);
   }
-  /* Remove from render queue if present */
-  if (thumbnail_render_queue)
-    g_queue_remove(thumbnail_render_queue, data);
+  return pool;
+}
+
+static GThreadPool *thumbnail_get_pool(void) {
+  static GOnce once = G_ONCE_INIT;
+  return g_once(&once, thumbnail_pool_init, NULL);
+}
+
+static ThumbnailData *thumbnail_data_ref(ThumbnailData *data) {
+  g_atomic_int_inc(&data->ref_count);
+  return data;
+}
+
+static void thumbnail_data_unref(ThumbnailData *data) {
+  if (!g_atomic_int_dec_and_test(&data->ref_count))
+    return;
+
   if (data->cached_surface)
     cairo_surface_destroy(data->cached_surface);
+  g_clear_object(&data->document);
   g_free(data);
 }
 
-/* Idle callback to render ONE thumbnail - runs on main thread with low priority
- */
-static gboolean thumbnail_is_in_viewport(GtkWidget *widget) {
-  if (!widget || !gtk_widget_get_parent(widget))
-    return FALSE;
+static void thumbnail_data_reset(ThumbnailData *data) {
+  data->generation++;
 
-  /* Find the scrolled window ancestor */
-  GtkWidget *parent = gtk_widget_get_parent(widget);
-  GtkScrolledWindow *scroll = NULL;
-  while (parent) {
-    if (GTK_IS_SCROLLED_WINDOW(parent)) {
-      scroll = GTK_SCROLLED_WINDOW(parent);
-      break;
-    }
-    parent = gtk_widget_get_parent(parent);
+  if (data->job) {
+    g_atomic_int_set(&data->job->cancelled, TRUE);
+    data->job = NULL;
   }
 
-  if (!scroll)
-    return TRUE;
+  if (data->cached_surface) {
+    cairo_surface_destroy(data->cached_surface);
+    data->cached_surface = NULL;
+  }
 
-  GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(scroll);
-  gdouble scroll_top = gtk_adjustment_get_value(vadj);
-  gdouble scroll_height = gtk_adjustment_get_page_size(vadj);
-  gdouble scroll_bottom = scroll_top + scroll_height;
-
-  graphene_point_t point = GRAPHENE_POINT_INIT(0, 0);
-  GtkWidget *scrolled_child = gtk_scrolled_window_get_child(scroll);
-  if (!scrolled_child)
-    return TRUE;
-
-  if (!gtk_widget_compute_point(widget, scrolled_child, &point, &point))
-    return TRUE;
-
-  gdouble widget_top = point.y;
-  gdouble widget_height = gtk_widget_get_height(widget);
-  gdouble widget_bottom = widget_top + widget_height;
-
-  return (widget_bottom > scroll_top && widget_top < scroll_bottom);
+  g_clear_object(&data->document);
+  data->page_num = -1;
 }
 
-static gboolean thumbnail_render_one_idle(gpointer user_data) {
-  (void)user_data;
-  thumbnail_render_idle_id = 0;
+static void thumbnail_data_free(ThumbnailData *data) {
+  thumbnail_data_reset(data);
+  data->drawing_area = NULL;
+  data->page_label = NULL;
+  thumbnail_data_unref(data);
+}
 
-  if (!thumbnail_render_queue || g_queue_is_empty(thumbnail_render_queue))
-    return G_SOURCE_REMOVE;
+static gboolean thumbnail_render_complete(gpointer user_data) {
+  ThumbnailJob *job = user_data;
+  ThumbnailData *data = job->data;
 
-  ThumbnailData *data = NULL;
-  gint skip_count = 0;
-  const gint max_skips = 10; /* Limit how many we check before giving up */
-
-  /* Find next valid, visible thumbnail */
-  while (!g_queue_is_empty(thumbnail_render_queue) && skip_count < max_skips) {
-    data = g_queue_pop_head(thumbnail_render_queue);
-
-    /* Check if valid and ready to render */
-    if (data && data->page && data->drawing_area &&
-        gtk_widget_get_parent(data->drawing_area) && !data->cached_surface &&
-        data->visible && thumbnail_is_in_viewport(data->drawing_area)) {
-      break; /* Found one to render */
-    }
-
-    /* Not valid - skip it entirely (don't re-queue to avoid infinite loop) */
-    data = NULL;
-    skip_count++;
+  if (!g_atomic_int_get(&job->cancelled) && data->job == job &&
+      data->generation == job->generation &&
+      data->document == job->document && job->surface) {
+    data->cached_surface = job->surface;
+    job->surface = NULL;
+    if (data->drawing_area)
+      gtk_widget_queue_draw(data->drawing_area);
   }
 
-  if (!data) {
-    /* Nothing valid found, but more might be added later */
-    return G_SOURCE_REMOVE;
-  }
+  if (data->job == job)
+    data->job = NULL;
 
-  /* Get page size */
-  gfloat pw, ph;
-  phi_page_get_size(data->page, &pw, &ph);
+  if (job->error && !g_error_matches(job->error, G_IO_ERROR,
+                                      G_IO_ERROR_CANCELLED))
+    g_debug("Could not render page %d thumbnail: %s", job->page_num + 1,
+            job->error->message);
 
-  /* Calculate scale for thumbnail */
-  gint target_width = 120;
-  gint target_height = 160;
-  gdouble scale_x = (gdouble)target_width / pw;
-  gdouble scale_y = (gdouble)target_height / ph;
-  gdouble scale = MIN(scale_x, scale_y);
-
-  gint render_w = (gint)(pw * scale);
-  gint render_h = (gint)(ph * scale);
-
-  if (render_w < 1)
-    render_w = 1;
-  if (render_h < 1)
-    render_h = 1;
-
-  /* Create surface for thumbnail */
-  cairo_surface_t *surface =
-      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, render_w, render_h);
-  cairo_t *cr = cairo_create(surface);
-
-  /* White background */
-  cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-  cairo_paint(cr);
-
-  /* Scale and render page */
-  cairo_scale(cr, scale, scale);
-
-  GError *error = NULL;
-  GskRenderNode *node = phi_page_render_to_node(data->page, &error);
-  if (node) {
-    gsk_render_node_draw(node, cr);
-    gsk_render_node_unref(node);
-  }
-  if (error)
-    g_error_free(error);
-
-  cairo_destroy(cr);
-
-  /* Store cached surface and trigger redraw */
-  data->cached_surface = surface;
-
-  if (data->drawing_area && gtk_widget_get_parent(data->drawing_area))
-    gtk_widget_queue_draw(data->drawing_area);
-
-  /* Schedule next render */
-  thumbnail_process_queue();
-
+  g_clear_error(&job->error);
+  if (job->surface)
+    cairo_surface_destroy(job->surface);
+  g_object_unref(job->document);
+  thumbnail_data_unref(data);
+  g_free(job);
   return G_SOURCE_REMOVE;
 }
 
-/* Process next item in thumbnail queue */
-static void thumbnail_process_queue(void) {
-  if (thumbnail_render_idle_id)
-    return; /* Already scheduled */
+static void thumbnail_render_worker(gpointer user_data, gpointer pool_data) {
+  (void)pool_data;
+  ThumbnailJob *job = user_data;
 
-  if (!thumbnail_render_queue || g_queue_is_empty(thumbnail_render_queue))
-    return;
+  if (!g_atomic_int_get(&job->cancelled))
+    job->surface = phi_document_render_thumbnail(
+        job->document, job->page_num, 120, 160, &job->error);
 
-  /* Use a timeout instead of idle to give UI more breathing room */
-  thumbnail_render_idle_id =
-      g_timeout_add(100, thumbnail_render_one_idle, NULL);
+  g_main_context_invoke(NULL, thumbnail_render_complete, job);
 }
 
-/* Queue thumbnail for rendering when visible */
 static void thumbnail_queue_render(ThumbnailData *data) {
-  if (!data->page || data->cached_surface)
+  if (!data->document || data->page_num < 0 || data->cached_surface ||
+      data->job)
     return;
 
-  if (!thumbnail_render_queue)
-    thumbnail_render_queue = g_queue_new();
+  ThumbnailJob *job = g_new0(ThumbnailJob, 1);
+  job->data = thumbnail_data_ref(data);
+  job->document = g_object_ref(data->document);
+  job->page_num = data->page_num;
+  job->generation = data->generation;
+  data->job = job;
 
-  /* Don't add duplicates */
-  if (g_queue_find(thumbnail_render_queue, data))
+  GThreadPool *pool = thumbnail_get_pool();
+  if (!pool) {
+    job->error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED,
+                                     "Thumbnail worker is unavailable");
+    g_main_context_invoke(NULL, thumbnail_render_complete, job);
     return;
+  }
 
-  /* Add visible thumbnails to front, others to back */
-  if (data->visible)
-    g_queue_push_head(thumbnail_render_queue, data);
-  else
-    g_queue_push_tail(thumbnail_render_queue, data);
-
-  thumbnail_process_queue();
+  GError *error = NULL;
+  if (!g_thread_pool_push(pool, job, &error)) {
+    job->error = error;
+    if (!job->error)
+      job->error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED,
+                                       "Could not queue thumbnail render");
+    g_main_context_invoke(NULL, thumbnail_render_complete, job);
+  }
 }
 
 static void on_thumbnail_draw(GtkDrawingArea *area, cairo_t *cr, int width,
                               int height, ThumbnailData *data) {
   (void)area;
 
-  /* Lazy-load the page when first drawn */
-  if (!data->page && data->document) {
-    data->page = phi_document_get_page(data->document, data->page_num, NULL);
-  }
+  if (!data->cached_surface)
+    thumbnail_queue_render(data);
 
-  if (!data->page)
-    return;
-
-  /* Mark as visible and queue render if needed */
-  if (!data->visible) {
-    data->visible = TRUE;
-    if (!data->cached_surface)
-      thumbnail_queue_render(data);
-  }
-
-  gfloat pw, ph;
-  phi_page_get_size(data->page, &pw, &ph);
-
-  /* Calculate scale to fit within the drawing area with padding */
   gdouble padding = 8.0;
-  gdouble avail_w = width - padding * 2;
-  gdouble avail_h = height - padding * 2;
-  gdouble scale_x = avail_w / pw;
-  gdouble scale_y = avail_h / ph;
-  gdouble scale = MIN(scale_x, scale_y);
+  gdouble page_width = data->cached_surface
+                           ? cairo_image_surface_get_width(data->cached_surface)
+                           : 120.0;
+  gdouble page_height =
+      data->cached_surface
+          ? cairo_image_surface_get_height(data->cached_surface)
+          : 160.0;
+  gdouble scale =
+      MIN((width - padding * 2) / page_width,
+          (height - padding * 2) / page_height);
+  gdouble scaled_width = page_width * scale;
+  gdouble scaled_height = page_height * scale;
+  gdouble offset_x = (width - scaled_width) / 2.0;
+  gdouble offset_y = (height - scaled_height) / 2.0;
 
-  gdouble scaled_w = pw * scale;
-  gdouble scaled_h = ph * scale;
-  gdouble offset_x = (width - scaled_w) / 2.0;
-  gdouble offset_y = (height - scaled_h) / 2.0;
-
-  /* Shadow */
   cairo_set_source_rgba(cr, 0, 0, 0, 0.15);
-  cairo_rectangle(cr, offset_x + 2, offset_y + 2, scaled_w, scaled_h);
+  cairo_rectangle(cr, offset_x + 2, offset_y + 2, scaled_width, scaled_height);
   cairo_fill(cr);
 
-  /* Page background (white) */
   cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-  cairo_rectangle(cr, offset_x, offset_y, scaled_w, scaled_h);
+  cairo_rectangle(cr, offset_x, offset_y, scaled_width, scaled_height);
   cairo_fill(cr);
 
-  /* For performance, only render cached thumbnails or simple placeholder
-   * Full page rendering is expensive for complex PDFs */
   if (data->cached_surface) {
-    /* Draw cached thumbnail */
     cairo_save(cr);
     cairo_translate(cr, offset_x, offset_y);
-    gdouble cache_scale =
-        scaled_w / cairo_image_surface_get_width(data->cached_surface);
-    cairo_scale(cr, cache_scale, cache_scale);
+    cairo_scale(cr, scale, scale);
     cairo_set_source_surface(cr, data->cached_surface, 0, 0);
     cairo_paint(cr);
     cairo_restore(cr);
   }
 
-  /* Border */
   cairo_set_source_rgba(cr, 0, 0, 0, 0.2);
   cairo_set_line_width(cr, 1.0);
-  cairo_rectangle(cr, offset_x + 0.5, offset_y + 0.5, scaled_w - 1,
-                  scaled_h - 1);
+  cairo_rectangle(cr, offset_x + 0.5, offset_y + 0.5, scaled_width - 1,
+                  scaled_height - 1);
   cairo_stroke(cr);
 }
 
-static GtkWidget *create_thumbnail_row(PhiDocument *doc, gint page_num) {
-  ThumbnailData *data = g_new0(ThumbnailData, 1);
-  data->page_num = page_num;
-  data->page = NULL;    /* Loaded lazily when visible */
-  data->document = doc; /* Store reference for lazy loading */
+static void thumbnail_factory_setup(GtkSignalListItemFactory *factory,
+                                    GtkListItem *list_item, PdfvWindow *self) {
+  (void)factory;
+  (void)self;
 
-  GtkWidget *row = gtk_list_box_row_new();
-  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
-  g_object_set_data_full(G_OBJECT(row), "thumb-data", data,
+  ThumbnailData *data = g_new0(ThumbnailData, 1);
+  data->ref_count = 1;
+  data->page_num = -1;
+  g_object_set_data_full(G_OBJECT(list_item), "thumb-data", data,
                          (GDestroyNotify)thumbnail_data_free);
 
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
@@ -433,87 +370,58 @@ static GtkWidget *create_thumbnail_row(PhiDocument *doc, gint page_num) {
                                  data, NULL);
   gtk_box_append(GTK_BOX(box), data->drawing_area);
 
-  gchar *label_text = g_strdup_printf("%d", page_num + 1);
-  GtkWidget *label = gtk_label_new(label_text);
-  gtk_widget_add_css_class(label, "caption");
-  gtk_widget_add_css_class(label, "dim-label");
-  g_free(label_text);
-  gtk_box_append(GTK_BOX(box), label);
+  data->page_label = GTK_LABEL(gtk_label_new(NULL));
+  gtk_widget_add_css_class(GTK_WIDGET(data->page_label), "caption");
+  gtk_widget_add_css_class(GTK_WIDGET(data->page_label), "dim-label");
+  gtk_box_append(GTK_BOX(box), GTK_WIDGET(data->page_label));
 
-  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
-
-  /* Thumbnail will be rendered when it becomes visible */
-
-  return row;
+  gtk_list_item_set_child(list_item, box);
 }
 
-/* Idle callback to populate thumbnails in batches */
-static gboolean populate_thumbnails_idle(gpointer user_data) {
-  ThumbnailPopulateState *state = user_data;
+static void thumbnail_factory_bind(GtkSignalListItemFactory *factory,
+                                   GtkListItem *list_item, PdfvWindow *self) {
+  (void)factory;
+  ThumbnailData *data =
+      g_object_get_data(G_OBJECT(list_item), "thumb-data");
+  GListModel *model = gtk_single_selection_get_model(self->thumbnail_selection);
+  guint position = gtk_list_item_get_position(list_item);
 
-  /* Check if list box still exists */
-  if (!GTK_IS_LIST_BOX(state->list)) {
-    g_free(state);
-    return G_SOURCE_REMOVE;
-  }
+  thumbnail_data_reset(data);
+  if (!PHI_IS_DOCUMENT(model) || position == GTK_INVALID_LIST_POSITION)
+    return;
 
-  /* Add a batch of rows */
-  gint batch_size = 30; /* Add 30 rows per idle tick */
-  for (gint i = 0; i < batch_size && state->current < state->n_pages; i++) {
-    GtkWidget *row = create_thumbnail_row(state->document, state->current);
-    gtk_list_box_append(state->list, row);
-    state->current++;
-  }
+  data->document = g_object_ref(PHI_DOCUMENT(model));
+  data->page_num = (gint)position;
 
-  /* Continue or finish */
-  if (state->current >= state->n_pages) {
-    g_free(state);
-    return G_SOURCE_REMOVE;
-  }
-  return G_SOURCE_CONTINUE;
+  gchar *label = g_strdup_printf("%u", position + 1);
+  gtk_label_set_text(data->page_label, label);
+  g_free(label);
+  gtk_widget_queue_draw(data->drawing_area);
+}
+
+static void thumbnail_factory_unbind(GtkSignalListItemFactory *factory,
+                                     GtkListItem *list_item,
+                                     PdfvWindow *self) {
+  (void)factory;
+  (void)self;
+  ThumbnailData *data =
+      g_object_get_data(G_OBJECT(list_item), "thumb-data");
+  thumbnail_data_reset(data);
 }
 
 static void populate_thumbnails(PdfvWindow *self, PhiDocument *document) {
-  GtkWidget *child;
-  while (
-      (child = gtk_widget_get_first_child(GTK_WIDGET(self->thumbnail_list)))) {
-    gtk_list_box_remove(self->thumbnail_list, child);
-  }
-
-  if (!document)
+  GListModel *model = document ? G_LIST_MODEL(document) : NULL;
+  if (gtk_single_selection_get_model(self->thumbnail_selection) == model)
     return;
 
-  gint n_pages = phi_document_get_n_pages(document);
-
-  /* For small documents, populate immediately */
-  if (n_pages <= 30) {
-    for (gint i = 0; i < n_pages; i++) {
-      GtkWidget *row = create_thumbnail_row(document, i);
-      gtk_list_box_append(self->thumbnail_list, row);
-    }
-    return;
-  }
-
-  /* For large documents, populate in batches via idle callback */
-  ThumbnailPopulateState *state = g_new0(ThumbnailPopulateState, 1);
-  state->list = self->thumbnail_list;
-  state->document = document;
-  state->current = 0;
-  state->n_pages = n_pages;
-
-  g_idle_add(populate_thumbnails_idle, state);
+  gtk_single_selection_set_model(self->thumbnail_selection, model);
 }
 
-static void on_thumbnail_row_activated(GtkListBox *box, GtkListBoxRow *row,
-                                       PdfvWindow *self) {
-  (void)box;
-  if (!self->current_view || !row)
-    return;
-
-  ThumbnailData *data = g_object_get_data(G_OBJECT(row), "thumb-data");
-  if (data) {
-    pdfv_document_view_go_to_page(self->current_view, data->page_num);
-  }
+static void on_thumbnail_activated(GtkListView *list, guint position,
+                                   PdfvWindow *self) {
+  (void)list;
+  if (self->current_view && position != GTK_INVALID_LIST_POSITION)
+    pdfv_document_view_go_to_page(self->current_view, (gint)position);
 }
 
 /* Create empty state widget (shown when no document is open) */
@@ -1165,12 +1073,25 @@ static void pdfv_window_init(PdfvWindow *self) {
                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_widget_set_vexpand(thumb_scroll, TRUE);
 
-  self->thumbnail_list = GTK_LIST_BOX(gtk_list_box_new());
-  gtk_list_box_set_selection_mode(self->thumbnail_list, GTK_SELECTION_SINGLE);
+  GtkListItemFactory *thumbnail_factory =
+      gtk_signal_list_item_factory_new();
+  g_signal_connect(thumbnail_factory, "setup",
+                   G_CALLBACK(thumbnail_factory_setup), self);
+  g_signal_connect(thumbnail_factory, "bind", G_CALLBACK(thumbnail_factory_bind),
+                   self);
+  g_signal_connect(thumbnail_factory, "unbind",
+                   G_CALLBACK(thumbnail_factory_unbind), self);
+
+  self->thumbnail_selection = gtk_single_selection_new(NULL);
+  gtk_single_selection_set_autoselect(self->thumbnail_selection, FALSE);
+  gtk_single_selection_set_can_unselect(self->thumbnail_selection, TRUE);
+  self->thumbnail_list = GTK_LIST_VIEW(gtk_list_view_new(
+      GTK_SELECTION_MODEL(self->thumbnail_selection), thumbnail_factory));
+  gtk_list_view_set_single_click_activate(self->thumbnail_list, TRUE);
   gtk_widget_add_css_class(GTK_WIDGET(self->thumbnail_list),
                            "navigation-sidebar");
-  g_signal_connect(self->thumbnail_list, "row-activated",
-                   G_CALLBACK(on_thumbnail_row_activated), self);
+  g_signal_connect(self->thumbnail_list, "activate",
+                   G_CALLBACK(on_thumbnail_activated), self);
 
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(thumb_scroll),
                                 GTK_WIDGET(self->thumbnail_list));

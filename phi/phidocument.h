@@ -36,6 +36,14 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error);
 gint phi_document_get_n_pages(PhiDocument* self);
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error);
 
+/*
+ * Render a page with an independent MuPDF context. This is intended for a
+ * serialized background worker; the returned image surface may be handed to
+ * the GTK thread after this function returns.
+ */
+cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
+	gint max_width, gint max_height, GError** error);
+
 /* Outline (Table of Contents) */
 typedef struct _PhiOutlineItem PhiOutlineItem;
 struct _PhiOutlineItem {

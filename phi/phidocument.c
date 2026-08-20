@@ -28,10 +28,16 @@ G_DEFINE_FINAL_TYPE_WITH_CODE(PhiDocument, phi_document, G_TYPE_OBJECT,
 
 static void phi_document_object_finalize(GObject* object) {
 	PhiDocument* self = PHI_DOCUMENT(object);
+	if (self->thumbnail_document)
+		fz_drop_document(self->thumbnail_ctx, self->thumbnail_document);
+	if (self->thumbnail_ctx)
+		fz_drop_context(self->thumbnail_ctx);
 	if (self->document)
 		fz_drop_document(self->ctx, self->document);
 	if (self->ctx)
 		fz_drop_context(self->ctx);
+	g_clear_object(&self->source_file);
+	g_mutex_clear(&self->thumbnail_lock);
 	for (gsize i = 0; i < G_N_ELEMENTS(self->ctx_locks); i++)
 		g_mutex_clear(&self->ctx_locks[i]);
 	G_OBJECT_CLASS(phi_document_parent_class)->finalize(object);
@@ -58,15 +64,19 @@ static void phi_document_class_init(PhiDocumentClass* klass) {
 static void phi_document_init(PhiDocument* self) {
 	for (gsize i = 0; i < G_N_ELEMENTS(self->ctx_locks); i++)
 		g_mutex_init(&self->ctx_locks[i]);
+	g_mutex_init(&self->thumbnail_lock);
 	
 	self->ctx = NULL;
 	self->document = NULL;
+	self->source_file = NULL;
+	self->thumbnail_ctx = NULL;
+	self->thumbnail_document = NULL;
 	self->n_pages = 0;
 	self->pages = NULL;
 }
 
 static GType phi_document_list_model_get_item_type(GListModel*) {
-	return G_TYPE_NONE;
+	return PHI_TYPE_PAGE;
 }
 static guint phi_document_list_model_get_n_items(GListModel* list) {
 	PhiDocument* self = PHI_DOCUMENT(list);
@@ -160,6 +170,8 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
 		return NULL;
 
 	PhiDocument* ret = phi_document_new_from_stream(G_INPUT_STREAM(stream), content_type, error);
+	if (ret)
+		ret->source_file = g_object_ref(file);
 
 	g_object_unref(stream);
 	if (info)
@@ -193,6 +205,104 @@ PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error) {
 	cpage->page = page;
 	self->pages[pageno] = cpage; // transfers ownership
 	return cpage;
+}
+
+cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
+		gint max_width, gint max_height, GError** error) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
+	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
+	g_return_val_if_fail(max_width > 0 && max_height > 0, NULL);
+
+	if (!self->source_file) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+			"Background thumbnails require a file-backed document");
+		return NULL;
+	}
+
+	gchar* path = g_file_get_path(self->source_file);
+	if (!path) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+			"Background thumbnails require a local file");
+		return NULL;
+	}
+
+	cairo_surface_t* surface = NULL;
+	fz_page* page = NULL;
+	fz_pixmap* pixmap = NULL;
+
+	g_mutex_lock(&self->thumbnail_lock);
+
+	if (!self->thumbnail_ctx) {
+		self->thumbnail_ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
+		if (!self->thumbnail_ctx) {
+			g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+				"Could not create MuPDF thumbnail context");
+			goto unlock;
+		}
+		fz_register_document_handlers(self->thumbnail_ctx);
+		fz_set_warning_callback(self->thumbnail_ctx, phi_document_warn_handler, NULL);
+	}
+
+	fz_try(self->thumbnail_ctx) {
+		if (!self->thumbnail_document)
+			self->thumbnail_document = fz_open_document(self->thumbnail_ctx, path);
+
+		page = fz_load_page(self->thumbnail_ctx, self->thumbnail_document, pageno);
+		fz_rect bounds = fz_bound_page(self->thumbnail_ctx, page);
+		float width = bounds.x1 - bounds.x0;
+		float height = bounds.y1 - bounds.y0;
+		if (width <= 0 || height <= 0)
+			fz_throw(self->thumbnail_ctx, FZ_ERROR_FORMAT,
+				"Page has invalid thumbnail bounds");
+		float scale = fz_min((float)max_width / width, (float)max_height / height);
+		fz_matrix transform = fz_scale(scale, scale);
+
+		pixmap = fz_new_pixmap_from_page(self->thumbnail_ctx, page, transform,
+			fz_device_rgb(self->thumbnail_ctx), 0);
+
+		gint pix_width = fz_pixmap_width(self->thumbnail_ctx, pixmap);
+		gint pix_height = fz_pixmap_height(self->thumbnail_ctx, pixmap);
+		gint src_stride = fz_pixmap_stride(self->thumbnail_ctx, pixmap);
+		gint components = fz_pixmap_components(self->thumbnail_ctx, pixmap);
+		const guchar* src = fz_pixmap_samples(self->thumbnail_ctx, pixmap);
+
+		surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24, pix_width, pix_height);
+		if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+			cairo_surface_destroy(surface);
+			surface = NULL;
+			fz_throw(self->thumbnail_ctx, FZ_ERROR_SYSTEM, "Could not allocate thumbnail surface");
+		}
+
+		guchar* dest = cairo_image_surface_get_data(surface);
+		gint dest_stride = cairo_image_surface_get_stride(surface);
+		for (gint y = 0; y < pix_height; y++) {
+			const guchar* src_row = src + y * src_stride;
+			guint32* dest_row = (guint32*)(dest + y * dest_stride);
+			for (gint x = 0; x < pix_width; x++) {
+				const guchar* pixel = src_row + x * components;
+				dest_row[x] = ((guint32)pixel[0] << 16) |
+					((guint32)pixel[1] << 8) | pixel[2];
+			}
+		}
+		cairo_surface_mark_dirty(surface);
+	} fz_always(self->thumbnail_ctx) {
+		if (pixmap)
+			fz_drop_pixmap(self->thumbnail_ctx, pixmap);
+		if (page)
+			fz_drop_page(self->thumbnail_ctx, page);
+	} fz_catch(self->thumbnail_ctx) {
+		if (surface) {
+			cairo_surface_destroy(surface);
+			surface = NULL;
+		}
+		g_set_error_literal(error, PHI_MU_ERROR, fz_caught(self->thumbnail_ctx),
+			fz_caught_message(self->thumbnail_ctx));
+	}
+
+unlock:
+	g_mutex_unlock(&self->thumbnail_lock);
+	g_free(path);
+	return surface;
 }
 
 static PhiOutlineItem* phi_outline_convert(fz_context* ctx, fz_outline* outline) {

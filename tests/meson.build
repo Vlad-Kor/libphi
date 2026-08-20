@@ -20,3 +20,11 @@ test_device = executable('test-device', 'test-device.c',
 )
 
 test('device-test', test_device)
+
+test_text = executable('test-text', 'test-text.c',
+	include_directories: inc,
+	dependencies: [phi_dep, mupdf_dep],
+	c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
+)
+
+test('text-test', test_text)
