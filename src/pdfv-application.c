@@ -49,7 +49,7 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* workspace_find_accels[] = { "<Control><Shift>f", NULL };
 	const char* find_next_accels[] = { "F3", "<Control>g", NULL };
 	const char* find_prev_accels[] = { "<Shift>F3", "<Control><Shift>g", NULL };
-	const char* go_back_accels[] = { "<Alt>Left", "BackSpace", NULL };
+	const char* go_back_accels[] = { "<Alt>Left", NULL };
 	const char* go_forward_accels[] = { "<Alt>Right", NULL };
 	const char* prev_page_accels[] = { "Page_Up", "p", NULL };
 	const char* next_page_accels[] = { "Page_Down", "n", NULL };

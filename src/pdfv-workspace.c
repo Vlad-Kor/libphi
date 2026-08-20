@@ -13,7 +13,6 @@
 #include <phi/phipage.h>
 
 #define INDEX_BATCH_PAGES 6
-#define SEARCH_MATCHES_PER_DOCUMENT 5
 
 struct _PdfvWorkspaceItem {
   GObject parent_instance;
@@ -248,7 +247,8 @@ static gint scan_item_compare(gconstpointer a, gconstpointer b) {
 
 static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
                               ScanResult *result, GCancellable *cancellable,
-                              GError **error) {
+                              guint *pdf_count, GError **error) {
+  guint descendant_pdf_count = 0;
   GFileEnumerator *enumerator = g_file_enumerate_children(
       folder, G_FILE_ATTRIBUTE_STANDARD_NAME "," G_FILE_ATTRIBUTE_STANDARD_TYPE,
       G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, cancellable, error);
@@ -271,9 +271,10 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
 
     if (type == G_FILE_TYPE_DIRECTORY) {
       GError *child_error = NULL;
+      guint nested_pdf_count = 0;
       GPtrArray *nested = scan_folder(child_file, relative, result, cancellable,
-                                      &child_error);
-      if (nested && nested->len > 0) {
+                                      &nested_pdf_count, &child_error);
+      if (nested && nested_pdf_count > 0) {
         ScanItem *item = g_new0(ScanItem, 1);
         item->file = g_object_ref(child_file);
         item->name = g_strdup(name);
@@ -281,6 +282,7 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
         item->folder = TRUE;
         item->children = nested;
         g_ptr_array_add(children, item);
+        descendant_pdf_count += nested_pdf_count;
       } else if (nested) {
         g_ptr_array_unref(nested);
       }
@@ -303,6 +305,7 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
       g_ptr_array_add(children, item);
       g_ptr_array_add(result->pdf_files, g_object_ref(child_file));
       g_ptr_array_add(result->pdf_paths, g_strdup(relative));
+      descendant_pdf_count++;
     }
 
     g_free(relative);
@@ -317,6 +320,8 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
     g_ptr_array_unref(children);
     return NULL;
   }
+  if (pdf_count)
+    *pdf_count = descendant_pdf_count;
   g_ptr_array_sort(children, scan_item_compare);
   return children;
 }
@@ -329,7 +334,9 @@ static void scan_worker(GTask *task, gpointer source_object, gpointer task_data,
   result->pdf_files = g_ptr_array_new_with_free_func(g_object_unref);
   result->pdf_paths = g_ptr_array_new_with_free_func(g_free);
   GError *error = NULL;
-  result->roots = scan_folder(self->folder, "", result, cancellable, &error);
+  guint pdf_count = 0;
+  result->roots =
+      scan_folder(self->folder, "", result, cancellable, &pdf_count, &error);
   if (!result->roots) {
     scan_result_free(result);
     g_task_return_error(task, error);
@@ -753,26 +760,22 @@ static void search_worker(GTask *task, gpointer source_object,
       IndexedPage *page = g_ptr_array_index(document->pages, p);
       if (!page)
         continue;
-      const gchar *cursor = page->folded;
-      const gchar *found;
-      while ((found = strstr(cursor, needle)) != NULL) {
-        if (!group) {
-          group = g_new0(PdfvWorkspaceResultGroup, 1);
-          group->file = g_object_ref(document->file);
-          group->relative_path = g_strdup(document->relative_path);
-          group->matches = g_ptr_array_new_with_free_func(
-              (GDestroyNotify)workspace_match_free);
-        }
-        PdfvWorkspaceMatch *match = g_new0(PdfvWorkspaceMatch, 1);
-        match->page = p;
-        match->snippet = make_snippet(page->text, page->folded, found);
-        g_ptr_array_add(group->matches, match);
-        if (group->matches->len >= SEARCH_MATCHES_PER_DOCUMENT)
-          break;
-        cursor = found + MAX((gsize)1, strlen(needle));
+      const gchar *found = strstr(page->folded, needle);
+      if (!found)
+        continue;
+      if (!group) {
+        group = g_new0(PdfvWorkspaceResultGroup, 1);
+        group->file = g_object_ref(document->file);
+        group->relative_path = g_strdup(document->relative_path);
+        group->matches = g_ptr_array_new_with_free_func(
+            (GDestroyNotify)workspace_match_free);
       }
-      if (group && group->matches->len >= SEARCH_MATCHES_PER_DOCUMENT)
-        break;
+      /* One concise result per matching page keeps the result model useful
+       * without allowing repeated words on one page to drown out a PDF. */
+      PdfvWorkspaceMatch *match = g_new0(PdfvWorkspaceMatch, 1);
+      match->page = p;
+      match->snippet = make_snippet(page->text, page->folded, found);
+      g_ptr_array_add(group->matches, match);
     }
     if (group)
       g_ptr_array_add(groups, group);

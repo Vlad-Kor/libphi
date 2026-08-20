@@ -10,6 +10,8 @@ typedef struct {
   PdfvWorkspace *workspace;
   GFile *root;
   GFile *nested;
+  GFile *empty;
+  GFile *deep_empty;
   GFile *first;
   GFile *second;
   gboolean finished;
@@ -96,6 +98,12 @@ static void test_workspace_search(void) {
   state.nested = g_file_get_child(state.root, "Nested");
   g_assert_true(g_file_make_directory(state.nested, NULL, &error));
   g_assert_no_error(error);
+  state.empty = g_file_get_child(state.root, "Empty");
+  g_assert_true(g_file_make_directory(state.empty, NULL, &error));
+  g_assert_no_error(error);
+  state.deep_empty = g_file_get_child(state.empty, "Still Empty");
+  g_assert_true(g_file_make_directory(state.deep_empty, NULL, &error));
+  g_assert_no_error(error);
   state.first = g_file_get_child(state.root, "first.pdf");
   state.second = g_file_get_child(state.nested, "second.PDF");
   GFile *fixture =
@@ -123,11 +131,17 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.nested, NULL, &error));
   g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.deep_empty, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.empty, NULL, &error));
+  g_assert_no_error(error);
   g_assert_true(g_file_delete(state.root, NULL, &error));
   g_assert_no_error(error);
   g_object_unref(state.second);
   g_object_unref(state.first);
   g_object_unref(state.nested);
+  g_object_unref(state.deep_empty);
+  g_object_unref(state.empty);
   g_object_unref(state.root);
   g_free(root_path);
 }
