@@ -61,6 +61,7 @@ struct _PdfvWindow {
   GtkWidget *content_overlay;
   GtkWidget *workspace_search_overlay;
   GtkSearchEntry *workspace_search_entry;
+  GtkRevealer *workspace_results_revealer;
   GtkListBox *workspace_results_list;
   GtkLabel *workspace_search_status;
   GPtrArray *workspace_results;
@@ -599,6 +600,13 @@ static GtkListBoxRow *workspace_find_result_row(PdfvWindow *self, gint group,
   return NULL;
 }
 
+static void workspace_search_set_status(PdfvWindow *self,
+                                        const gchar *status) {
+  gboolean visible = status && *status;
+  gtk_label_set_text(self->workspace_search_status, visible ? status : "");
+  gtk_widget_set_visible(GTK_WIDGET(self->workspace_search_status), visible);
+}
+
 static void workspace_document_cache_clear(PdfvWindow *self) {
   if (self->workspace_document_cache)
     g_hash_table_remove_all(self->workspace_document_cache);
@@ -778,32 +786,42 @@ static void workspace_result_row_activated(GtkListBox *box,
 
 static void workspace_results_clear(PdfvWindow *self) {
   gtk_list_box_remove_all(self->workspace_results_list);
+  gtk_revealer_set_reveal_child(self->workspace_results_revealer, FALSE);
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
   self->workspace_result_group = -1;
   self->workspace_result_match = -1;
 }
 
+static void workspace_move_result(PdfvWindow *self, gint direction) {
+  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
+  if (!group || group->matches->len == 0 || direction == 0)
+    return;
+
+  gint next_group = self->workspace_result_group;
+  gint next_match = self->workspace_result_match + direction;
+  if (next_match >= (gint)group->matches->len) {
+    if (next_group + 1 >= (gint)self->workspace_results->len)
+      return;
+    next_group++;
+    next_match = 0;
+  } else if (next_match < 0) {
+    if (next_group == 0)
+      return;
+    next_group--;
+    group = g_ptr_array_index(self->workspace_results, next_group);
+    next_match = (gint)group->matches->len - 1;
+  }
+  workspace_select_result(self, next_group, next_match, TRUE);
+}
+
 static void workspace_result_previous(GtkButton *button, PdfvWindow *self) {
   (void)button;
-  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
-  if (!group || group->matches->len == 0)
-    return;
-  workspace_select_result(
-      self, self->workspace_result_group,
-      (self->workspace_result_match - 1 + (gint)group->matches->len) %
-          (gint)group->matches->len,
-      TRUE);
+  workspace_move_result(self, -1);
 }
 
 static void workspace_result_next(GtkButton *button, PdfvWindow *self) {
   (void)button;
-  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
-  if (!group || group->matches->len == 0)
-    return;
-  workspace_select_result(self, self->workspace_result_group,
-                          (self->workspace_result_match + 1) %
-                              (gint)group->matches->len,
-                          TRUE);
+  workspace_move_result(self, 1);
 }
 
 static GtkWidget *workspace_group_header(PdfvWindow *self, gint group_index,
@@ -844,12 +862,16 @@ static GtkWidget *workspace_group_header(PdfvWindow *self, gint group_index,
   gtk_widget_add_css_class(count, "dim-label");
   gtk_box_append(GTK_BOX(box), count);
 
-  if (active && group->matches->len > 1) {
+  if (active && (self->workspace_results->len > 1 ||
+                 group->matches->len > 1)) {
     GtkWidget *previous =
         gtk_button_new_from_icon_name("go-up-symbolic");
     gtk_widget_add_css_class(previous, "flat");
     gtk_widget_add_css_class(previous, "circular");
     gtk_widget_set_tooltip_text(previous, "Previous result");
+    gtk_widget_set_sensitive(
+        previous,
+        self->workspace_result_group > 0 || self->workspace_result_match > 0);
     g_signal_connect(previous, "clicked",
                      G_CALLBACK(workspace_result_previous), self);
     gtk_box_append(GTK_BOX(box), previous);
@@ -857,6 +879,11 @@ static GtkWidget *workspace_group_header(PdfvWindow *self, gint group_index,
     gtk_widget_add_css_class(next, "flat");
     gtk_widget_add_css_class(next, "circular");
     gtk_widget_set_tooltip_text(next, "Next result");
+    gtk_widget_set_sensitive(
+        next,
+        self->workspace_result_group + 1 <
+                (gint)self->workspace_results->len ||
+            self->workspace_result_match + 1 < (gint)group->matches->len);
     g_signal_connect(next, "clicked", G_CALLBACK(workspace_result_next), self);
     gtk_box_append(GTK_BOX(box), next);
   }
@@ -947,22 +974,18 @@ static void workspace_results_show(PdfvWindow *self, GPtrArray *groups) {
 
   guint indexed = pdfv_workspace_get_indexed_count(self->workspace);
   guint total = pdfv_workspace_get_pdf_count(self->workspace);
-  gchar *status = NULL;
-  if (total > indexed)
-    status = g_strdup_printf("%u result%s · indexing %u of %u PDFs", match_count,
-                             match_count == 1 ? "" : "s", indexed, total);
-  else if (match_count == 0)
-    status = g_strdup("No results");
-  else
-    status = g_strdup_printf("%u result%s", match_count,
-                             match_count == 1 ? "" : "s");
-  gtk_label_set_text(self->workspace_search_status, status);
+  gchar *status = total > indexed
+                      ? g_strdup_printf("Indexing %u of %u PDFs…", indexed,
+                                        total)
+                  : match_count == 0 ? g_strdup("No results") : NULL;
+  workspace_search_set_status(self, status);
   g_free(status);
 
   if (groups->len > 0) {
     self->workspace_result_group = selected_group;
     self->workspace_result_match = selected_match;
     workspace_results_render(self);
+    gtk_revealer_set_reveal_child(self->workspace_results_revealer, TRUE);
   }
 }
 
@@ -993,7 +1016,7 @@ static void on_workspace_search_finished(GObject *source, GAsyncResult *result,
   }
   if (current && error &&
       !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-    gtk_label_set_text(self->workspace_search_status, error->message);
+    workspace_search_set_status(self, error->message);
   g_clear_error(&error);
   g_object_unref(self);
 }
@@ -1012,11 +1035,17 @@ static gboolean workspace_search_start(gpointer user_data) {
   self->workspace_search_cancellable = g_cancellable_new();
   self->workspace_search_running = TRUE;
   self->workspace_index_dirty = FALSE;
-  gtk_label_set_text(self->workspace_search_status, "Searching…");
-  pdfv_workspace_search_async(self->workspace, query,
-                              self->workspace_search_cancellable,
-                              on_workspace_search_finished,
-                              g_object_ref(self));
+  workspace_search_set_status(self, "Searching…");
+  AdwTabPage *origin_page = self->workspace_return_tab;
+  GFile *origin_file = NULL;
+  if (origin_page &&
+      adw_tab_view_get_page_position(self->tab_view, origin_page) >= 0) {
+    GtkWidget *stack = adw_tab_page_get_child(origin_page);
+    origin_file = g_object_get_data(G_OBJECT(stack), "document-file");
+  }
+  pdfv_workspace_search_near_async(
+      self->workspace, query, origin_file, self->workspace_search_cancellable,
+      on_workspace_search_finished, g_object_ref(self));
   return G_SOURCE_REMOVE;
 }
 
@@ -1032,17 +1061,21 @@ static void on_workspace_search_changed(GtkSearchEntry *entry,
   const gchar *query = gtk_editable_get_text(GTK_EDITABLE(entry));
   if (self->workspace_search_cancellable)
     g_cancellable_cancel(self->workspace_search_cancellable);
+  g_clear_object(&self->workspace_search_cancellable);
+  self->workspace_search_running = FALSE;
+  self->workspace_index_dirty = FALSE;
   if (g_utf8_strlen(query, -1) < 2) {
     if (self->workspace_search_debounce_id) {
       g_source_remove(self->workspace_search_debounce_id);
       self->workspace_search_debounce_id = 0;
     }
     workspace_results_clear(self);
-    gtk_label_set_text(self->workspace_search_status,
-                       *query ? "Type at least 2 characters" :
-                                "Search every PDF in this folder");
+    workspace_search_set_status(
+        self, *query ? "Type at least 2 characters" : NULL);
     return;
   }
+  workspace_results_clear(self);
+  workspace_search_set_status(self, "Searching…");
   workspace_search_schedule(self, 180);
 }
 
@@ -1071,22 +1104,12 @@ static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
   (void)controller;
   (void)keycode;
   (void)state;
-  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
   switch (keyval) {
   case GDK_KEY_Down:
-    if (group)
-      workspace_select_result(self, self->workspace_result_group,
-                              (self->workspace_result_match + 1) %
-                                  (gint)group->matches->len,
-                              TRUE);
+    workspace_move_result(self, 1);
     return GDK_EVENT_STOP;
   case GDK_KEY_Up:
-    if (group)
-      workspace_select_result(self, self->workspace_result_group,
-                              (self->workspace_result_match - 1 +
-                               (gint)group->matches->len) %
-                                  (gint)group->matches->len,
-                              TRUE);
+    workspace_move_result(self, -1);
     return GDK_EVENT_STOP;
   case GDK_KEY_Right:
     if (self->workspace_results && self->workspace_results->len > 0)
@@ -1137,8 +1160,14 @@ static void workspace_search_open(PdfvWindow *self) {
   gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
   const gchar *query = gtk_editable_get_text(
       GTK_EDITABLE(self->workspace_search_entry));
-  if (g_utf8_strlen(query, -1) >= 2)
+  if (g_utf8_strlen(query, -1) >= 2) {
+    workspace_results_clear(self);
+    workspace_search_set_status(self, "Searching…");
     workspace_search_schedule(self, 0);
+  } else {
+    workspace_search_set_status(
+        self, *query ? "Type at least 2 characters" : NULL);
+  }
 }
 
 static void workspace_search_close(PdfvWindow *self, gboolean commit) {
@@ -1624,8 +1653,6 @@ static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
   adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
   adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
   adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
-  gtk_label_set_text(self->workspace_search_status,
-                     "Scanning folder for PDFs…");
   pdfv_workspace_load_async(self->workspace, self->workspace_scan_cancellable,
                             on_workspace_loaded, g_object_ref(self));
 }
@@ -2416,7 +2443,7 @@ static void pdfv_window_init(PdfvWindow *self) {
       "  background-color: transparent;"
       "}"
       ".workspace-result-header {"
-      "  background-color: alpha(@window_fg_color, 0.045);"
+      "  background-color: alpha(@window_fg_color, 0.035);"
       "}");
   gtk_style_context_add_provider_for_display(
       gtk_widget_get_display(GTK_WIDGET(self)),
@@ -2429,15 +2456,11 @@ static void pdfv_window_init(PdfvWindow *self) {
                       workspace_search_card);
 
   GtkWidget *workspace_search_header =
-      gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-  gtk_widget_set_margin_top(workspace_search_header, 16);
+      gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+  gtk_widget_set_margin_top(workspace_search_header, 14);
   gtk_widget_set_margin_bottom(workspace_search_header, 14);
-  gtk_widget_set_margin_start(workspace_search_header, 16);
-  gtk_widget_set_margin_end(workspace_search_header, 16);
-  GtkWidget *workspace_search_title = gtk_label_new("Search Workspace");
-  gtk_label_set_xalign(GTK_LABEL(workspace_search_title), 0.0f);
-  gtk_widget_add_css_class(workspace_search_title, "title-3");
-  gtk_box_append(GTK_BOX(workspace_search_header), workspace_search_title);
+  gtk_widget_set_margin_start(workspace_search_header, 14);
+  gtk_widget_set_margin_end(workspace_search_header, 14);
 
   self->workspace_search_entry = GTK_SEARCH_ENTRY(gtk_search_entry_new());
   gtk_search_entry_set_placeholder_text(
@@ -2455,15 +2478,25 @@ static void pdfv_window_init(PdfvWindow *self) {
                             workspace_keys);
   gtk_box_append(GTK_BOX(workspace_search_header),
                  GTK_WIDGET(self->workspace_search_entry));
+
+  self->workspace_search_status = GTK_LABEL(gtk_label_new(NULL));
+  gtk_widget_add_css_class(GTK_WIDGET(self->workspace_search_status),
+                           "dim-label");
+  gtk_label_set_xalign(self->workspace_search_status, 0.0f);
+  gtk_widget_set_margin_start(GTK_WIDGET(self->workspace_search_status), 4);
+  gtk_widget_set_margin_end(GTK_WIDGET(self->workspace_search_status), 4);
+  gtk_widget_set_visible(GTK_WIDGET(self->workspace_search_status), FALSE);
+  gtk_box_append(GTK_BOX(workspace_search_header),
+                 GTK_WIDGET(self->workspace_search_status));
   gtk_box_append(GTK_BOX(workspace_search_card), workspace_search_header);
 
-  GtkWidget *workspace_separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-  gtk_box_append(GTK_BOX(workspace_search_card), workspace_separator);
+  self->workspace_results_revealer = GTK_REVEALER(gtk_revealer_new());
+  gtk_revealer_set_transition_type(self->workspace_results_revealer,
+                                   GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+  gtk_revealer_set_transition_duration(self->workspace_results_revealer, 180);
   GtkWidget *result_scroll = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(result_scroll),
                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(result_scroll),
-                                             220);
   gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(result_scroll),
                                              430);
   gtk_scrolled_window_set_propagate_natural_height(
@@ -2473,31 +2506,18 @@ static void pdfv_window_init(PdfvWindow *self) {
                                   GTK_SELECTION_SINGLE);
   gtk_list_box_set_activate_on_single_click(self->workspace_results_list,
                                             FALSE);
-  gtk_widget_add_css_class(GTK_WIDGET(self->workspace_results_list),
-                           "boxed-list");
-  gtk_widget_set_margin_top(GTK_WIDGET(self->workspace_results_list), 10);
-  gtk_widget_set_margin_bottom(GTK_WIDGET(self->workspace_results_list), 10);
-  gtk_widget_set_margin_start(GTK_WIDGET(self->workspace_results_list), 10);
-  gtk_widget_set_margin_end(GTK_WIDGET(self->workspace_results_list), 10);
+  gtk_widget_set_margin_bottom(GTK_WIDGET(self->workspace_results_list), 8);
+  gtk_widget_set_margin_start(GTK_WIDGET(self->workspace_results_list), 8);
+  gtk_widget_set_margin_end(GTK_WIDGET(self->workspace_results_list), 8);
   g_signal_connect(self->workspace_results_list, "row-selected",
                    G_CALLBACK(on_workspace_result_selected), self);
   g_signal_connect(self->workspace_results_list, "row-activated",
                    G_CALLBACK(workspace_result_row_activated), self);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(result_scroll),
                                 GTK_WIDGET(self->workspace_results_list));
-  gtk_box_append(GTK_BOX(workspace_search_card), result_scroll);
-
-  self->workspace_search_status = GTK_LABEL(gtk_label_new(
-      "Search every PDF in this folder"));
-  gtk_widget_add_css_class(GTK_WIDGET(self->workspace_search_status),
-                           "dim-label");
-  gtk_label_set_xalign(self->workspace_search_status, 0.0f);
-  gtk_widget_set_margin_top(GTK_WIDGET(self->workspace_search_status), 8);
-  gtk_widget_set_margin_bottom(GTK_WIDGET(self->workspace_search_status), 8);
-  gtk_widget_set_margin_start(GTK_WIDGET(self->workspace_search_status), 14);
-  gtk_widget_set_margin_end(GTK_WIDGET(self->workspace_search_status), 14);
+  gtk_revealer_set_child(self->workspace_results_revealer, result_scroll);
   gtk_box_append(GTK_BOX(workspace_search_card),
-                 GTK_WIDGET(self->workspace_search_status));
+                 GTK_WIDGET(self->workspace_results_revealer));
   gtk_widget_set_visible(self->workspace_search_overlay, FALSE);
   gtk_overlay_add_overlay(GTK_OVERLAY(self->content_overlay),
                           self->workspace_search_overlay);

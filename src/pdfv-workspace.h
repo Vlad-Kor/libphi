@@ -61,6 +61,11 @@ void pdfv_workspace_search_async(PdfvWorkspace *self, const gchar *query,
                                  GCancellable *cancellable,
                                  GAsyncReadyCallback callback,
                                  gpointer user_data);
+void pdfv_workspace_search_near_async(PdfvWorkspace *self,
+                                      const gchar *query, GFile *near_file,
+                                      GCancellable *cancellable,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data);
 GPtrArray *pdfv_workspace_search_finish(PdfvWorkspace *self,
                                         GAsyncResult *result,
                                         GError **error);

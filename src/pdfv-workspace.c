@@ -665,6 +665,7 @@ typedef struct {
   GFile *file;
   gchar *relative_path;
   GPtrArray *pages; /* IndexedPage* */
+  guint proximity;
 } SearchDocument;
 
 typedef struct {
@@ -688,7 +689,52 @@ static void search_task_data_free(SearchTaskData *data) {
 static gint search_document_compare(gconstpointer a, gconstpointer b) {
   const SearchDocument *left = *(SearchDocument *const *)a;
   const SearchDocument *right = *(SearchDocument *const *)b;
+  if (left->proximity < right->proximity)
+    return -1;
+  if (left->proximity > right->proximity)
+    return 1;
   return g_utf8_collate(left->relative_path, right->relative_path);
+}
+
+static guint directory_component_count(gchar **components) {
+  guint count = 0;
+  while (components[count])
+    count++;
+  return count;
+}
+
+static guint search_path_proximity(const gchar *near_path,
+                                   const gchar *candidate_path) {
+  if (!near_path)
+    return 0;
+  if (g_str_equal(near_path, candidate_path))
+    return 0;
+
+  gchar *near_directory = g_path_get_dirname(near_path);
+  gchar *candidate_directory = g_path_get_dirname(candidate_path);
+  gchar **near_components = g_str_equal(near_directory, ".")
+                                ? g_new0(gchar *, 1)
+                                : g_strsplit(near_directory,
+                                             G_DIR_SEPARATOR_S, -1);
+  gchar **candidate_components =
+      g_str_equal(candidate_directory, ".")
+          ? g_new0(gchar *, 1)
+          : g_strsplit(candidate_directory, G_DIR_SEPARATOR_S, -1);
+  guint near_count = directory_component_count(near_components);
+  guint candidate_count = directory_component_count(candidate_components);
+  guint common = 0;
+  while (common < near_count && common < candidate_count &&
+         g_str_equal(near_components[common], candidate_components[common]))
+    common++;
+
+  /* Keep the current file ahead of other files in the same directory, then
+   * rank by the number of directory edges between the two PDFs. */
+  guint proximity = 1 + near_count - common + candidate_count - common;
+  g_strfreev(near_components);
+  g_strfreev(candidate_components);
+  g_free(near_directory);
+  g_free(candidate_directory);
+  return proximity;
 }
 
 static void workspace_match_free(PdfvWorkspaceMatch *match) {
@@ -789,6 +835,15 @@ void pdfv_workspace_search_async(PdfvWorkspace *self, const gchar *query,
                                  GCancellable *cancellable,
                                  GAsyncReadyCallback callback,
                                  gpointer user_data) {
+  pdfv_workspace_search_near_async(self, query, NULL, cancellable, callback,
+                                   user_data);
+}
+
+void pdfv_workspace_search_near_async(PdfvWorkspace *self,
+                                      const gchar *query, GFile *near_file,
+                                      GCancellable *cancellable,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data) {
   g_return_if_fail(PDFV_IS_WORKSPACE(self));
   g_return_if_fail(query != NULL);
 
@@ -796,6 +851,9 @@ void pdfv_workspace_search_async(PdfvWorkspace *self, const gchar *query,
   data->query = g_utf8_normalize(query, -1, G_NORMALIZE_DEFAULT_COMPOSE);
   data->documents =
       g_ptr_array_new_with_free_func((GDestroyNotify)search_document_free);
+  gchar *near_path = near_file
+                         ? g_file_get_relative_path(self->folder, near_file)
+                         : NULL;
 
   GHashTableIter iter;
   gpointer value;
@@ -805,6 +863,8 @@ void pdfv_workspace_search_async(PdfvWorkspace *self, const gchar *query,
     SearchDocument *document = g_new0(SearchDocument, 1);
     document->file = g_object_ref(indexed->file);
     document->relative_path = g_strdup(indexed->relative_path);
+    document->proximity =
+        search_path_proximity(near_path, document->relative_path);
     document->pages = g_ptr_array_new_with_free_func(
         (GDestroyNotify)indexed_page_unref);
     g_ptr_array_set_size(document->pages, indexed->pages->len);
@@ -815,11 +875,12 @@ void pdfv_workspace_search_async(PdfvWorkspace *self, const gchar *query,
     }
     g_ptr_array_add(data->documents, document);
   }
+  g_free(near_path);
   g_ptr_array_sort(data->documents, search_document_compare);
 
   GTask *task = g_task_new(self, cancellable, callback, user_data);
   g_task_set_task_data(task, data, (GDestroyNotify)search_task_data_free);
-  g_task_set_source_tag(task, pdfv_workspace_search_async);
+  g_task_set_source_tag(task, pdfv_workspace_search_near_async);
   g_task_run_in_thread(task, search_worker);
   g_object_unref(task);
 }

@@ -36,6 +36,8 @@ static void search_finished(GObject *source, GAsyncResult *result,
   g_assert_no_error(error);
   g_assert_nonnull(groups);
   g_assert_cmpuint(groups->len, ==, 2);
+  PdfvWorkspaceResultGroup *nearest = g_ptr_array_index(groups, 0);
+  g_assert_true(g_file_equal(nearest->file, state->second));
   for (guint i = 0; i < groups->len; i++) {
     PdfvWorkspaceResultGroup *group = g_ptr_array_index(groups, i);
     g_assert_cmpuint(group->matches->len, >, 0);
@@ -55,8 +57,9 @@ static gboolean wait_for_index(gpointer user_data) {
   TestState *state = user_data;
   if (pdfv_workspace_get_indexed_count(state->workspace) < 2)
     return G_SOURCE_CONTINUE;
-  pdfv_workspace_search_async(state->workspace, "präsentiert", NULL,
-                              search_finished, state);
+  pdfv_workspace_search_near_async(state->workspace, "präsentiert",
+                                   state->second, NULL, search_finished,
+                                   state);
   return G_SOURCE_REMOVE;
 }
 
