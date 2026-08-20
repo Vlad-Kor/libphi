@@ -38,3 +38,13 @@ test_workspace = executable('test-workspace',
 )
 
 test('workspace-test', test_workspace, timeout: 30)
+
+test_document_view = executable('test-document-view',
+	'test-document-view.c',
+	'../src/pdfv-document-view.c',
+	include_directories: [inc, include_directories('../src')],
+	dependencies: [phi_dep, mupdf_dep, adw_dep],
+	c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
+)
+
+test('document-view-test', test_document_view)

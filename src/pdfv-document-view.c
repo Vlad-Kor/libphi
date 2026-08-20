@@ -21,7 +21,14 @@
 
 typedef struct {
     gint page;
-    gdouble scroll_y;
+    gdouble page_fraction;
+    gdouble gap_offset;
+    gboolean in_gap;
+} VerticalAnchor;
+
+typedef struct {
+    VerticalAnchor top;
+    gdouble center_x;
 } HistoryEntry;
 
 /* Search result for a single page */
@@ -49,7 +56,6 @@ struct _PdfvDocumentView {
     /* Navigation history */
     GArray* history;
     gint history_pos;
-    gboolean navigating; /* True when navigating via back/forward */
     
     /* Cached page sizes for layout */
     GArray* page_heights;
@@ -78,6 +84,8 @@ struct _PdfvDocumentView {
     gdouble pinch_start_zoom;
     gdouble pinch_center_x;
     gdouble pinch_center_y;
+    gdouble pinch_anchor_x;
+    VerticalAnchor pinch_anchor_y;
     
     /* Middle-click pan state */
     gdouble pan_start_scroll_x;
@@ -141,6 +149,10 @@ static guint signals[N_SIGNALS];
 
 static void pdfv_document_view_scrollable_init(GtkScrollableInterface* iface);
 static void zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y);
+static void zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom,
+                             gdouble anchor_x,
+                             const VerticalAnchor* anchor_y,
+                             gdouble focus_x, gdouble focus_y);
 static gboolean screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y, gint* page_num, graphene_point_t* page_point);
 static void update_selection_quads(PdfvDocumentView* self);
 
@@ -288,33 +300,108 @@ get_page_offset(PdfvDocumentView* self, gint page)
     return g_array_index(self->page_offsets, gdouble, page);
 }
 
-static void
-push_history(PdfvDocumentView* self)
+static VerticalAnchor
+vertical_anchor_at(PdfvDocumentView* self, gdouble document_y)
 {
-    if (self->navigating)
-        return;
-    
-    /* Remove any forward history */
-    if (self->history_pos < (gint)self->history->len - 1) {
-        g_array_set_size(self->history, self->history_pos + 1);
+    VerticalAnchor anchor = { 0 };
+    if (!self->document || self->page_offsets->len == 0)
+        return anchor;
+
+    gdouble page_offset = 0;
+    anchor.page = get_page_at_offset(self, document_y, &page_offset);
+    gdouble page_height =
+        g_array_index(self->page_heights, gdouble, anchor.page);
+    gdouble within_page = MAX(0, document_y - page_offset);
+    if (within_page > page_height &&
+        anchor.page + 1 < (gint)self->page_offsets->len) {
+        anchor.page_fraction = 1.0;
+        anchor.gap_offset = within_page - page_height;
+        anchor.in_gap = TRUE;
+    } else if (page_height > 0) {
+        anchor.page_fraction = within_page / page_height;
     }
-    
+    return anchor;
+}
+
+static gdouble
+vertical_anchor_position(PdfvDocumentView* self,
+                         const VerticalAnchor* anchor)
+{
+    if (!self->document || self->page_offsets->len == 0)
+        return 0;
+
+    gint page = CLAMP(anchor->page, 0, (gint)self->page_offsets->len - 1);
+    gdouble page_offset =
+        g_array_index(self->page_offsets, gdouble, page);
+    gdouble page_height =
+        g_array_index(self->page_heights, gdouble, page);
+    return page_offset + page_height * anchor->page_fraction +
+        (anchor->in_gap ? anchor->gap_offset : 0);
+}
+
+static HistoryEntry
+current_history_entry(PdfvDocumentView* self)
+{
     HistoryEntry entry = {
-        .page = self->current_page,
-        .scroll_y = self->scroll_y
+        .top = vertical_anchor_at(self, self->scroll_y),
+        .center_x = self->zoom > 0 ? self->scroll_x / self->zoom : 0
     };
-    
-    g_array_append_val(self->history, entry);
-    
-    /* Limit history size */
-    if (self->history->len > MAX_HISTORY) {
-        g_array_remove_index(self->history, 0);
-    }
-    
-    self->history_pos = self->history->len - 1;
-    
+    return entry;
+}
+
+static void
+notify_history_changed(PdfvDocumentView* self)
+{
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_BACK]);
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_FORWARD]);
+}
+
+static void
+save_current_history_entry(PdfvDocumentView* self)
+{
+    if (self->history_pos < 0 ||
+        self->history_pos >= (gint)self->history->len)
+        return;
+    g_array_index(self->history, HistoryEntry, self->history_pos) =
+        current_history_entry(self);
+}
+
+static void
+append_current_history_entry(PdfvDocumentView* self)
+{
+    HistoryEntry entry = current_history_entry(self);
+    g_array_append_val(self->history, entry);
+    self->history_pos = self->history->len - 1;
+}
+
+static void
+navigate_to_page_with_history(PdfvDocumentView* self, gint page)
+{
+    if (self->history_pos < 0)
+        append_current_history_entry(self);
+    else
+        save_current_history_entry(self);
+
+    if (self->history_pos < (gint)self->history->len - 1)
+        g_array_set_size(self->history, self->history_pos + 1);
+
+    pdfv_document_view_go_to_page(self, page);
+    append_current_history_entry(self);
+
+    while (self->history->len > MAX_HISTORY) {
+        g_array_remove_index(self->history, 0);
+        self->history_pos--;
+    }
+    notify_history_changed(self);
+}
+
+static void
+restore_history_entry(PdfvDocumentView* self, const HistoryEntry* entry)
+{
+    self->scroll_y = vertical_anchor_position(self, &entry->top);
+    self->scroll_x = entry->center_x * self->zoom;
+    update_adjustments(self);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
 static GskRenderNode*
@@ -726,16 +813,7 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
     
     PhiLink* link = find_link_at(self, x, y);
     if (link && link->uri) {
-        push_history(self);
-        
-        /* Try to resolve as internal link */
-        PhiLinkDest dest;
-        if (phi_document_resolve_link(self->document, link->uri, &dest)) {
-            pdfv_document_view_go_to_page(self, dest.page);
-        } else {
-            /* External URI */
-            g_signal_emit(self, signals[SIGNAL_LINK_ACTIVATED], 0, link->uri);
-        }
+        pdfv_document_view_activate_link(self, link->uri);
     } else {
         /* Single click not on link - clear selection */
         if (self->selection_quad_count > 0) {
@@ -809,6 +887,17 @@ on_zoom_begin(GtkGestureZoom* gesture, GdkEventSequence* sequence,
         self->pinch_center_x = width / 2.0;
         self->pinch_center_y = height / 2.0;
     }
+
+    gint width = gtk_widget_get_width(GTK_WIDGET(self));
+    self->pinch_anchor_x = self->zoom > 0
+        ? (self->scroll_x + self->pinch_center_x - width / 2.0) / self->zoom
+        : 0;
+    self->pinch_anchor_y = vertical_anchor_at(
+        self, self->scroll_y + self->pinch_center_y);
+
+    /* Prevent the surrounding GtkScrolledWindow from interpreting the same
+     * native pinch as a scroll sequence. */
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 }
 
 static void
@@ -823,7 +912,9 @@ on_zoom_scale_changed(GtkGestureZoom* gesture, gdouble scale,
     }
     
     gdouble new_zoom = self->pinch_start_zoom * scale;
-    zoom_at_point(self, new_zoom, self->pinch_center_x, self->pinch_center_y);
+    zoom_from_anchor(self, new_zoom, self->pinch_anchor_x,
+                     &self->pinch_anchor_y, self->pinch_center_x,
+                     self->pinch_center_y);
 }
 
 static gboolean
@@ -835,7 +926,7 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
         GTK_EVENT_CONTROLLER(controller));
     
     if (state & GDK_CONTROL_MASK) {
-        if (dy == 0.0)
+        if (dy == 0.0 || !isfinite(dy))
             return TRUE;
 
         /* Zoom with Ctrl+Scroll towards cursor position */
@@ -849,13 +940,19 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
         x = CLAMP(x, 0, gtk_widget_get_width(GTK_WIDGET(self)));
         y = CLAMP(y, 0, gtk_widget_get_height(GTK_WIDGET(self)));
         
-        gdouble new_zoom;
-        if (dy < 0)
-            new_zoom = self->zoom * ZOOM_STEP;
-        else
-            new_zoom = self->zoom / ZOOM_STEP;
+        GdkScrollUnit unit = gtk_event_controller_scroll_get_unit(
+            GTK_EVENT_CONTROLLER_SCROLL(controller));
+        gdouble factor;
+        if (unit == GDK_SCROLL_UNIT_SURFACE) {
+            /* Smooth touchpad deltas are surface pixels, not wheel notches.
+             * About 300 pixels doubles the zoom and each individual event is
+             * capped so a malformed delta cannot fling the document. */
+            factor = pow(2.0, -CLAMP(dy, -300.0, 300.0) / 300.0);
+        } else {
+            factor = pow(ZOOM_STEP, -CLAMP(dy, -4.0, 4.0));
+        }
         
-        zoom_at_point(self, new_zoom, x, y);
+        zoom_at_point(self, self->zoom * factor, x, y);
         return TRUE;
     }
     
@@ -1373,6 +1470,7 @@ pdfv_document_view_set_document(PdfvDocumentView* self, PhiDocument* document)
     update_adjustments(self);
     gtk_widget_queue_resize(GTK_WIDGET(self));
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_DOCUMENT]);
+    notify_history_changed(self);
 }
 
 PhiDocument*
@@ -1412,77 +1510,64 @@ void
 pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
-    
-    zoom = CLAMP(zoom, MIN_ZOOM, MAX_ZOOM);
-    if (zoom == self->zoom)
-        return;
-    
-    gint width = gtk_widget_get_width(GTK_WIDGET(self));
-    gint height = gtk_widget_get_height(GTK_WIDGET(self));
-    
-    gdouble old_zoom = self->zoom;
-    self->zoom = zoom;
-    /* Don't clear render cache - we cache base nodes now */
-    calculate_layout(self);
-    
-    /* Restore page position - scale scroll to maintain relative position */
-    gdouble ratio = zoom / old_zoom;
-    self->scroll_y *= ratio;
-    self->scroll_x *= ratio;
-    
-    /* Clamp scroll values to keep document visible */
-    gdouble max_scroll_y = MAX(0, self->total_height - height);
-    self->scroll_y = CLAMP(self->scroll_y, 0, max_scroll_y);
-    
-    gdouble scroll_range = MAX(0, self->max_width - width);
-    gdouble min_scroll_x = -scroll_range / 2.0;
-    gdouble max_scroll_x = scroll_range / 2.0;
-    self->scroll_x = CLAMP(self->scroll_x, min_scroll_x, max_scroll_x);
-    
-    update_adjustments(self);
-    gtk_widget_queue_draw(GTK_WIDGET(self));
-    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_ZOOM]);
+
+    zoom_at_point(self, zoom,
+                  gtk_widget_get_width(GTK_WIDGET(self)) / 2.0,
+                  gtk_widget_get_height(GTK_WIDGET(self)) / 2.0);
 }
 
-/* Zoom towards a specific point in widget coordinates */
 static void
-zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y)
+zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom, gdouble anchor_x,
+                 const VerticalAnchor* anchor_y, gdouble focus_x,
+                 gdouble focus_y)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
-    
+
     new_zoom = CLAMP(new_zoom, MIN_ZOOM, MAX_ZOOM);
-    if (new_zoom == self->zoom)
+    if (!isfinite(new_zoom) || new_zoom == self->zoom)
         return;
-    
+
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
-    
-    /* Calculate the document position under the focus point */
-    gdouble doc_x = self->scroll_x + focus_x - width / 2.0;
-    gdouble doc_y = self->scroll_y + focus_y;
-    
-    gdouble ratio = new_zoom / self->zoom;
-    
+
     self->zoom = new_zoom;
     calculate_layout(self);
-    
-    /* Adjust scroll so the same document position stays under the focus point */
-    self->scroll_x = doc_x * ratio - focus_x + width / 2.0;
-    self->scroll_y = doc_y * ratio - focus_y;
-    
+
+    /* The vertical anchor is relative to a page. PAGE_GAP is deliberately
+     * fixed-size, so scaling the entire document offset would increasingly
+     * drift upward on later pages. */
+    self->scroll_x = anchor_x * new_zoom - focus_x + width / 2.0;
+    self->scroll_y = vertical_anchor_position(self, anchor_y) - focus_y;
+
     /* Clamp vertical scroll */
     gdouble max_scroll_y = MAX(0, self->total_height - height);
     self->scroll_y = CLAMP(self->scroll_y, 0, max_scroll_y);
-    
+
     /* Clamp horizontal scroll - same logic as update_adjustments */
     gdouble scroll_range = MAX(0, self->max_width - width);
     gdouble min_scroll_x = -scroll_range / 2.0;
     gdouble max_scroll_x = scroll_range / 2.0;
     self->scroll_x = CLAMP(self->scroll_x, min_scroll_x, max_scroll_x);
-    
+
     update_adjustments(self);
     gtk_widget_queue_draw(GTK_WIDGET(self));
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_ZOOM]);
+}
+
+/* Zoom towards a specific point in widget coordinates. */
+static void
+zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x,
+              gdouble focus_y)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+
+    gint width = gtk_widget_get_width(GTK_WIDGET(self));
+    gdouble anchor_x = self->zoom > 0
+        ? (self->scroll_x + focus_x - width / 2.0) / self->zoom
+        : 0;
+    VerticalAnchor anchor_y = vertical_anchor_at(
+        self, self->scroll_y + focus_y);
+    zoom_from_anchor(self, new_zoom, anchor_x, &anchor_y, focus_x, focus_y);
 }
 
 gdouble
@@ -1633,21 +1718,13 @@ pdfv_document_view_go_back(PdfvDocumentView* self)
     
     if (!pdfv_document_view_can_go_back(self))
         return;
-    
-    self->navigating = TRUE;
+
+    save_current_history_entry(self);
     self->history_pos--;
-    
+
     HistoryEntry* entry = &g_array_index(self->history, HistoryEntry, self->history_pos);
-    self->scroll_y = entry->scroll_y;
-    
-    if (self->vadjustment)
-        gtk_adjustment_set_value(self->vadjustment, self->scroll_y);
-    
-    self->navigating = FALSE;
-    
-    gtk_widget_queue_draw(GTK_WIDGET(self));
-    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_BACK]);
-    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_FORWARD]);
+    restore_history_entry(self, entry);
+    notify_history_changed(self);
 }
 
 void
@@ -1657,21 +1734,13 @@ pdfv_document_view_go_forward(PdfvDocumentView* self)
     
     if (!pdfv_document_view_can_go_forward(self))
         return;
-    
-    self->navigating = TRUE;
+
+    save_current_history_entry(self);
     self->history_pos++;
-    
+
     HistoryEntry* entry = &g_array_index(self->history, HistoryEntry, self->history_pos);
-    self->scroll_y = entry->scroll_y;
-    
-    if (self->vadjustment)
-        gtk_adjustment_set_value(self->vadjustment, self->scroll_y);
-    
-    self->navigating = FALSE;
-    
-    gtk_widget_queue_draw(GTK_WIDGET(self));
-    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_BACK]);
-    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_FORWARD]);
+    restore_history_entry(self, entry);
+    notify_history_changed(self);
 }
 
 void
@@ -1679,14 +1748,13 @@ pdfv_document_view_activate_link(PdfvDocumentView* self, const gchar* uri)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
     g_return_if_fail(uri != NULL);
+    g_return_if_fail(self->document != NULL);
     
     /* Try to resolve as internal link first */
     PhiLinkDest dest;
     if (phi_document_resolve_link(self->document, uri, &dest)) {
-        if (dest.page >= 0) {
-            push_history(self);
-            pdfv_document_view_go_to_page(self, dest.page);
-        }
+        if (dest.page >= 0)
+            navigate_to_page_with_history(self, dest.page);
     } else {
         /* External URI */
         g_signal_emit(self, signals[SIGNAL_LINK_ACTIVATED], 0, uri);
