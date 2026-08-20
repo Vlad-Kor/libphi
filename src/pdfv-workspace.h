@@ -1,5 +1,5 @@
 /*
- * Phi PDF Viewer - workspace discovery and in-memory PDF indexing
+ * Phi PDF Viewer - workspace discovery and cached PDF indexing
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -43,6 +43,7 @@ void pdfv_workspace_cancel(PdfvWorkspace *self);
 
 guint pdfv_workspace_get_pdf_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_indexed_count(PdfvWorkspace *self);
+guint pdfv_workspace_get_cache_hit_count(PdfvWorkspace *self);
 
 typedef struct {
   gint page;

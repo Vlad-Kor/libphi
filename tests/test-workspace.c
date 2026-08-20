@@ -5,6 +5,8 @@
 
 #include "pdfv-workspace.h"
 
+#include <glib/gstdio.h>
+
 typedef struct {
   GMainLoop *loop;
   PdfvWorkspace *workspace;
@@ -16,7 +18,10 @@ typedef struct {
   GFile *second;
   gboolean finished;
   guint timeout_id;
+  guint expected_cache_hits;
 } TestState;
+
+static gchar *test_cache_home;
 
 static gboolean test_timeout(gpointer user_data) {
   TestState *state = user_data;
@@ -44,6 +49,8 @@ static void search_finished(GObject *source, GAsyncResult *result,
     PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, 0);
     g_assert_nonnull(g_strstr_len(match->snippet, -1, "präsentiert"));
   }
+  g_assert_cmpuint(pdfv_workspace_get_cache_hit_count(state->workspace), ==,
+                   state->expected_cache_hits);
   g_ptr_array_unref(groups);
   state->finished = TRUE;
   if (state->timeout_id) {
@@ -89,6 +96,52 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
   g_timeout_add(10, wait_for_index, state);
 }
 
+static void load_search_and_wait(TestState *state, guint expected_cache_hits) {
+  state->finished = FALSE;
+  state->expected_cache_hits = expected_cache_hits;
+  state->workspace = pdfv_workspace_new(state->root);
+  pdfv_workspace_load_async(state->workspace, NULL, workspace_loaded, state);
+  state->timeout_id = g_timeout_add_seconds(15, test_timeout, state);
+  g_main_loop_run(state->loop);
+  g_assert_true(state->finished);
+}
+
+static gchar *workspace_cache_directory(GFile *root) {
+  gchar *uri = g_file_get_uri(root);
+  gchar *key =
+      g_compute_checksum_for_string(G_CHECKSUM_SHA256, uri, -1);
+  gchar *directory =
+      g_build_filename(g_get_user_cache_dir(), "phi-pdf-viewer",
+                       "workspace-index-v1", key, NULL);
+  g_free(key);
+  g_free(uri);
+  return directory;
+}
+
+static gchar *document_cache_filename(const gchar *directory,
+                                      const gchar *relative_path) {
+  gchar *key = g_compute_checksum_for_string(G_CHECKSUM_SHA256, relative_path,
+                                             -1);
+  gchar *basename = g_strconcat(key, ".idx", NULL);
+  gchar *filename = g_build_filename(directory, basename, NULL);
+  g_free(basename);
+  g_free(key);
+  return filename;
+}
+
+static guint count_cache_entries(const gchar *directory) {
+  GDir *dir = g_dir_open(directory, 0, NULL);
+  g_assert_nonnull(dir);
+  guint count = 0;
+  const gchar *name = NULL;
+  while ((name = g_dir_read_name(dir))) {
+    if (g_str_has_suffix(name, ".idx"))
+      count++;
+  }
+  g_dir_close(dir);
+  return count;
+}
+
 static void test_workspace_search(void) {
   GError *error = NULL;
   gchar *root_path = g_dir_make_tmp("pdfv-workspace-test-XXXXXX", &error);
@@ -119,11 +172,45 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_object_unref(fixture);
 
-  state.workspace = pdfv_workspace_new(state.root);
-  pdfv_workspace_load_async(state.workspace, NULL, workspace_loaded, &state);
-  state.timeout_id = g_timeout_add_seconds(15, test_timeout, &state);
-  g_main_loop_run(state.loop);
-  g_assert_true(state.finished);
+  /* The first run extracts both PDFs and creates entries outside the
+   * workspace. The second run must load both documents from those entries. */
+  load_search_and_wait(&state, 0);
+  g_object_unref(state.workspace);
+  state.workspace = NULL;
+
+  gchar *cache_directory = workspace_cache_directory(state.root);
+  g_assert_false(g_str_has_prefix(cache_directory, root_path));
+  g_assert_cmpuint(count_cache_entries(cache_directory), ==, 2);
+
+  load_search_and_wait(&state, 2);
+  g_object_unref(state.workspace);
+  state.workspace = NULL;
+
+  /* A damaged entry is ignored and repaired without affecting other PDFs. */
+  gchar *first_cache =
+      document_cache_filename(cache_directory, "first.pdf");
+  g_assert_true(g_file_set_contents(first_cache, "damaged", -1, &error));
+  g_assert_no_error(error);
+  load_search_and_wait(&state, 1);
+  g_object_unref(state.workspace);
+  state.workspace = NULL;
+  g_free(first_cache);
+
+  /* Changing one PDF invalidates only that entry; the other remains a hit. */
+  GFileOutputStream *stream = g_file_append_to(
+      state.first, G_FILE_CREATE_NONE, NULL, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(stream);
+  gsize written = 0;
+  g_assert_true(g_output_stream_write_all(G_OUTPUT_STREAM(stream), "\n", 1,
+                                          &written, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_cmpuint(written, ==, 1);
+  g_assert_true(g_output_stream_close(G_OUTPUT_STREAM(stream), NULL, &error));
+  g_assert_no_error(error);
+  g_object_unref(stream);
+
+  load_search_and_wait(&state, 1);
 
   pdfv_workspace_cancel(state.workspace);
   g_object_unref(state.workspace);
@@ -146,12 +233,42 @@ static void test_workspace_search(void) {
   g_object_unref(state.deep_empty);
   g_object_unref(state.empty);
   g_object_unref(state.root);
+  GDir *cache = g_dir_open(cache_directory, 0, NULL);
+  g_assert_nonnull(cache);
+  const gchar *entry = NULL;
+  while ((entry = g_dir_read_name(cache))) {
+    gchar *filename = g_build_filename(cache_directory, entry, NULL);
+    g_assert_cmpint(g_remove(filename), ==, 0);
+    g_free(filename);
+  }
+  g_dir_close(cache);
+  g_assert_cmpint(g_rmdir(cache_directory), ==, 0);
+  g_free(cache_directory);
   g_free(root_path);
 }
 
 int main(int argc, char **argv) {
+  GError *error = NULL;
+  test_cache_home =
+      g_dir_make_tmp("pdfv-workspace-cache-test-XXXXXX", &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(test_cache_home);
+  g_setenv("XDG_CACHE_HOME", test_cache_home, TRUE);
+
   g_test_init(&argc, &argv, NULL);
   g_test_add_func("/workspace/recursive-unicode-search",
                   test_workspace_search);
-  return g_test_run();
+  gint status = g_test_run();
+  gchar *version_directory =
+      g_build_filename(test_cache_home, "phi-pdf-viewer",
+                       "workspace-index-v1", NULL);
+  gchar *application_directory =
+      g_build_filename(test_cache_home, "phi-pdf-viewer", NULL);
+  g_assert_cmpint(g_rmdir(version_directory), ==, 0);
+  g_assert_cmpint(g_rmdir(application_directory), ==, 0);
+  g_assert_cmpint(g_rmdir(test_cache_home), ==, 0);
+  g_free(application_directory);
+  g_free(version_directory);
+  g_free(test_cache_home);
+  return status;
 }

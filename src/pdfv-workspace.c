@@ -1,5 +1,5 @@
 /*
- * Phi PDF Viewer - workspace discovery and in-memory PDF indexing
+ * Phi PDF Viewer - workspace discovery and cached PDF indexing
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -11,8 +11,13 @@
 #include "pdfv-workspace.h"
 
 #include <phi/phipage.h>
+#include <glib/gstdio.h>
 
 #define INDEX_BATCH_PAGES 6
+#define INDEX_CACHE_MAGIC "phi-workspace-index"
+#define INDEX_CACHE_VERSION 1
+#define INDEX_CACHE_DIRECTORY "workspace-index-v1"
+#define INDEX_CACHE_VARIANT_TYPE G_VARIANT_TYPE("(sustttas)")
 
 struct _PdfvWorkspaceItem {
   GObject parent_instance;
@@ -94,6 +99,12 @@ typedef struct {
   gboolean complete;
 } IndexedDocument;
 
+typedef struct {
+  guint64 size;
+  guint64 modified;
+  guint64 changed;
+} FileFingerprint;
+
 struct _PdfvWorkspace {
   GObject parent_instance;
   GFile *folder;
@@ -102,6 +113,7 @@ struct _PdfvWorkspace {
   GHashTable *index; /* URI -> IndexedDocument */
   guint pdf_count;
   guint indexed_count;
+  guint cache_hit_count;
   gint generation;
 };
 
@@ -152,6 +164,160 @@ static void indexed_page_unref(IndexedPage *page) {
   g_free(page->text);
   g_free(page->folded);
   g_free(page);
+}
+
+static guint64 file_info_timestamp(GFileInfo *info, const gchar *seconds_key,
+                                   const gchar *useconds_key) {
+  guint64 seconds = g_file_info_get_attribute_uint64(info, seconds_key);
+  guint64 useconds = g_file_info_get_attribute_uint32(info, useconds_key);
+  return seconds * G_USEC_PER_SEC + useconds;
+}
+
+static gboolean file_fingerprint(GFile *file, FileFingerprint *fingerprint) {
+  GError *error = NULL;
+  GFileInfo *info = g_file_query_info(
+      file,
+      G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_TIME_MODIFIED ","
+      G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC "," G_FILE_ATTRIBUTE_TIME_CHANGED ","
+      G_FILE_ATTRIBUTE_TIME_CHANGED_USEC,
+      G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL, &error);
+  if (!info) {
+    g_debug("Could not inspect PDF for the workspace cache: %s",
+            error->message);
+    g_clear_error(&error);
+    return FALSE;
+  }
+
+  fingerprint->size = g_file_info_get_size(info);
+  fingerprint->modified =
+      file_info_timestamp(info, G_FILE_ATTRIBUTE_TIME_MODIFIED,
+                          G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC);
+  fingerprint->changed =
+      file_info_timestamp(info, G_FILE_ATTRIBUTE_TIME_CHANGED,
+                          G_FILE_ATTRIBUTE_TIME_CHANGED_USEC);
+  g_object_unref(info);
+  return TRUE;
+}
+
+static gchar *workspace_cache_directory(PdfvWorkspace *self) {
+  gchar *workspace_uri = g_file_get_uri(self->folder);
+  gchar *workspace_key = g_compute_checksum_for_string(
+      G_CHECKSUM_SHA256, workspace_uri, -1);
+  gchar *directory =
+      g_build_filename(g_get_user_cache_dir(), "phi-pdf-viewer",
+                       INDEX_CACHE_DIRECTORY, workspace_key, NULL);
+  g_free(workspace_key);
+  g_free(workspace_uri);
+  return directory;
+}
+
+static gchar *document_cache_filename(PdfvWorkspace *self,
+                                      const gchar *relative_path) {
+  gchar *directory = workspace_cache_directory(self);
+  gchar *document_key = g_compute_checksum_for_string(
+      G_CHECKSUM_SHA256, relative_path, -1);
+  gchar *basename = g_strconcat(document_key, ".idx", NULL);
+  gchar *filename = g_build_filename(directory, basename, NULL);
+  g_free(basename);
+  g_free(document_key);
+  g_free(directory);
+  return filename;
+}
+
+static GPtrArray *index_cache_load(PdfvWorkspace *self, GFile *file,
+                                   const gchar *relative_path) {
+  FileFingerprint fingerprint;
+  if (!file_fingerprint(file, &fingerprint))
+    return NULL;
+
+  gchar *filename = document_cache_filename(self, relative_path);
+  gchar *contents = NULL;
+  gsize length = 0;
+  if (!g_file_get_contents(filename, &contents, &length, NULL)) {
+    g_free(filename);
+    return NULL;
+  }
+
+  GVariant *entry = g_variant_ref_sink(g_variant_new_from_data(
+      INDEX_CACHE_VARIANT_TYPE, contents, length, FALSE, g_free, contents));
+  if (!g_variant_is_normal_form(entry)) {
+    g_debug("Ignoring corrupt workspace index entry %s", filename);
+    g_variant_unref(entry);
+    g_free(filename);
+    return NULL;
+  }
+
+  const gchar *magic = NULL;
+  guint32 version = 0;
+  const gchar *cached_uri = NULL;
+  guint64 cached_size = 0;
+  guint64 cached_modified = 0;
+  guint64 cached_changed = 0;
+  GVariant *page_values = NULL;
+  g_variant_get(entry, "(&su&sttt@as)", &magic, &version, &cached_uri,
+                &cached_size, &cached_modified, &cached_changed, &page_values);
+  gchar *uri = g_file_get_uri(file);
+  gboolean valid = g_str_equal(magic, INDEX_CACHE_MAGIC) &&
+                   version == INDEX_CACHE_VERSION &&
+                   g_str_equal(cached_uri, uri) &&
+                   cached_size == fingerprint.size &&
+                   cached_modified == fingerprint.modified &&
+                   cached_changed == fingerprint.changed;
+  g_free(uri);
+
+  GPtrArray *pages = NULL;
+  if (valid) {
+    pages = g_ptr_array_new_with_free_func((GDestroyNotify)indexed_page_unref);
+    for (gsize i = 0; i < g_variant_n_children(page_values); i++) {
+      GVariant *value = g_variant_get_child_value(page_values, i);
+      g_ptr_array_add(pages,
+                      indexed_page_new(g_strdup(g_variant_get_string(value,
+                                                                     NULL))));
+      g_variant_unref(value);
+    }
+  }
+
+  g_variant_unref(page_values);
+  g_variant_unref(entry);
+  g_free(filename);
+  return pages;
+}
+
+static void index_cache_store(PdfvWorkspace *self, GFile *file,
+                              const gchar *relative_path, GPtrArray *pages) {
+  FileFingerprint fingerprint;
+  if (!file_fingerprint(file, &fingerprint))
+    return;
+
+  GVariantBuilder page_values;
+  g_variant_builder_init(&page_values, G_VARIANT_TYPE("as"));
+  for (guint i = 0; i < pages->len; i++) {
+    IndexedPage *page = g_ptr_array_index(pages, i);
+    if (!page)
+      return;
+    g_variant_builder_add(&page_values, "s", page->text);
+  }
+
+  gchar *uri = g_file_get_uri(file);
+  GVariant *entry = g_variant_ref_sink(g_variant_new(
+      "(sustttas)", INDEX_CACHE_MAGIC, (guint32)INDEX_CACHE_VERSION, uri,
+      fingerprint.size, fingerprint.modified, fingerprint.changed,
+      &page_values));
+  gchar *filename = document_cache_filename(self, relative_path);
+  gchar *directory = g_path_get_dirname(filename);
+  GError *error = NULL;
+  if (g_mkdir_with_parents(directory, 0700) != 0 ||
+      !g_file_set_contents_full(filename, g_variant_get_data(entry),
+                                g_variant_get_size(entry),
+                                G_FILE_SET_CONTENTS_CONSISTENT, 0600, &error)) {
+    g_debug("Could not save workspace index entry %s: %s", filename,
+            error ? error->message : "could not create cache directory");
+  }
+  g_clear_error(&error);
+  g_free(directory);
+  g_free(filename);
+  g_variant_unref(entry);
+  g_free(uri);
 }
 
 static void indexed_document_free(IndexedDocument *document) {
@@ -220,6 +386,11 @@ guint pdfv_workspace_get_pdf_count(PdfvWorkspace *self) {
 guint pdfv_workspace_get_indexed_count(PdfvWorkspace *self) {
   g_return_val_if_fail(PDFV_IS_WORKSPACE(self), 0);
   return self->indexed_count;
+}
+
+guint pdfv_workspace_get_cache_hit_count(PdfvWorkspace *self) {
+  g_return_val_if_fail(PDFV_IS_WORKSPACE(self), 0);
+  return self->cache_hit_count;
 }
 
 void pdfv_workspace_cancel(PdfvWorkspace *self) {
@@ -388,6 +559,8 @@ typedef struct {
   PdfvWorkspace *workspace;
   gint generation;
   gchar *relative_path;
+  gboolean cache_checked;
+  GPtrArray *cache_pages; /* IndexedPage* accumulated until an atomic write */
 } PdfJob;
 
 typedef struct {
@@ -399,6 +572,7 @@ typedef struct {
   gint n_pages;
   GPtrArray *pages; /* IndexedPage* */
   gboolean complete;
+  gboolean from_cache;
   GError *error;
 } IndexBatch;
 
@@ -446,6 +620,7 @@ static void pdf_job_free(PdfJob *job) {
   g_clear_object(&job->document);
   g_clear_object(&job->workspace);
   g_free(job->relative_path);
+  g_clear_pointer(&job->cache_pages, g_ptr_array_unref);
   g_free(job);
 }
 
@@ -492,6 +667,8 @@ static gboolean index_batch_complete(gpointer user_data) {
     if (batch->complete && !document->complete) {
       document->complete = TRUE;
       self->indexed_count++;
+      if (batch->from_cache)
+        self->cache_hit_count++;
     }
     g_free(uri);
     g_signal_emit(self, workspace_signals[SIGNAL_INDEX_UPDATED], 0);
@@ -573,6 +750,26 @@ static void pdf_job_worker(gpointer user_data, gpointer pool_data) {
     return;
   }
 
+  if (!job->cache_checked) {
+    job->cache_checked = TRUE;
+    GPtrArray *cached_pages = index_cache_load(
+        job->workspace, job->file, job->relative_path);
+    if (cached_pages) {
+      IndexBatch *batch = g_new0(IndexBatch, 1);
+      batch->workspace = g_object_ref(job->workspace);
+      batch->generation = job->generation;
+      batch->file = g_object_ref(job->file);
+      batch->relative_path = g_strdup(job->relative_path);
+      batch->n_pages = cached_pages->len;
+      batch->pages = cached_pages;
+      batch->complete = TRUE;
+      batch->from_cache = TRUE;
+      g_main_context_invoke(NULL, index_batch_complete, batch);
+      pdf_job_free(job);
+      return;
+    }
+  }
+
   GError *error = NULL;
   if (!job->document) {
     job->document = phi_document_new_from_file(job->file, &error);
@@ -591,6 +788,8 @@ static void pdf_job_worker(gpointer user_data, gpointer pool_data) {
       return;
     }
     job->n_pages = phi_document_get_n_pages(job->document);
+    job->cache_pages = g_ptr_array_new_with_free_func(
+        (GDestroyNotify)indexed_page_unref);
   }
 
   IndexBatch *batch = g_new0(IndexBatch, 1);
@@ -608,11 +807,17 @@ static void pdf_job_worker(gpointer user_data, gpointer pool_data) {
     PhiPage *page = phi_document_get_page(job->document, job->next_page, &error);
     if (!page)
       break;
-    g_ptr_array_add(batch->pages, indexed_page_new(phi_page_get_text(page)));
+    IndexedPage *indexed = indexed_page_new(phi_page_get_text(page));
+    g_ptr_array_add(batch->pages, indexed);
+    g_ptr_array_add(job->cache_pages, indexed_page_ref(indexed));
   }
   batch->complete = error != NULL || job->next_page >= job->n_pages;
   batch->error = error;
   gboolean job_complete = batch->complete;
+  if (!error && job_complete &&
+      g_atomic_int_get(&job->workspace->generation) == job->generation)
+    index_cache_store(job->workspace, job->file, job->relative_path,
+                      job->cache_pages);
   g_main_context_invoke(NULL, index_batch_complete, batch);
 
   if (error || job_complete ||
@@ -646,6 +851,7 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
   g_list_store_remove_all(self->items);
   g_hash_table_remove_all(self->index);
   self->indexed_count = 0;
+  self->cache_hit_count = 0;
   self->pdf_count = scan->pdf_files->len;
   for (guint i = 0; i < scan->roots->len; i++) {
     PdfvWorkspaceItem *item =
