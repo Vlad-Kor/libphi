@@ -23,13 +23,22 @@
 
 G_DEFINE_FINAL_TYPE(PhiPage, phi_page, G_TYPE_OBJECT)
 
+void phi_page_detach_document(PhiPage* self) {
+	g_return_if_fail(PHI_IS_PAGE(self));
+
+	/* A GListModel consumer can keep a page alive after PhiDocument releases
+	 * its page cache. Drop the MuPDF page while the owning context is still
+	 * valid, then leave the detached GObject safe to dispose later. */
+	if (self->page && self->document) {
+		fz_drop_page(self->document->ctx, self->page);
+	}
+	self->page = NULL;
+	g_clear_weak_pointer(&self->document);
+}
+
 static void phi_page_object_dispose(GObject* object) {
 	PhiPage* self = PHI_PAGE(object);
-	if (self->page) {
-		fz_drop_page(self->document->ctx, self->page);
-		self->page = NULL;
-	}
-	g_clear_weak_pointer(&self->document);
+	phi_page_detach_document(self);
 	G_OBJECT_CLASS(phi_page_parent_class)->dispose(object);
 }
 

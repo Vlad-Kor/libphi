@@ -46,9 +46,12 @@ static void phi_document_object_finalize(GObject* object) {
 static void phi_document_object_dispose(GObject* object) {
 	PhiDocument* self = PHI_DOCUMENT(object);
 	if (self->pages) {
-		for (gint i = 0; i < self->n_pages; i++)
-			if (self->pages[i])
+		for (gint i = 0; i < self->n_pages; i++) {
+			if (self->pages[i]) {
+				phi_page_detach_document(self->pages[i]);
 				g_object_unref(self->pages[i]);
+			}
+		}
 		g_free(self->pages);
 		self->pages = NULL;
 	}

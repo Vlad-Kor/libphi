@@ -92,9 +92,23 @@ static void test_thumbnail_render(void) {
 	cairo_surface_destroy(result.surface);
 }
 
+static void test_page_can_outlive_document(void) {
+	PhiDocument* document = open_fixture();
+	PhiPage* page = phi_document_get_page(document, 0, NULL);
+	g_assert_nonnull(page);
+	g_object_ref(page);
+
+	/* List views are allowed to retain a GListModel item while replacing its
+	 * model. Releasing that page after its document must remain safe. */
+	g_object_unref(document);
+	g_object_unref(page);
+}
+
 int main(int argc, char** argv) {
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/text/separate-diacritic", test_separate_diacritic_text);
 	g_test_add_func("/thumbnail/render", test_thumbnail_render);
+	g_test_add_func("/lifetime/page-outlives-document",
+		test_page_can_outlive_document);
 	return g_test_run();
 }

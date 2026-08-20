@@ -36,6 +36,8 @@ struct _PhiPage {
 	gboolean bounds_valid;
 };
 
+void phi_page_detach_document(PhiPage* self);
+
 G_END_DECLS
 
 #endif // __PHIPAGEPRIVATE_H__

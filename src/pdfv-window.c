@@ -158,6 +158,34 @@ static void update_sidebar_button(PdfvWindow *self) {
   gtk_widget_set_visible(self->zoom_box, has_document);
 }
 
+static void update_empty_state_chrome(PdfvWindow *self) {
+  if (!self->toolbar_view || !self->tab_view)
+    return;
+
+  gboolean empty = FALSE;
+  AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
+  if (page) {
+    GtkWidget *content = adw_tab_page_get_child(page);
+    if (GTK_IS_STACK(content))
+      empty = g_strcmp0(
+                  gtk_stack_get_visible_child_name(GTK_STACK(content)),
+                  "empty") == 0;
+  }
+
+  /* A flat toolbar lets the transparent tab bar share the empty page's
+   * background. Restore the normal raised chrome for loading/documents;
+   * tab visibility is deliberately never changed here. */
+  adw_toolbar_view_set_top_bar_style(
+      self->toolbar_view, empty ? ADW_TOOLBAR_FLAT : ADW_TOOLBAR_RAISED);
+}
+
+static void on_tab_content_changed(GtkStack *stack, GParamSpec *pspec,
+                                   PdfvWindow *self) {
+  (void)stack;
+  (void)pspec;
+  update_empty_state_chrome(self);
+}
+
 static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
                            PdfvWindow *self) {
   (void)view;
@@ -1325,6 +1353,8 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
 
   /* Start with empty state */
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
+  g_signal_connect(stack, "notify::visible-child-name",
+                   G_CALLBACK(on_tab_content_changed), self);
 
   g_object_set_data(G_OBJECT(stack), "document-view", view);
   g_object_set_data(G_OBJECT(stack), "scrolled-window", scrolled);
@@ -1479,6 +1509,7 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
   (void)pspec;
 
   AdwTabPage *page = adw_tab_view_get_selected_page(tab_view);
+  update_empty_state_chrome(self);
 
   if (!page) {
     self->current_view = NULL;
@@ -2177,6 +2208,7 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Split view - outermost for full-height sidebar */
   self->split_view = ADW_OVERLAY_SPLIT_VIEW(adw_overlay_split_view_new());
+  gtk_widget_add_css_class(GTK_WIDGET(self->split_view), "pdfv-split-view");
   adw_overlay_split_view_set_sidebar_width_fraction(self->split_view, 0.28);
   adw_overlay_split_view_set_min_sidebar_width(self->split_view, 280);
   adw_overlay_split_view_set_max_sidebar_width(self->split_view, 400);
@@ -2351,7 +2383,6 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Sidebar content - full height with proper Adwaita styling */
   GtkWidget *sidebar_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_widget_add_css_class(sidebar_box, "sidebar-pane");
 
   /* Sidebar toolbar/header */
   AdwHeaderBar *sidebar_header = ADW_HEADER_BAR(adw_header_bar_new());
@@ -2553,12 +2584,12 @@ static void pdfv_window_init(PdfvWindow *self) {
       ".workspace-search-card list {"
       "  background-color: transparent;"
       "}"
+      ".pdfv-split-view > .sidebar-pane {"
+      "  box-shadow: none;"
+      "}"
       ".workspace-search-results {"
       "  background-color: alpha(@window_fg_color, 0.025);"
       "  border-radius: 12px;"
-      "}"
-      ".workspace-search-results row {"
-      "  border-radius: 10px;"
       "}"
       ".workspace-result-header {"
       "  background-color: alpha(@window_fg_color, 0.035);"
