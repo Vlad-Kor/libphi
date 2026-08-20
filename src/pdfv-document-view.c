@@ -261,6 +261,9 @@ update_adjustments(PdfvDocumentView* self)
 static gint
 get_page_at_offset(PdfvDocumentView* self, gdouble y, gdouble* page_offset)
 {
+    if (page_offset)
+        *page_offset = 0;
+
     if (!self->document)
         return 0;
     

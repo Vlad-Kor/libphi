@@ -30,6 +30,7 @@ phi_lib = library('phi', phi_src,
 		gio_dep,
 		gtk_dep,
 		mupdf_dep,
+		m_dep,
 	],
 	install: true
 )
@@ -39,7 +40,8 @@ phi_dep = declare_dependency(
 	link_with: phi_lib,
 	dependencies: [
 		gio_dep,
-		gtk_dep
+		gtk_dep,
+		m_dep,
 	]
 )
 meson.override_dependency('phi', phi_dep)

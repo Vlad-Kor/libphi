@@ -24,6 +24,7 @@ cc = meson.get_compiler('c')
 gtk_dep = dependency('gtk4', version: '>= 4.19.4')
 gio_dep = dependency('gio-2.0')
 mupdf_dep = dependency('mupdf')
+m_dep = cc.find_library('m', required: false)
 
 inc = include_directories('.')
 subdir('phi')
