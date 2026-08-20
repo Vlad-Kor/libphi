@@ -365,20 +365,21 @@ render_page_node(PdfvDocumentView* self, gint page_num)
 }
 
 static void
-ensure_page_cached(PdfvDocumentView* self, gint page)
+ensure_page_range_cached(PdfvDocumentView* self, gint first_page,
+                         gint last_page)
 {
     if (!self->document)
         return;
     
     gint n_pages = phi_document_get_n_pages(self->document);
-    if (page < 0 || page >= n_pages)
+    if (first_page < 0 || first_page >= n_pages ||
+        last_page < first_page)
         return;
-    
-    /* Define cache window */
-    /* Only the current page is rendered synchronously. Neighbor rendering on
-     * the GTK thread caused noticeable stalls on complex, long documents. */
-    gint cache_start = page;
-    gint cache_end = page;
+
+    /* Render exactly what intersects the viewport. This stays lazy for long
+     * documents while avoiding permanently blank pages when zoomed out. */
+    gint cache_start = first_page;
+    gint cache_end = MIN(last_page, n_pages - 1);
     gint new_cache_size = cache_end - cache_start + 1;
     
     /* Check if we need to rebuild cache */
@@ -430,6 +431,8 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     /* Find visible page range */
     gdouble view_top = self->scroll_y;
     gdouble view_bottom = self->scroll_y + height;
+    gint first_visible = get_page_at_offset(self, view_top, NULL);
+    gint last_visible = get_page_at_offset(self, view_bottom, NULL);
     
     /* Update current page */
     gint center_page = get_page_at_offset(self, view_top + height / 2, NULL);
@@ -438,8 +441,8 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CURRENT_PAGE]);
     }
     
-    /* Ensure pages are cached */
-    ensure_page_cached(self, center_page);
+    /* Ensure every visible page is cached. */
+    ensure_page_range_cached(self, first_visible, last_visible);
     
     /* Check if system is in dark mode */
     AdwStyleManager* style_manager = adw_style_manager_get_default();
@@ -450,9 +453,6 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     static const GdkRGBA bg_dark = {0.118, 0.118, 0.118, 1.0};   /* #1e1e1e */
     gtk_snapshot_append_color(snapshot, is_dark ? &bg_dark : &bg_light, 
         &GRAPHENE_RECT_INIT(0, 0, width, height));
-    
-    /* Find first visible page using binary search result */
-    gint first_visible = get_page_at_offset(self, view_top, NULL);
     
     /* Render visible pages - start from first visible page */
     static const GdkRGBA shadow_color = {0, 0, 0, 0.2};

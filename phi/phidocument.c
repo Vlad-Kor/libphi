@@ -122,6 +122,15 @@ static void phi_document_warn_handler(void* user, const char* message) {
 	g_debug("MuPDF: %s", message);
 }
 
+/* MuPDF reports recoverable PDF repairs (for example broken xref offsets) via
+ * its error stream even when opening ultimately succeeds. Keep those details
+ * available under G_MESSAGES_DEBUG without flooding normal application
+ * output; actual failures are still returned through GError by our catches. */
+static void phi_document_error_handler(void* user, const char* message) {
+	(void)user;
+	g_debug("MuPDF repair: %s", message);
+}
+
 PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* magic, GError** error) {
 	PhiDocument* self = g_object_new(PHI_TYPE_DOCUMENT, NULL);
 
@@ -133,7 +142,8 @@ PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* mag
 	self->ctx = fz_new_context(NULL, &locks, FZ_STORE_DEFAULT);
 	fz_register_document_handlers(self->ctx);
 	
-	/* Set custom warning handler to reduce console spam */
+	/* Route MuPDF diagnostics through GLib instead of raw stderr. */
+	fz_set_error_callback(self->ctx, phi_document_error_handler, NULL);
 	fz_set_warning_callback(self->ctx, phi_document_warn_handler, NULL);
 	
 	// TODO: autodetect magic if it is NULL
@@ -240,6 +250,7 @@ cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 			goto unlock;
 		}
 		fz_register_document_handlers(self->thumbnail_ctx);
+		fz_set_error_callback(self->thumbnail_ctx, phi_document_error_handler, NULL);
 		fz_set_warning_callback(self->thumbnail_ctx, phi_document_warn_handler, NULL);
 	}
 

@@ -709,6 +709,8 @@ static void workspace_results_show(PdfvWindow *self, GPtrArray *groups) {
     for (guint m = 0; m < group->matches->len; m++) {
       PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, m);
       AdwActionRow *row = ADW_ACTION_ROW(adw_action_row_new());
+      /* Search snippets are document text, never Pango markup. */
+      adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
       gchar *title = g_strdup_printf("Page %d", match->page + 1);
       adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
       adw_action_row_set_subtitle(row, match->snippet);
@@ -1193,6 +1195,93 @@ static void action_open(GSimpleAction *action, GVariant *parameter,
                        self);
 }
 
+static gchar *workspace_state_file(void) {
+  return g_build_filename(g_get_user_config_dir(), "phi-pdf-viewer",
+                          "state.ini", NULL);
+}
+
+static void remember_workspace(GFile *folder) {
+  gchar *filename = workspace_state_file();
+  gchar *directory = g_path_get_dirname(filename);
+  GKeyFile *state = g_key_file_new();
+  g_key_file_load_from_file(state, filename, G_KEY_FILE_KEEP_COMMENTS, NULL);
+  if (folder) {
+    gchar *uri = g_file_get_uri(folder);
+    g_key_file_set_string(state, "workspace", "uri", uri);
+    g_free(uri);
+  } else {
+    g_key_file_remove_key(state, "workspace", "uri", NULL);
+  }
+
+  gsize length = 0;
+  gchar *contents = g_key_file_to_data(state, &length, NULL);
+  if (g_mkdir_with_parents(directory, 0700) != 0 ||
+      !g_file_set_contents(filename, contents, length, NULL))
+    g_debug("Could not save workspace state at %s", filename);
+  g_free(contents);
+  g_key_file_unref(state);
+  g_free(directory);
+  g_free(filename);
+}
+
+static GFile *get_remembered_workspace(void) {
+  gchar *filename = workspace_state_file();
+  GKeyFile *state = g_key_file_new();
+  GFile *folder = NULL;
+  if (g_key_file_load_from_file(state, filename, G_KEY_FILE_NONE, NULL)) {
+    gchar *uri = g_key_file_get_string(state, "workspace", "uri", NULL);
+    if (uri && *uri)
+      folder = g_file_new_for_uri(uri);
+    g_free(uri);
+  }
+  g_key_file_unref(state);
+  g_free(filename);
+  return folder;
+}
+
+static void close_workspace(PdfvWindow *self, gboolean forget) {
+  workspace_search_close(self, FALSE);
+  if (self->workspace_scan_cancellable)
+    g_cancellable_cancel(self->workspace_scan_cancellable);
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+  if (self->workspace_preview_cancellable)
+    g_cancellable_cancel(self->workspace_preview_cancellable);
+  if (self->workspace) {
+    pdfv_workspace_cancel(self->workspace);
+    g_signal_handlers_disconnect_by_data(self->workspace, self);
+  }
+
+  workspace_results_clear(self);
+  gtk_editable_set_text(GTK_EDITABLE(self->workspace_search_entry), "");
+  gtk_single_selection_set_model(self->workspace_selection, NULL);
+  g_clear_object(&self->workspace_tree);
+  g_clear_object(&self->workspace);
+  g_clear_object(&self->workspace_scan_cancellable);
+  g_clear_object(&self->workspace_search_cancellable);
+  g_clear_object(&self->workspace_preview_cancellable);
+  g_clear_object(&self->workspace_preview_file);
+
+  adw_view_stack_page_set_visible(self->workspace_sidebar_page, FALSE);
+  adw_view_stack_set_visible_child_name(self->sidebar_stack, "pages");
+  g_menu_remove_all(self->workspace_menu_section);
+  GAction *search_action =
+      g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
+  GAction *close_action =
+      g_action_map_lookup_action(G_ACTION_MAP(self), "close-workspace");
+  g_simple_action_set_enabled(G_SIMPLE_ACTION(search_action), FALSE);
+  g_simple_action_set_enabled(G_SIMPLE_ACTION(close_action), FALSE);
+  if (forget)
+    remember_workspace(NULL);
+
+  gboolean has_document =
+      self->current_view &&
+      pdfv_document_view_get_document(self->current_view) != NULL;
+  if (!has_document)
+    adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+  update_sidebar_button(self);
+}
+
 static void on_workspace_loaded(GObject *source, GAsyncResult *result,
                                 gpointer user_data) {
   PdfvWindow *self = PDFV_WINDOW(user_data);
@@ -1209,6 +1298,7 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
     adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
     adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
+    remember_workspace(pdfv_workspace_get_folder(workspace));
     update_sidebar_button(self);
   } else if (workspace == self->workspace && error &&
              !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
@@ -1222,34 +1312,26 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
 }
 
 static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
-  if (self->workspace_scan_cancellable)
-    g_cancellable_cancel(self->workspace_scan_cancellable);
-  g_clear_object(&self->workspace_scan_cancellable);
+  if (self->workspace)
+    close_workspace(self, FALSE);
   self->workspace_scan_cancellable = g_cancellable_new();
-
-  if (self->workspace) {
-    pdfv_workspace_cancel(self->workspace);
-    g_signal_handlers_disconnect_by_data(self->workspace, self);
-  }
-  if (self->workspace_search_cancellable)
-    g_cancellable_cancel(self->workspace_search_cancellable);
-  workspace_search_close(self, FALSE);
-  workspace_results_clear(self);
-  gtk_editable_set_text(GTK_EDITABLE(self->workspace_search_entry), "");
-  gtk_single_selection_set_model(self->workspace_selection, NULL);
-  g_clear_object(&self->workspace_tree);
-  g_clear_object(&self->workspace);
 
   self->workspace = pdfv_workspace_new(folder);
   g_signal_connect(self->workspace, "index-updated",
                    G_CALLBACK(on_workspace_index_updated), self);
   GAction *search_action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
+  GAction *close_action =
+      g_action_map_lookup_action(G_ACTION_MAP(self), "close-workspace");
   g_simple_action_set_enabled(G_SIMPLE_ACTION(search_action), TRUE);
+  g_simple_action_set_enabled(G_SIMPLE_ACTION(close_action), TRUE);
   if (g_menu_model_get_n_items(G_MENU_MODEL(self->workspace_menu_section)) ==
-      0)
+      0) {
     g_menu_append(self->workspace_menu_section, "Search Workspace…",
                   "win.workspace-search");
+    g_menu_append(self->workspace_menu_section, "Close Workspace",
+                  "win.close-workspace");
+  }
   adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
   adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
   adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
@@ -1295,6 +1377,13 @@ static void action_workspace_search(GSimpleAction *action, GVariant *parameter,
   (void)action;
   (void)parameter;
   workspace_search_open(PDFV_WINDOW(user_data));
+}
+
+static void action_close_workspace(GSimpleAction *action, GVariant *parameter,
+                                   gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  close_workspace(PDFV_WINDOW(user_data), TRUE);
 }
 
 static void action_new_tab(GSimpleAction *action, GVariant *parameter,
@@ -1476,6 +1565,7 @@ static GActionEntry win_actions[] = {
     {.name = "open", .activate = action_open},
     {.name = "open-folder", .activate = action_open_folder},
     {.name = "workspace-search", .activate = action_workspace_search},
+    {.name = "close-workspace", .activate = action_close_workspace},
     {.name = "new-tab", .activate = action_new_tab},
     {.name = "close-tab", .activate = action_close_tab},
     {.name = "go-back", .activate = action_go_back},
@@ -1657,6 +1747,9 @@ static void pdfv_window_init(PdfvWindow *self) {
   GAction *workspace_search_action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
   g_simple_action_set_enabled(G_SIMPLE_ACTION(workspace_search_action), FALSE);
+  GAction *close_workspace_action =
+      g_action_map_lookup_action(G_ACTION_MAP(self), "close-workspace");
+  g_simple_action_set_enabled(G_SIMPLE_ACTION(close_workspace_action), FALSE);
   g_signal_connect(self, "close-request", G_CALLBACK(on_window_close_request),
                    self);
 
@@ -2004,13 +2097,32 @@ static void pdfv_window_init(PdfvWindow *self) {
    * dedicated tab behind this card, leaving the original tab untouched. */
   self->workspace_search_overlay =
       gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_widget_add_css_class(self->workspace_search_overlay, "card");
-  gtk_widget_set_halign(self->workspace_search_overlay, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign(self->workspace_search_overlay, GTK_ALIGN_START);
-  gtk_widget_set_size_request(self->workspace_search_overlay, 640, 430);
-  gtk_widget_set_margin_top(self->workspace_search_overlay, 48);
-  gtk_widget_set_margin_start(self->workspace_search_overlay, 18);
-  gtk_widget_set_margin_end(self->workspace_search_overlay, 18);
+  GtkCssProvider *workspace_search_css = gtk_css_provider_new();
+  gtk_css_provider_load_from_string(
+      workspace_search_css,
+      ".workspace-search-card {"
+      "  background-color: @window_bg_color;"
+      "  color: @window_fg_color;"
+      "  border: 1px solid alpha(@window_fg_color, 0.16);"
+      "  border-radius: 14px;"
+      "  box-shadow: 0 12px 36px alpha(black, 0.45);"
+      "}");
+  gtk_style_context_add_provider_for_display(
+      gtk_widget_get_display(GTK_WIDGET(self)),
+      GTK_STYLE_PROVIDER(workspace_search_css),
+      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(workspace_search_css);
+  gtk_widget_add_css_class(self->workspace_search_overlay,
+                           "workspace-search-card");
+  gtk_widget_set_overflow(self->workspace_search_overlay,
+                          GTK_OVERFLOW_HIDDEN);
+  gtk_widget_set_halign(self->workspace_search_overlay, GTK_ALIGN_FILL);
+  gtk_widget_set_valign(self->workspace_search_overlay, GTK_ALIGN_FILL);
+  gtk_widget_set_size_request(self->workspace_search_overlay, 700, 500);
+  gtk_widget_set_margin_top(self->workspace_search_overlay, 36);
+  gtk_widget_set_margin_bottom(self->workspace_search_overlay, 36);
+  gtk_widget_set_margin_start(self->workspace_search_overlay, 56);
+  gtk_widget_set_margin_end(self->workspace_search_overlay, 56);
 
   self->workspace_search_entry = GTK_SEARCH_ENTRY(gtk_search_entry_new());
   gtk_search_entry_set_placeholder_text(
@@ -2084,6 +2196,17 @@ static void pdfv_window_class_init(PdfvWindowClass *klass) {
 
 PdfvWindow *pdfv_window_new(AdwApplication *app) {
   return g_object_new(PDFV_TYPE_WINDOW, "application", app, NULL);
+}
+
+void pdfv_window_restore_last_workspace(PdfvWindow *self) {
+  g_return_if_fail(PDFV_IS_WINDOW(self));
+  GFile *folder = get_remembered_workspace();
+  if (!folder)
+    return;
+  if (g_file_query_file_type(folder, G_FILE_QUERY_INFO_NONE, NULL) ==
+      G_FILE_TYPE_DIRECTORY)
+    open_workspace_folder(self, folder);
+  g_object_unref(folder);
 }
 
 void pdfv_window_open_file(PdfvWindow *self, GFile *file) {

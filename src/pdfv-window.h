@@ -21,6 +21,7 @@ G_DECLARE_FINAL_TYPE(PdfvWindow, pdfv_window, PDFV, WINDOW, AdwApplicationWindow
 PdfvWindow* pdfv_window_new(AdwApplication* app);
 void pdfv_window_open_file(PdfvWindow* self, GFile* file);
 void pdfv_window_new_tab(PdfvWindow* self);
+void pdfv_window_restore_last_workspace(PdfvWindow* self);
 
 G_END_DECLS
 

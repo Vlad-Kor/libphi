@@ -19,6 +19,7 @@ G_DEFINE_FINAL_TYPE(PdfvApplication, pdfv_application, ADW_TYPE_APPLICATION)
 
 static void pdfv_application_activate(GApplication* app) {
 	PdfvWindow* window = pdfv_window_new(ADW_APPLICATION(app));
+	pdfv_window_restore_last_workspace(window);
 	gtk_window_present(GTK_WINDOW(window));
 }
 
