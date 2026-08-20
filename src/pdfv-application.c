@@ -45,6 +45,7 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* zoom_reset_accels[] = { "<Control>0", NULL };
 	const char* fullscreen_accels[] = { "F11", NULL };
 	const char* find_accels[] = { "<Control>f", "slash", NULL };
+	const char* workspace_find_accels[] = { "<Control><Shift>f", NULL };
 	const char* find_next_accels[] = { "F3", "<Control>g", NULL };
 	const char* find_prev_accels[] = { "<Shift>F3", "<Control><Shift>g", NULL };
 	const char* go_back_accels[] = { "<Alt>Left", "BackSpace", NULL };
@@ -65,6 +66,7 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-reset", zoom_reset_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.fullscreen", fullscreen_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find", find_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.workspace-search", workspace_find_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find-next", find_next_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find-prev", find_prev_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.go-back", go_back_accels);
@@ -112,8 +114,8 @@ static void pdfv_application_class_init(PdfvApplicationClass* klass) {
 static void pdfv_application_init(PdfvApplication* self) {
 	/* Add application actions */
 	static const GActionEntry app_actions[] = {
-		{ "quit", pdfv_application_quit_action, NULL, NULL, NULL },
-		{ "about", pdfv_application_about_action, NULL, NULL, NULL },
+		{ .name = "quit", .activate = pdfv_application_quit_action },
+		{ .name = "about", .activate = pdfv_application_about_action },
 	};
 	
 	g_action_map_add_action_entries(G_ACTION_MAP(self), app_actions, G_N_ELEMENTS(app_actions), self);

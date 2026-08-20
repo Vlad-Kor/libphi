@@ -41,26 +41,33 @@ static void phi_page_class_init(PhiPageClass* klass) {
 static void phi_page_init(PhiPage* self) {
 	self->document = NULL;
 	self->page = NULL;
+	self->bounds_valid = FALSE;
 }
 
 void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height) {
 	g_return_if_fail(PHI_IS_PAGE(self));
 	
-	fz_rect bounds = fz_bound_page(self->document->ctx, self->page);
+	if (!self->bounds_valid) {
+		self->bounds = fz_bound_page(self->document->ctx, self->page);
+		self->bounds_valid = TRUE;
+	}
 	if (width)
-		*width = bounds.x1 - bounds.x0;
+		*width = self->bounds.x1 - self->bounds.x0;
 	if (height)
-		*height = bounds.y1 - bounds.y0;
+		*height = self->bounds.y1 - self->bounds.y0;
 }
 
 void phi_page_get_bounds(PhiPage* self, gfloat* x0, gfloat* y0, gfloat* x1, gfloat* y1) {
 	g_return_if_fail(PHI_IS_PAGE(self));
 	
-	fz_rect bounds = fz_bound_page(self->document->ctx, self->page);
-	if (x0) *x0 = bounds.x0;
-	if (y0) *y0 = bounds.y0;
-	if (x1) *x1 = bounds.x1;
-	if (y1) *y1 = bounds.y1;
+	if (!self->bounds_valid) {
+		self->bounds = fz_bound_page(self->document->ctx, self->page);
+		self->bounds_valid = TRUE;
+	}
+	if (x0) *x0 = self->bounds.x0;
+	if (y0) *y0 = self->bounds.y0;
+	if (x1) *x1 = self->bounds.x1;
+	if (y1) *y1 = self->bounds.y1;
 }
 
 GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error) {

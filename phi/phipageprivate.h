@@ -32,6 +32,8 @@ struct _PhiPage {
 	
 	PhiDocument* document; // weak
 	fz_page* page;
+	fz_rect bounds;
+	gboolean bounds_valid;
 };
 
 G_END_DECLS

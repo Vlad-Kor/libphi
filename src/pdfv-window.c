@@ -10,6 +10,7 @@
 
 #include "pdfv-window.h"
 #include "pdfv-document-view.h"
+#include "pdfv-workspace.h"
 #include <phi/phidocument.h>
 #include <phi/phipage.h>
 
@@ -32,10 +33,40 @@ struct _PdfvWindow {
   GtkButton *forward_button;
   GtkToggleButton *sidebar_button;
   GtkMenuButton *menu_button;
+  GMenu *workspace_menu_section;
 
   /* Sidebar */
   GtkListView *thumbnail_list;
   GtkSingleSelection *thumbnail_selection;
+  AdwViewStack *sidebar_stack;
+  AdwViewStackPage *workspace_sidebar_page;
+  GtkListView *workspace_list;
+  GtkSingleSelection *workspace_selection;
+  GtkTreeListModel *workspace_tree;
+
+  /* Workspace and its in-memory index */
+  PdfvWorkspace *workspace;
+  GCancellable *workspace_scan_cancellable;
+  guint workspace_search_debounce_id;
+  GCancellable *workspace_search_cancellable;
+
+  /* Floating workspace search */
+  GtkWidget *content_overlay;
+  GtkWidget *workspace_search_overlay;
+  GtkSearchEntry *workspace_search_entry;
+  GtkListBox *workspace_results_list;
+  GtkLabel *workspace_search_status;
+  GPtrArray *workspace_results;
+  gint workspace_result_group;
+  gint workspace_result_match;
+
+  /* A search preview always uses its own reusable tab. */
+  AdwTabPage *workspace_return_tab;
+  AdwTabPage *workspace_preview_tab;
+  GFile *workspace_preview_file;
+  GCancellable *workspace_preview_cancellable;
+  gint workspace_preview_page;
+  guint workspace_preview_generation;
 
   /* Floating zoom controls */
   GtkWidget *zoom_box;
@@ -56,6 +87,12 @@ struct _PdfvWindow {
 };
 
 G_DEFINE_TYPE(PdfvWindow, pdfv_window, ADW_TYPE_APPLICATION_WINDOW)
+
+static GtkWidget *create_tab_content(PdfvWindow *self);
+static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
+                                   AdwTabPage *page, gint target_page,
+                                   gboolean preview, guint generation);
+static void workspace_search_close(PdfvWindow *self, gboolean commit);
 
 static void update_navigation_buttons(PdfvWindow *self) {
   gboolean can_back = FALSE;
@@ -95,7 +132,8 @@ static void update_sidebar_button(PdfvWindow *self) {
   GAction *action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "toggle-sidebar");
   if (action) {
-    g_simple_action_set_enabled(G_SIMPLE_ACTION(action), has_document);
+    g_simple_action_set_enabled(G_SIMPLE_ACTION(action),
+                                has_document || self->workspace != NULL);
   }
 
   /* Hide floating zoom controls when no document */
@@ -424,6 +462,472 @@ static void on_thumbnail_activated(GtkListView *list, guint position,
     pdfv_document_view_go_to_page(self->current_view, (gint)position);
 }
 
+static GListModel *workspace_create_children(gpointer item,
+                                             gpointer user_data) {
+  (void)user_data;
+  PdfvWorkspaceItem *workspace_item = PDFV_WORKSPACE_ITEM(item);
+  if (!pdfv_workspace_item_is_folder(workspace_item))
+    return NULL;
+  return g_object_ref(pdfv_workspace_item_get_children(workspace_item));
+}
+
+static void workspace_factory_setup(GtkSignalListItemFactory *factory,
+                                    GtkListItem *list_item,
+                                    PdfvWindow *self) {
+  (void)factory;
+  (void)self;
+  GtkWidget *expander = gtk_tree_expander_new();
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *icon = gtk_image_new();
+  GtkWidget *label = gtk_label_new(NULL);
+  gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+  gtk_widget_set_hexpand(label, TRUE);
+  gtk_widget_set_margin_top(box, 5);
+  gtk_widget_set_margin_bottom(box, 5);
+  gtk_box_append(GTK_BOX(box), icon);
+  gtk_box_append(GTK_BOX(box), label);
+  gtk_tree_expander_set_child(GTK_TREE_EXPANDER(expander), box);
+  g_object_set_data(G_OBJECT(list_item), "workspace-icon", icon);
+  g_object_set_data(G_OBJECT(list_item), "workspace-label", label);
+  gtk_list_item_set_child(list_item, expander);
+}
+
+static void workspace_factory_bind(GtkSignalListItemFactory *factory,
+                                   GtkListItem *list_item,
+                                   PdfvWindow *self) {
+  (void)factory;
+  (void)self;
+  GtkTreeListRow *row = GTK_TREE_LIST_ROW(gtk_list_item_get_item(list_item));
+  GtkTreeExpander *expander =
+      GTK_TREE_EXPANDER(gtk_list_item_get_child(list_item));
+  gtk_tree_expander_set_list_row(expander, row);
+  PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+  GtkImage *icon = GTK_IMAGE(
+      g_object_get_data(G_OBJECT(list_item), "workspace-icon"));
+  GtkLabel *label = GTK_LABEL(
+      g_object_get_data(G_OBJECT(list_item), "workspace-label"));
+  gtk_image_set_from_icon_name(
+      icon, pdfv_workspace_item_is_folder(item) ? "folder-symbolic"
+                                                : "application-pdf-symbolic");
+  gtk_label_set_text(label, pdfv_workspace_item_get_name(item));
+  gtk_widget_set_tooltip_text(GTK_WIDGET(label),
+                              pdfv_workspace_item_get_relative_path(item));
+  g_object_unref(item);
+}
+
+static void workspace_factory_unbind(GtkSignalListItemFactory *factory,
+                                     GtkListItem *list_item,
+                                     PdfvWindow *self) {
+  (void)factory;
+  (void)self;
+  GtkTreeExpander *expander =
+      GTK_TREE_EXPANDER(gtk_list_item_get_child(list_item));
+  gtk_tree_expander_set_list_row(expander, NULL);
+}
+
+static void on_workspace_item_activated(GtkListView *list, guint position,
+                                        PdfvWindow *self) {
+  (void)list;
+  if (!self->workspace_tree || position == GTK_INVALID_LIST_POSITION)
+    return;
+  GtkTreeListRow *row = g_list_model_get_item(G_LIST_MODEL(self->workspace_tree),
+                                               position);
+  if (!row)
+    return;
+  PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+  if (pdfv_workspace_item_is_folder(item)) {
+    gtk_tree_list_row_set_expanded(row, !gtk_tree_list_row_get_expanded(row));
+  } else {
+    pdfv_window_open_file(self, pdfv_workspace_item_get_file(item));
+  }
+  g_object_unref(item);
+  g_object_unref(row);
+}
+
+static PdfvWorkspaceResultGroup *workspace_selected_group(PdfvWindow *self) {
+  if (!self->workspace_results || self->workspace_result_group < 0 ||
+      self->workspace_result_group >= (gint)self->workspace_results->len)
+    return NULL;
+  return g_ptr_array_index(self->workspace_results,
+                           self->workspace_result_group);
+}
+
+static PdfvWorkspaceMatch *workspace_selected_match(PdfvWindow *self) {
+  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
+  if (!group || self->workspace_result_match < 0 ||
+      self->workspace_result_match >= (gint)group->matches->len)
+    return NULL;
+  return g_ptr_array_index(group->matches, self->workspace_result_match);
+}
+
+static GtkListBoxRow *workspace_find_result_row(PdfvWindow *self, gint group,
+                                                gint match) {
+  for (GtkWidget *child = gtk_widget_get_first_child(
+           GTK_WIDGET(self->workspace_results_list));
+       child; child = gtk_widget_get_next_sibling(child)) {
+    if (!GTK_IS_LIST_BOX_ROW(child))
+      continue;
+    gint child_group = GPOINTER_TO_INT(
+                           g_object_get_data(G_OBJECT(child), "result-group")) -
+                       1;
+    gint child_match = GPOINTER_TO_INT(
+                           g_object_get_data(G_OBJECT(child), "result-match")) -
+                       1;
+    if (child_group == group && child_match == match)
+      return GTK_LIST_BOX_ROW(child);
+  }
+  return NULL;
+}
+
+static void workspace_preview_selected(PdfvWindow *self) {
+  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
+  PdfvWorkspaceMatch *match = workspace_selected_match(self);
+  if (!group || !match)
+    return;
+
+  if (!self->workspace_preview_tab) {
+    GtkWidget *content = create_tab_content(self);
+    self->workspace_preview_tab = adw_tab_view_append(self->tab_view, content);
+    adw_tab_page_set_title(self->workspace_preview_tab, "Loading…");
+  }
+  adw_tab_view_set_selected_page(self->tab_view, self->workspace_preview_tab);
+  self->workspace_preview_page = match->page;
+
+  if (self->workspace_preview_file &&
+      g_file_equal(self->workspace_preview_file, group->file)) {
+    GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
+    PdfvDocumentView *view =
+        g_object_get_data(G_OBJECT(stack), "document-view");
+    if (pdfv_document_view_get_document(view))
+      pdfv_document_view_go_to_page(view, match->page);
+    return;
+  }
+
+  g_clear_object(&self->workspace_preview_file);
+  self->workspace_preview_file = g_object_ref(group->file);
+  if (self->workspace_preview_cancellable)
+    g_cancellable_cancel(self->workspace_preview_cancellable);
+  g_clear_object(&self->workspace_preview_cancellable);
+  self->workspace_preview_cancellable = g_cancellable_new();
+  self->workspace_preview_generation++;
+  open_file_in_tab_async(self, group->file, self->workspace_preview_tab,
+                         match->page, TRUE,
+                         self->workspace_preview_generation);
+}
+
+static void on_workspace_result_selected(GtkListBox *box, GtkListBoxRow *row,
+                                         PdfvWindow *self) {
+  (void)box;
+  if (!row)
+    return;
+  gint group =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "result-group")) - 1;
+  gint match =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "result-match")) - 1;
+  if (group < 0 || match < 0)
+    return;
+  self->workspace_result_group = group;
+  self->workspace_result_match = match;
+  workspace_preview_selected(self);
+}
+
+static void workspace_select_result(PdfvWindow *self, gint group, gint match) {
+  if (!self->workspace_results || self->workspace_results->len == 0)
+    return;
+  group = CLAMP(group, 0, (gint)self->workspace_results->len - 1);
+  PdfvWorkspaceResultGroup *selected =
+      g_ptr_array_index(self->workspace_results, group);
+  if (selected->matches->len == 0)
+    return;
+  match = CLAMP(match, 0, (gint)selected->matches->len - 1);
+  GtkListBoxRow *row = workspace_find_result_row(self, group, match);
+  if (row) {
+    gtk_list_box_select_row(self->workspace_results_list, row);
+    gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
+  }
+}
+
+static void workspace_result_row_activated(GtkListBox *box,
+                                           GtkListBoxRow *row,
+                                           PdfvWindow *self) {
+  (void)box;
+  if (row) {
+    gtk_list_box_select_row(self->workspace_results_list, row);
+    workspace_search_close(self, TRUE);
+  }
+}
+
+static void workspace_results_clear(PdfvWindow *self) {
+  gtk_list_box_remove_all(self->workspace_results_list);
+  g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
+  self->workspace_result_group = -1;
+  self->workspace_result_match = -1;
+}
+
+static GtkWidget *workspace_group_header(PdfvWorkspaceResultGroup *group) {
+  GtkWidget *row = gtk_list_box_row_new();
+  gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(row), FALSE);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), FALSE);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_widget_set_margin_top(box, 10);
+  gtk_widget_set_margin_bottom(box, 4);
+  gtk_widget_set_margin_start(box, 12);
+  gtk_widget_set_margin_end(box, 12);
+  GtkWidget *icon = gtk_image_new_from_icon_name("application-pdf-symbolic");
+  GtkWidget *label = gtk_label_new(group->relative_path);
+  gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+  gtk_widget_add_css_class(label, "heading");
+  gtk_widget_set_hexpand(label, TRUE);
+  gtk_box_append(GTK_BOX(box), icon);
+  gtk_box_append(GTK_BOX(box), label);
+  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
+  return row;
+}
+
+static void workspace_results_show(PdfvWindow *self, GPtrArray *groups) {
+  GFile *old_file = NULL;
+  gint old_page = -1;
+  PdfvWorkspaceResultGroup *old_group = workspace_selected_group(self);
+  PdfvWorkspaceMatch *old_match = workspace_selected_match(self);
+  if (old_group && old_match) {
+    old_file = g_object_ref(old_group->file);
+    old_page = old_match->page;
+  }
+
+  workspace_results_clear(self);
+  self->workspace_results = groups;
+
+  gint selected_group = 0;
+  gint selected_match = 0;
+  guint match_count = 0;
+  for (guint g = 0; g < groups->len; g++) {
+    PdfvWorkspaceResultGroup *group = g_ptr_array_index(groups, g);
+    gtk_list_box_append(self->workspace_results_list,
+                        workspace_group_header(group));
+    for (guint m = 0; m < group->matches->len; m++) {
+      PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, m);
+      AdwActionRow *row = ADW_ACTION_ROW(adw_action_row_new());
+      gchar *title = g_strdup_printf("Page %d", match->page + 1);
+      adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+      adw_action_row_set_subtitle(row, match->snippet);
+      adw_action_row_set_subtitle_lines(row, 2);
+      g_free(title);
+      g_object_set_data(G_OBJECT(row), "result-group",
+                        GINT_TO_POINTER((gint)g + 1));
+      g_object_set_data(G_OBJECT(row), "result-match",
+                        GINT_TO_POINTER((gint)m + 1));
+      gtk_list_box_append(self->workspace_results_list, GTK_WIDGET(row));
+      match_count++;
+      if (old_file && g_file_equal(old_file, group->file) &&
+          old_page == match->page) {
+        selected_group = g;
+        selected_match = m;
+      }
+    }
+  }
+  g_clear_object(&old_file);
+
+  guint indexed = pdfv_workspace_get_indexed_count(self->workspace);
+  guint total = pdfv_workspace_get_pdf_count(self->workspace);
+  gchar *status = NULL;
+  if (total > indexed)
+    status = g_strdup_printf("%u result%s · indexing %u of %u PDFs", match_count,
+                             match_count == 1 ? "" : "s", indexed, total);
+  else if (match_count == 0)
+    status = g_strdup("No results");
+  else
+    status = g_strdup_printf("%u result%s", match_count,
+                             match_count == 1 ? "" : "s");
+  gtk_label_set_text(self->workspace_search_status, status);
+  g_free(status);
+
+  if (groups->len > 0)
+    workspace_select_result(self, selected_group, selected_match);
+}
+
+static void on_workspace_search_finished(GObject *source, GAsyncResult *result,
+                                         gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  GError *error = NULL;
+  GPtrArray *groups = pdfv_workspace_search_finish(PDFV_WORKSPACE(source),
+                                                   result, &error);
+  gboolean current =
+      G_IS_TASK(result) &&
+      g_task_get_cancellable(G_TASK(result)) ==
+          self->workspace_search_cancellable;
+  if (source == G_OBJECT(self->workspace) && current && groups &&
+      gtk_widget_get_visible(self->workspace_search_overlay))
+    workspace_results_show(self, groups);
+  else if (groups)
+    g_ptr_array_unref(groups);
+  if (error && !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+    gtk_label_set_text(self->workspace_search_status, error->message);
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static gboolean workspace_search_start(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  self->workspace_search_debounce_id = 0;
+  const gchar *query =
+      gtk_editable_get_text(GTK_EDITABLE(self->workspace_search_entry));
+  if (!self->workspace || g_utf8_strlen(query, -1) < 2)
+    return G_SOURCE_REMOVE;
+
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+  g_clear_object(&self->workspace_search_cancellable);
+  self->workspace_search_cancellable = g_cancellable_new();
+  gtk_label_set_text(self->workspace_search_status, "Searching…");
+  pdfv_workspace_search_async(self->workspace, query,
+                              self->workspace_search_cancellable,
+                              on_workspace_search_finished,
+                              g_object_ref(self));
+  return G_SOURCE_REMOVE;
+}
+
+static void workspace_search_schedule(PdfvWindow *self, guint delay_ms) {
+  if (self->workspace_search_debounce_id)
+    g_source_remove(self->workspace_search_debounce_id);
+  self->workspace_search_debounce_id =
+      g_timeout_add(delay_ms, workspace_search_start, self);
+}
+
+static void on_workspace_search_changed(GtkSearchEntry *entry,
+                                        PdfvWindow *self) {
+  const gchar *query = gtk_editable_get_text(GTK_EDITABLE(entry));
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+  if (g_utf8_strlen(query, -1) < 2) {
+    workspace_results_clear(self);
+    gtk_label_set_text(self->workspace_search_status,
+                       *query ? "Type at least 2 characters" :
+                                "Search every PDF in this folder");
+    return;
+  }
+  workspace_search_schedule(self, 140);
+}
+
+static void on_workspace_index_updated(PdfvWorkspace *workspace,
+                                       PdfvWindow *self) {
+  if (workspace != self->workspace ||
+      !gtk_widget_get_visible(self->workspace_search_overlay))
+    return;
+  const gchar *query = gtk_editable_get_text(
+      GTK_EDITABLE(self->workspace_search_entry));
+  if (g_utf8_strlen(query, -1) >= 2 &&
+      !self->workspace_search_debounce_id)
+    self->workspace_search_debounce_id =
+        g_timeout_add(100, workspace_search_start, self);
+}
+
+static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
+                                        guint keyval, guint keycode,
+                                        GdkModifierType state,
+                                        PdfvWindow *self) {
+  (void)controller;
+  (void)keycode;
+  (void)state;
+  PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
+  switch (keyval) {
+  case GDK_KEY_Down:
+    if (group)
+      workspace_select_result(self, self->workspace_result_group,
+                              (self->workspace_result_match + 1) %
+                                  (gint)group->matches->len);
+    return GDK_EVENT_STOP;
+  case GDK_KEY_Up:
+    if (group)
+      workspace_select_result(self, self->workspace_result_group,
+                              (self->workspace_result_match - 1 +
+                               (gint)group->matches->len) %
+                                  (gint)group->matches->len);
+    return GDK_EVENT_STOP;
+  case GDK_KEY_Right:
+    workspace_select_result(self, self->workspace_result_group + 1,
+                            self->workspace_result_match);
+    return GDK_EVENT_STOP;
+  case GDK_KEY_Left:
+    workspace_select_result(self, self->workspace_result_group - 1,
+                            self->workspace_result_match);
+    return GDK_EVENT_STOP;
+  case GDK_KEY_Return:
+  case GDK_KEY_KP_Enter:
+    if (workspace_selected_match(self))
+      workspace_search_close(self, TRUE);
+    return GDK_EVENT_STOP;
+  case GDK_KEY_Escape:
+    workspace_search_close(self, FALSE);
+    return GDK_EVENT_STOP;
+  default:
+    return GDK_EVENT_PROPAGATE;
+  }
+}
+
+static void on_workspace_search_stop(GtkSearchEntry *entry,
+                                     PdfvWindow *self) {
+  (void)entry;
+  workspace_search_close(self, FALSE);
+}
+
+static void workspace_search_open(PdfvWindow *self) {
+  if (!self->workspace)
+    return;
+  if (gtk_widget_get_visible(self->workspace_search_overlay)) {
+    gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
+    return;
+  }
+  self->workspace_return_tab = adw_tab_view_get_selected_page(self->tab_view);
+  if (self->workspace_return_tab)
+    g_object_ref(self->workspace_return_tab);
+  gtk_widget_set_visible(self->workspace_search_overlay, TRUE);
+  gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
+  const gchar *query = gtk_editable_get_text(
+      GTK_EDITABLE(self->workspace_search_entry));
+  if (g_utf8_strlen(query, -1) >= 2)
+    workspace_search_schedule(self, 0);
+}
+
+static void workspace_search_close(PdfvWindow *self, gboolean commit) {
+  if (!gtk_widget_get_visible(self->workspace_search_overlay))
+    return;
+  gtk_widget_set_visible(self->workspace_search_overlay, FALSE);
+  if (self->workspace_search_debounce_id) {
+    g_source_remove(self->workspace_search_debounce_id);
+    self->workspace_search_debounce_id = 0;
+  }
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+
+  if (commit && self->workspace_preview_tab) {
+    adw_tab_view_set_selected_page(self->tab_view,
+                                   self->workspace_preview_tab);
+    self->workspace_preview_tab = NULL;
+    g_clear_object(&self->workspace_preview_file);
+    /* The committed request owns its own reference and may still finish.
+     * Future previews must not cancel that now-independent tab. */
+    g_clear_object(&self->workspace_preview_cancellable);
+  } else if (!commit) {
+    if (self->workspace_preview_cancellable)
+      g_cancellable_cancel(self->workspace_preview_cancellable);
+    self->workspace_preview_generation++;
+    if (self->workspace_preview_tab) {
+      AdwTabPage *preview = self->workspace_preview_tab;
+      self->workspace_preview_tab = NULL;
+      g_clear_object(&self->workspace_preview_file);
+      adw_tab_view_close_page(self->tab_view, preview);
+    }
+    if (self->workspace_return_tab &&
+        adw_tab_view_get_page_position(self->tab_view,
+                                       self->workspace_return_tab) >= 0)
+      adw_tab_view_set_selected_page(self->tab_view,
+                                     self->workspace_return_tab);
+  }
+  g_clear_object(&self->workspace_return_tab);
+}
+
 /* Create empty state widget (shown when no document is open) */
 static GtkWidget *create_empty_state(PdfvWindow *self) {
   GtkWidget *status = adw_status_page_new();
@@ -454,6 +958,14 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   GtkWidget *empty = create_empty_state(self);
   gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
 
+  GtkWidget *loading = adw_status_page_new();
+  adw_status_page_set_icon_name(ADW_STATUS_PAGE(loading),
+                                "document-open-symbolic");
+  adw_status_page_set_title(ADW_STATUS_PAGE(loading), "Opening PDF…");
+  adw_status_page_set_description(ADW_STATUS_PAGE(loading),
+                                  "Preparing pages in the background");
+  gtk_stack_add_named(GTK_STACK(stack), loading, "loading");
+
   /* Document view */
   PdfvDocumentView *view = pdfv_document_view_new();
   setup_document_view_signals(self, view);
@@ -474,6 +986,112 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   return stack;
 }
 
+typedef struct {
+  PdfvWindow *window;
+  AdwTabPage *page;
+  GFile *file;
+  GCancellable *cancellable;
+  gint target_page;
+  gboolean preview;
+  guint generation;
+} OpenRequest;
+
+static void open_request_free(OpenRequest *request) {
+  g_clear_object(&request->window);
+  g_clear_object(&request->page);
+  g_clear_object(&request->file);
+  g_clear_object(&request->cancellable);
+  g_free(request);
+}
+
+static void on_document_loaded(GObject *source, GAsyncResult *result,
+                               gpointer user_data) {
+  (void)source;
+  OpenRequest *request = user_data;
+  PdfvWindow *self = request->window;
+  GError *error = NULL;
+  PhiDocument *document =
+      pdfv_workspace_load_document_finish(result, &error);
+  gboolean page_is_open =
+      adw_tab_view_get_page_position(self->tab_view, request->page) >= 0;
+  gboolean stale_preview =
+      request->preview && request->generation != self->workspace_preview_generation;
+  GtkWidget *target_stack =
+      page_is_open ? adw_tab_page_get_child(request->page) : NULL;
+  gboolean current_request =
+      target_stack &&
+      g_object_get_data(G_OBJECT(target_stack), "open-cancellable") ==
+          request->cancellable;
+
+  if (document && current_request && !stale_preview) {
+    GtkWidget *stack = target_stack;
+    g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+    PdfvDocumentView *view =
+        g_object_get_data(G_OBJECT(stack), "document-view");
+    pdfv_document_view_set_document(view, document);
+    gint target_page = request->preview ? self->workspace_preview_page
+                                       : request->target_page;
+    pdfv_document_view_go_to_page(view, target_page);
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
+    g_object_set_data_full(G_OBJECT(stack), "document-file",
+                           g_object_ref(request->file), g_object_unref);
+    gchar *basename = g_file_get_basename(request->file);
+    adw_tab_page_set_title(request->page, basename);
+    g_free(basename);
+
+    if (adw_tab_view_get_selected_page(self->tab_view) == request->page) {
+      self->current_view = view;
+      populate_thumbnails(self, document);
+      update_navigation_buttons(self);
+      update_zoom_info(self);
+      update_sidebar_button(self);
+    }
+  } else if (error &&
+             !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED) &&
+             current_request && !stale_preview) {
+    GtkWidget *stack = target_stack;
+    g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
+    AdwDialog *dialog = adw_alert_dialog_new("Error Opening File",
+                                             error->message);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
+    adw_dialog_present(dialog, GTK_WIDGET(self));
+  }
+
+  g_clear_error(&error);
+  g_clear_object(&document);
+  open_request_free(request);
+}
+
+static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
+                                   AdwTabPage *page, gint target_page,
+                                   gboolean preview, guint generation) {
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  GCancellable *previous =
+      g_object_get_data(G_OBJECT(stack), "open-cancellable");
+  if (previous)
+    g_cancellable_cancel(previous);
+  gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
+  gchar *basename = g_file_get_basename(file);
+  adw_tab_page_set_title(page, basename);
+  g_free(basename);
+
+  OpenRequest *request = g_new0(OpenRequest, 1);
+  request->window = g_object_ref(self);
+  request->page = g_object_ref(page);
+  request->file = g_object_ref(file);
+  request->target_page = target_page;
+  request->preview = preview;
+  request->generation = generation;
+  request->cancellable =
+      preview ? g_object_ref(self->workspace_preview_cancellable)
+              : g_cancellable_new();
+  g_object_set_data_full(G_OBJECT(stack), "open-cancellable",
+                         g_object_ref(request->cancellable), g_object_unref);
+  pdfv_workspace_load_document_async(file, target_page, request->cancellable,
+                                     on_document_loaded, request);
+}
+
 static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
                             PdfvWindow *self) {
   (void)pspec;
@@ -485,8 +1103,8 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
     update_navigation_buttons(self);
     update_zoom_info(self);
     update_sidebar_button(self);
-    /* Hide sidebar when no tab */
-    adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+    if (!self->workspace)
+      adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
     return;
   }
 
@@ -502,8 +1120,8 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
     if (doc) {
       populate_thumbnails(self, doc);
     } else {
-      /* No document - hide sidebar */
-      adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+      if (!self->workspace)
+        adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
       populate_thumbnails(self, NULL);
     }
   }
@@ -511,8 +1129,22 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
 
 static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
                                   PdfvWindow *self) {
+  if (page == self->workspace_preview_tab) {
+    self->workspace_preview_tab = NULL;
+    self->workspace_preview_generation++;
+    if (self->workspace_preview_cancellable)
+      g_cancellable_cancel(self->workspace_preview_cancellable);
+    g_clear_object(&self->workspace_preview_file);
+  }
+  if (page == self->workspace_return_tab)
+    g_clear_object(&self->workspace_return_tab);
+
   /* Clear current_view if we're closing its tab */
   GtkWidget *stack = adw_tab_page_get_child(page);
+  GCancellable *open_cancellable =
+      g_object_get_data(G_OBJECT(stack), "open-cancellable");
+  if (open_cancellable)
+    g_cancellable_cancel(open_cancellable);
   PdfvDocumentView *view = g_object_get_data(G_OBJECT(stack), "document-view");
   if (view == self->current_view) {
     /* Disconnect signals before destruction */
@@ -559,6 +1191,110 @@ static void action_open(GSimpleAction *action, GVariant *parameter,
 
   gtk_file_dialog_open(dialog, GTK_WINDOW(self), NULL, on_file_dialog_opened,
                        self);
+}
+
+static void on_workspace_loaded(GObject *source, GAsyncResult *result,
+                                gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  PdfvWorkspace *workspace = PDFV_WORKSPACE(source);
+  GError *error = NULL;
+  gboolean loaded = pdfv_workspace_load_finish(workspace, result, &error);
+  if (workspace == self->workspace && loaded) {
+    g_clear_object(&self->workspace_tree);
+    self->workspace_tree = gtk_tree_list_model_new(
+        g_object_ref(pdfv_workspace_get_items(workspace)), FALSE, FALSE,
+        workspace_create_children, self, NULL);
+    gtk_single_selection_set_model(
+        self->workspace_selection, G_LIST_MODEL(self->workspace_tree));
+    adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
+    adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
+    adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
+    update_sidebar_button(self);
+  } else if (workspace == self->workspace && error &&
+             !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+    AdwDialog *dialog = adw_alert_dialog_new("Could Not Open Folder",
+                                             error->message);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
+    adw_dialog_present(dialog, GTK_WIDGET(self));
+  }
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
+  if (self->workspace_scan_cancellable)
+    g_cancellable_cancel(self->workspace_scan_cancellable);
+  g_clear_object(&self->workspace_scan_cancellable);
+  self->workspace_scan_cancellable = g_cancellable_new();
+
+  if (self->workspace) {
+    pdfv_workspace_cancel(self->workspace);
+    g_signal_handlers_disconnect_by_data(self->workspace, self);
+  }
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+  workspace_search_close(self, FALSE);
+  workspace_results_clear(self);
+  gtk_editable_set_text(GTK_EDITABLE(self->workspace_search_entry), "");
+  gtk_single_selection_set_model(self->workspace_selection, NULL);
+  g_clear_object(&self->workspace_tree);
+  g_clear_object(&self->workspace);
+
+  self->workspace = pdfv_workspace_new(folder);
+  g_signal_connect(self->workspace, "index-updated",
+                   G_CALLBACK(on_workspace_index_updated), self);
+  GAction *search_action =
+      g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
+  g_simple_action_set_enabled(G_SIMPLE_ACTION(search_action), TRUE);
+  if (g_menu_model_get_n_items(G_MENU_MODEL(self->workspace_menu_section)) ==
+      0)
+    g_menu_append(self->workspace_menu_section, "Search Workspace…",
+                  "win.workspace-search");
+  adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
+  adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
+  adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
+  gtk_label_set_text(self->workspace_search_status,
+                     "Scanning folder for PDFs…");
+  pdfv_workspace_load_async(self->workspace, self->workspace_scan_cancellable,
+                            on_workspace_loaded, g_object_ref(self));
+}
+
+static void on_folder_dialog_selected(GObject *source, GAsyncResult *result,
+                                      gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  GError *error = NULL;
+  GFile *folder = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(source),
+                                                       result, &error);
+  if (folder) {
+    open_workspace_folder(self, folder);
+    g_object_unref(folder);
+  } else if (error && !g_error_matches(error, GTK_DIALOG_ERROR,
+                                        GTK_DIALOG_ERROR_DISMISSED)) {
+    AdwDialog *dialog =
+        adw_alert_dialog_new("Could Not Open Folder", error->message);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
+    adw_dialog_present(dialog, GTK_WIDGET(self));
+  }
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static void action_open_folder(GSimpleAction *action, GVariant *parameter,
+                               gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  GtkFileDialog *dialog = gtk_file_dialog_new();
+  gtk_file_dialog_set_title(dialog, "Open Workspace Folder");
+  gtk_file_dialog_select_folder(dialog, GTK_WINDOW(self), NULL,
+                                on_folder_dialog_selected, g_object_ref(self));
+}
+
+static void action_workspace_search(GSimpleAction *action, GVariant *parameter,
+                                    gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  workspace_search_open(PDFV_WINDOW(user_data));
 }
 
 static void action_new_tab(GSimpleAction *action, GVariant *parameter,
@@ -665,9 +1401,10 @@ static void action_toggle_sidebar(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
 
-  /* Only toggle if there's a document loaded */
-  if (self->current_view &&
-      pdfv_document_view_get_document(self->current_view)) {
+  /* Workspaces also have useful sidebar content without an open document. */
+  if (self->workspace ||
+      (self->current_view &&
+       pdfv_document_view_get_document(self->current_view))) {
     gboolean visible =
         adw_overlay_split_view_get_show_sidebar(self->split_view);
     adw_overlay_split_view_set_show_sidebar(self->split_view, !visible);
@@ -736,24 +1473,26 @@ static void action_find_prev(GSimpleAction *action, GVariant *parameter,
 }
 
 static GActionEntry win_actions[] = {
-    {"open", action_open, NULL, NULL, NULL},
-    {"new-tab", action_new_tab, NULL, NULL, NULL},
-    {"close-tab", action_close_tab, NULL, NULL, NULL},
-    {"go-back", action_go_back, NULL, NULL, NULL},
-    {"go-forward", action_go_forward, NULL, NULL, NULL},
-    {"zoom-in", action_zoom_in, NULL, NULL, NULL},
-    {"zoom-out", action_zoom_out, NULL, NULL, NULL},
-    {"zoom-reset", action_zoom_reset, NULL, NULL, NULL},
-    {"zoom-fit-width", action_zoom_fit_width, NULL, NULL, NULL},
-    {"zoom-fit-page", action_zoom_fit_page, NULL, NULL, NULL},
-    {"fullscreen", action_fullscreen, NULL, NULL, NULL},
-    {"toggle-sidebar", action_toggle_sidebar, NULL, NULL, NULL},
-    {"invert-colors", action_invert_colors, NULL, NULL, NULL},
-    {"page-next", action_page_next, NULL, NULL, NULL},
-    {"page-prev", action_page_prev, NULL, NULL, NULL},
-    {"find", action_find, NULL, NULL, NULL},
-    {"find-next", action_find_next, NULL, NULL, NULL},
-    {"find-prev", action_find_prev, NULL, NULL, NULL},
+    {.name = "open", .activate = action_open},
+    {.name = "open-folder", .activate = action_open_folder},
+    {.name = "workspace-search", .activate = action_workspace_search},
+    {.name = "new-tab", .activate = action_new_tab},
+    {.name = "close-tab", .activate = action_close_tab},
+    {.name = "go-back", .activate = action_go_back},
+    {.name = "go-forward", .activate = action_go_forward},
+    {.name = "zoom-in", .activate = action_zoom_in},
+    {.name = "zoom-out", .activate = action_zoom_out},
+    {.name = "zoom-reset", .activate = action_zoom_reset},
+    {.name = "zoom-fit-width", .activate = action_zoom_fit_width},
+    {.name = "zoom-fit-page", .activate = action_zoom_fit_page},
+    {.name = "fullscreen", .activate = action_fullscreen},
+    {.name = "toggle-sidebar", .activate = action_toggle_sidebar},
+    {.name = "invert-colors", .activate = action_invert_colors},
+    {.name = "page-next", .activate = action_page_next},
+    {.name = "page-prev", .activate = action_page_prev},
+    {.name = "find", .activate = action_find},
+    {.name = "find-next", .activate = action_find_next},
+    {.name = "find-prev", .activate = action_find_prev},
 };
 
 static void on_search_changed(GtkSearchEntry *entry, PdfvWindow *self) {
@@ -847,8 +1586,59 @@ static void on_sidebar_show_changed(AdwOverlaySplitView *split_view,
   gtk_toggle_button_set_active(self->sidebar_button, visible);
 }
 
+static gboolean on_window_close_request(GtkWindow *window, PdfvWindow *self) {
+  (void)window;
+  if (self->workspace_scan_cancellable)
+    g_cancellable_cancel(self->workspace_scan_cancellable);
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+  if (self->workspace_preview_cancellable)
+    g_cancellable_cancel(self->workspace_preview_cancellable);
+  if (self->workspace)
+    pdfv_workspace_cancel(self->workspace);
+  self->workspace_preview_generation++;
+
+  guint n_pages = adw_tab_view_get_n_pages(self->tab_view);
+  for (guint i = 0; i < n_pages; i++) {
+    AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
+    GtkWidget *stack = adw_tab_page_get_child(page);
+    GCancellable *cancellable =
+        g_object_get_data(G_OBJECT(stack), "open-cancellable");
+    if (cancellable)
+      g_cancellable_cancel(cancellable);
+  }
+  return GDK_EVENT_PROPAGATE;
+}
+
 static void pdfv_window_dispose(GObject *object) {
   PdfvWindow *self = PDFV_WINDOW(object);
+
+  if (self->workspace_search_debounce_id) {
+    g_source_remove(self->workspace_search_debounce_id);
+    self->workspace_search_debounce_id = 0;
+  }
+  if (self->workspace_scan_cancellable)
+    g_cancellable_cancel(self->workspace_scan_cancellable);
+  if (self->workspace_search_cancellable)
+    g_cancellable_cancel(self->workspace_search_cancellable);
+  if (self->workspace_preview_cancellable)
+    g_cancellable_cancel(self->workspace_preview_cancellable);
+  if (self->workspace) {
+    pdfv_workspace_cancel(self->workspace);
+    g_signal_handlers_disconnect_by_data(self->workspace, self);
+  }
+  if (self->workspace_selection)
+    gtk_single_selection_set_model(self->workspace_selection, NULL);
+  self->workspace_selection = NULL;
+  g_clear_object(&self->workspace_tree);
+  g_clear_object(&self->workspace);
+  g_clear_object(&self->workspace_scan_cancellable);
+  g_clear_object(&self->workspace_search_cancellable);
+  g_clear_object(&self->workspace_preview_cancellable);
+  g_clear_object(&self->workspace_preview_file);
+  g_clear_object(&self->workspace_return_tab);
+  g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
+  g_clear_object(&self->workspace_menu_section);
 
   if (self->current_outline) {
     phi_outline_item_free(self->current_outline);
@@ -864,6 +1654,11 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                   G_N_ELEMENTS(win_actions), self);
+  GAction *workspace_search_action =
+      g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
+  g_simple_action_set_enabled(G_SIMPLE_ACTION(workspace_search_action), FALSE);
+  g_signal_connect(self, "close-request", G_CALLBACK(on_window_close_request),
+                   self);
 
   /* ===== WIDGET HIERARCHY =====
    *
@@ -971,8 +1766,13 @@ static void pdfv_window_init(PdfvWindow *self) {
   GMenu *menu = g_menu_new();
   GMenu *file_section = g_menu_new();
   g_menu_append(file_section, "Open…", "win.open");
+  g_menu_append(file_section, "Open Folder…", "win.open-folder");
   g_menu_append(file_section, "New Tab", "win.new-tab");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(file_section));
+
+  self->workspace_menu_section = g_menu_new();
+  g_menu_append_section(menu, NULL,
+                        G_MENU_MODEL(self->workspace_menu_section));
 
   GMenu *zoom_section = g_menu_new();
   g_menu_append(zoom_section, "Zoom In", "win.zoom-in");
@@ -1055,7 +1855,14 @@ static void pdfv_window_init(PdfvWindow *self) {
   /* Sidebar toolbar/header */
   AdwHeaderBar *sidebar_header = ADW_HEADER_BAR(adw_header_bar_new());
   adw_header_bar_set_show_title(sidebar_header, TRUE);
-  adw_header_bar_set_title_widget(sidebar_header, gtk_label_new("Pages"));
+  self->sidebar_stack = ADW_VIEW_STACK(adw_view_stack_new());
+  AdwViewSwitcher *sidebar_switcher =
+      ADW_VIEW_SWITCHER(adw_view_switcher_new());
+  adw_view_switcher_set_policy(sidebar_switcher,
+                               ADW_VIEW_SWITCHER_POLICY_WIDE);
+  adw_view_switcher_set_stack(sidebar_switcher, self->sidebar_stack);
+  adw_header_bar_set_title_widget(sidebar_header,
+                                  GTK_WIDGET(sidebar_switcher));
   gtk_widget_add_css_class(GTK_WIDGET(sidebar_header), "flat");
 
   /* Search button in sidebar header */
@@ -1095,7 +1902,39 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(thumb_scroll),
                                 GTK_WIDGET(self->thumbnail_list));
-  gtk_box_append(GTK_BOX(sidebar_box), thumb_scroll);
+
+  adw_view_stack_add_titled_with_icon(self->sidebar_stack, thumb_scroll,
+                                      "pages", "Pages",
+                                      "view-paged-symbolic");
+
+  GtkWidget *workspace_scroll = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(workspace_scroll),
+                                 GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_widget_set_vexpand(workspace_scroll, TRUE);
+  GtkListItemFactory *workspace_factory = gtk_signal_list_item_factory_new();
+  g_signal_connect(workspace_factory, "setup",
+                   G_CALLBACK(workspace_factory_setup), self);
+  g_signal_connect(workspace_factory, "bind",
+                   G_CALLBACK(workspace_factory_bind), self);
+  g_signal_connect(workspace_factory, "unbind",
+                   G_CALLBACK(workspace_factory_unbind), self);
+  self->workspace_selection = gtk_single_selection_new(NULL);
+  gtk_single_selection_set_autoselect(self->workspace_selection, FALSE);
+  gtk_single_selection_set_can_unselect(self->workspace_selection, TRUE);
+  self->workspace_list = GTK_LIST_VIEW(gtk_list_view_new(
+      GTK_SELECTION_MODEL(self->workspace_selection), workspace_factory));
+  gtk_list_view_set_single_click_activate(self->workspace_list, TRUE);
+  gtk_widget_add_css_class(GTK_WIDGET(self->workspace_list),
+                           "navigation-sidebar");
+  g_signal_connect(self->workspace_list, "activate",
+                   G_CALLBACK(on_workspace_item_activated), self);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(workspace_scroll),
+                                GTK_WIDGET(self->workspace_list));
+  self->workspace_sidebar_page = adw_view_stack_add_titled_with_icon(
+      self->sidebar_stack, workspace_scroll, "workspace", "Workspace",
+      "folder-symbolic");
+  adw_view_stack_page_set_visible(self->workspace_sidebar_page, FALSE);
+  gtk_box_append(GTK_BOX(sidebar_box), GTK_WIDGET(self->sidebar_stack));
 
   adw_overlay_split_view_set_sidebar(self->split_view, sidebar_box);
 
@@ -1118,10 +1957,10 @@ static void pdfv_window_init(PdfvWindow *self) {
                    self);
 
   /* Content overlay for floating controls */
-  GtkWidget *content_overlay = gtk_overlay_new();
-  gtk_overlay_set_child(GTK_OVERLAY(content_overlay),
+  self->content_overlay = gtk_overlay_new();
+  gtk_overlay_set_child(GTK_OVERLAY(self->content_overlay),
                         GTK_WIDGET(self->tab_view));
-  adw_toolbar_view_set_content(self->toolbar_view, content_overlay);
+  adw_toolbar_view_set_content(self->toolbar_view, self->content_overlay);
 
   /* Floating zoom controls */
   self->zoom_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1159,7 +1998,74 @@ static void pdfv_window_init(PdfvWindow *self) {
                    self);
   gtk_box_append(GTK_BOX(self->zoom_box), GTK_WIDGET(self->zoom_in_btn));
 
-  gtk_overlay_add_overlay(GTK_OVERLAY(content_overlay), self->zoom_box);
+  gtk_overlay_add_overlay(GTK_OVERLAY(self->content_overlay), self->zoom_box);
+
+  /* Spotlight-style workspace search. Its selected result is previewed in a
+   * dedicated tab behind this card, leaving the original tab untouched. */
+  self->workspace_search_overlay =
+      gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_add_css_class(self->workspace_search_overlay, "card");
+  gtk_widget_set_halign(self->workspace_search_overlay, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(self->workspace_search_overlay, GTK_ALIGN_START);
+  gtk_widget_set_size_request(self->workspace_search_overlay, 640, 430);
+  gtk_widget_set_margin_top(self->workspace_search_overlay, 48);
+  gtk_widget_set_margin_start(self->workspace_search_overlay, 18);
+  gtk_widget_set_margin_end(self->workspace_search_overlay, 18);
+
+  self->workspace_search_entry = GTK_SEARCH_ENTRY(gtk_search_entry_new());
+  gtk_search_entry_set_placeholder_text(
+      self->workspace_search_entry, "Search PDFs in this workspace");
+  gtk_widget_set_margin_top(GTK_WIDGET(self->workspace_search_entry), 14);
+  gtk_widget_set_margin_bottom(GTK_WIDGET(self->workspace_search_entry), 14);
+  gtk_widget_set_margin_start(GTK_WIDGET(self->workspace_search_entry), 14);
+  gtk_widget_set_margin_end(GTK_WIDGET(self->workspace_search_entry), 14);
+  g_signal_connect(self->workspace_search_entry, "search-changed",
+                   G_CALLBACK(on_workspace_search_changed), self);
+  g_signal_connect(self->workspace_search_entry, "stop-search",
+                   G_CALLBACK(on_workspace_search_stop), self);
+  GtkEventController *workspace_keys = gtk_event_controller_key_new();
+  gtk_event_controller_set_propagation_phase(workspace_keys,
+                                             GTK_PHASE_CAPTURE);
+  g_signal_connect(workspace_keys, "key-pressed",
+                   G_CALLBACK(on_workspace_search_key), self);
+  gtk_widget_add_controller(GTK_WIDGET(self->workspace_search_entry),
+                            workspace_keys);
+  gtk_box_append(GTK_BOX(self->workspace_search_overlay),
+                 GTK_WIDGET(self->workspace_search_entry));
+
+  GtkWidget *workspace_separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+  gtk_box_append(GTK_BOX(self->workspace_search_overlay), workspace_separator);
+  GtkWidget *result_scroll = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(result_scroll),
+                                 GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_widget_set_vexpand(result_scroll, TRUE);
+  self->workspace_results_list = GTK_LIST_BOX(gtk_list_box_new());
+  gtk_list_box_set_selection_mode(self->workspace_results_list,
+                                  GTK_SELECTION_SINGLE);
+  gtk_widget_add_css_class(GTK_WIDGET(self->workspace_results_list),
+                           "navigation-sidebar");
+  g_signal_connect(self->workspace_results_list, "row-selected",
+                   G_CALLBACK(on_workspace_result_selected), self);
+  g_signal_connect(self->workspace_results_list, "row-activated",
+                   G_CALLBACK(workspace_result_row_activated), self);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(result_scroll),
+                                GTK_WIDGET(self->workspace_results_list));
+  gtk_box_append(GTK_BOX(self->workspace_search_overlay), result_scroll);
+
+  self->workspace_search_status = GTK_LABEL(gtk_label_new(
+      "Search every PDF in this folder"));
+  gtk_widget_add_css_class(GTK_WIDGET(self->workspace_search_status),
+                           "dim-label");
+  gtk_label_set_xalign(self->workspace_search_status, 0.0f);
+  gtk_widget_set_margin_top(GTK_WIDGET(self->workspace_search_status), 8);
+  gtk_widget_set_margin_bottom(GTK_WIDGET(self->workspace_search_status), 8);
+  gtk_widget_set_margin_start(GTK_WIDGET(self->workspace_search_status), 14);
+  gtk_widget_set_margin_end(GTK_WIDGET(self->workspace_search_status), 14);
+  gtk_box_append(GTK_BOX(self->workspace_search_overlay),
+                 GTK_WIDGET(self->workspace_search_status));
+  gtk_widget_set_visible(self->workspace_search_overlay, FALSE);
+  gtk_overlay_add_overlay(GTK_OVERLAY(self->content_overlay),
+                          self->workspace_search_overlay);
 
   /* Window setup */
   gtk_window_set_default_size(GTK_WINDOW(self), 900, 700);
@@ -1184,49 +2090,17 @@ void pdfv_window_open_file(PdfvWindow *self, GFile *file) {
   g_return_if_fail(PDFV_IS_WINDOW(self));
   g_return_if_fail(G_IS_FILE(file));
 
-  GError *error = NULL;
-  PhiDocument *doc = phi_document_new_from_file(file, &error);
-
-  if (error) {
-    AdwDialog *dialog =
-        adw_alert_dialog_new("Error Opening File", error->message);
-    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
-    adw_dialog_present(dialog, GTK_WIDGET(self));
-    g_error_free(error);
-    return;
-  }
-
-  PdfvDocumentView *view = NULL;
   AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
-  GtkWidget *stack = NULL;
-
+  GtkWidget *stack;
   if (page && self->current_view &&
       !pdfv_document_view_get_document(self->current_view)) {
-    view = self->current_view;
     stack = adw_tab_page_get_child(page);
   } else {
     stack = create_tab_content(self);
-    view = g_object_get_data(G_OBJECT(stack), "document-view");
     page = adw_tab_view_append(self->tab_view, stack);
     adw_tab_view_set_selected_page(self->tab_view, page);
   }
-
-  pdfv_document_view_set_document(view, doc);
-
-  /* Switch from empty state to document view */
-  gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
-
-  gchar *basename = g_file_get_basename(file);
-  adw_tab_page_set_title(page, basename);
-  g_free(basename);
-
-  /* Update current view reference if we reused the current tab */
-  self->current_view = view;
-
-  populate_thumbnails(self, doc);
-  update_sidebar_button(self);
-
-  g_object_unref(doc);
+  open_file_in_tab_async(self, file, page, 0, FALSE, 0);
 }
 
 void pdfv_window_new_tab(PdfvWindow *self) {

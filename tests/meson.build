@@ -28,3 +28,13 @@ test_text = executable('test-text', 'test-text.c',
 )
 
 test('text-test', test_text)
+
+test_workspace = executable('test-workspace',
+	'test-workspace.c',
+	'../src/pdfv-workspace.c',
+	include_directories: [inc, include_directories('../src')],
+	dependencies: [phi_dep, mupdf_dep],
+	c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
+)
+
+test('workspace-test', test_workspace, timeout: 30)

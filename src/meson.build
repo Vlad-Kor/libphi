@@ -21,6 +21,7 @@ pdfv_sources = [
 	'pdfv-application.c',
 	'pdfv-window.c',
 	'pdfv-document-view.c',
+	'pdfv-workspace.c',
 ]
 
 pdfv_app = executable('pdfv', pdfv_sources,

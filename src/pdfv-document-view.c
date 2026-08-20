@@ -176,28 +176,37 @@ calculate_layout(PdfvDocumentView* self)
     g_array_set_size(self->page_offsets, n_pages);
     self->total_height = 0;
     self->max_width = 0;
+
+    /* Most PDFs use one page size throughout. Loading every page here made
+     * opening a long document an O(page count) main-thread operation. Use the
+     * first page as an estimate and replace individual values as pages become
+     * visible. */
+    gfloat reference_width = 612.0f;
+    gfloat reference_height = 792.0f;
+    PhiPage* reference_page = g_ptr_array_index(self->pages, 0);
+    if (!reference_page) {
+        reference_page = phi_document_get_page(self->document, 0, NULL);
+        g_ptr_array_index(self->pages, 0) = reference_page;
+    }
+    if (reference_page)
+        phi_page_get_size(reference_page, &reference_width, &reference_height);
     
     gdouble offset = 0;
     for (gint i = 0; i < n_pages; i++) {
         PhiPage* page = g_ptr_array_index(self->pages, i);
-        if (!page) {
-            page = phi_document_get_page(self->document, i, NULL);
-            g_ptr_array_index(self->pages, i) = page;
-        }
-        
         g_array_index(self->page_offsets, gdouble, i) = offset;
-        
+
+        gfloat w = reference_width;
+        gfloat h = reference_height;
         if (page) {
-            gfloat w, h;
             phi_page_get_size(page, &w, &h);
-            gdouble scaled_w = w * self->zoom;
-            gdouble scaled_h = h * self->zoom;
-            
-            g_array_index(self->page_heights, gdouble, i) = scaled_h;
-            offset += scaled_h + PAGE_GAP;
-            if (scaled_w > self->max_width)
-                self->max_width = scaled_w;
         }
+        gdouble scaled_w = w * self->zoom;
+        gdouble scaled_h = h * self->zoom;
+        g_array_index(self->page_heights, gdouble, i) = scaled_h;
+        offset += scaled_h + PAGE_GAP;
+        if (scaled_w > self->max_width)
+            self->max_width = scaled_w;
     }
     
     self->total_height = offset > 0 ? offset - PAGE_GAP : 0;
@@ -312,8 +321,35 @@ static GskRenderNode*
 render_page_node(PdfvDocumentView* self, gint page_num)
 {
     PhiPage* page = g_ptr_array_index(self->pages, page_num);
-    if (!page)
-        return NULL;
+    if (!page) {
+        GError* load_error = NULL;
+        page = phi_document_get_page(self->document, page_num, &load_error);
+        if (!page) {
+            g_warning("Failed to load page %d: %s", page_num + 1,
+                      load_error ? load_error->message : "unknown error");
+            g_clear_error(&load_error);
+            return NULL;
+        }
+        g_ptr_array_index(self->pages, page_num) = page;
+
+        /* Correct the estimated layout from this page onward. This is cheap
+         * and keeps mixed-size documents accurate without eager loading. */
+        gfloat width, height;
+        phi_page_get_size(page, &width, &height);
+        gdouble old_height =
+            g_array_index(self->page_heights, gdouble, page_num);
+        gdouble new_height = height * self->zoom;
+        gdouble delta = new_height - old_height;
+        self->max_width = MAX(self->max_width, width * self->zoom);
+        if (fabs(delta) > 0.01) {
+            g_array_index(self->page_heights, gdouble, page_num) = new_height;
+            for (guint i = page_num + 1; i < self->page_offsets->len; i++)
+                g_array_index(self->page_offsets, gdouble, i) += delta;
+            self->total_height += delta;
+            update_adjustments(self);
+            gtk_widget_queue_resize(GTK_WIDGET(self));
+        }
+    }
     
     GError* error = NULL;
     GskRenderNode* base_node = phi_page_render_to_node(page, &error);
@@ -339,8 +375,10 @@ ensure_page_cached(PdfvDocumentView* self, gint page)
         return;
     
     /* Define cache window */
-    gint cache_start = MAX(0, page - 2);
-    gint cache_end = MIN(n_pages - 1, page + 2);
+    /* Only the current page is rendered synchronously. Neighbor rendering on
+     * the GTK thread caused noticeable stalls on complex, long documents. */
+    gint cache_start = page;
+    gint cache_end = page;
     gint new_cache_size = cache_end - cache_start + 1;
     
     /* Check if we need to rebuild cache */
