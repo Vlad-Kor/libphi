@@ -1452,6 +1452,7 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   gtk_widget_set_hexpand(scrolled, TRUE);
   gtk_widget_set_vexpand(scrolled, TRUE);
   gtk_stack_add_named(GTK_STACK(stack), scrolled, "document");
+  pdfv_document_view_capture_zoom_scroll(view, stack);
 
   /* Start with empty state */
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");

@@ -409,6 +409,17 @@ render_page_node(PdfvDocumentView* self, gint page_num)
 {
     PhiPage* page = g_ptr_array_index(self->pages, page_num);
     if (!page) {
+        /* Loading a newly visible page can replace its estimated height.
+         * Preserve the location under the active pinch (or the viewport
+         * center otherwise) while shifting all following page offsets. */
+        gint viewport_height = gtk_widget_get_height(GTK_WIDGET(self));
+        gdouble layout_focus_y =
+            gtk_gesture_is_active(self->zoom_gesture)
+                ? self->pinch_center_y
+                : viewport_height / 2.0;
+        VerticalAnchor layout_anchor = vertical_anchor_at(
+            self, self->scroll_y + layout_focus_y);
+
         GError* load_error = NULL;
         page = phi_document_get_page(self->document, page_num, &load_error);
         if (!page) {
@@ -433,6 +444,11 @@ render_page_node(PdfvDocumentView* self, gint page_num)
             for (guint i = page_num + 1; i < self->page_offsets->len; i++)
                 g_array_index(self->page_offsets, gdouble, i) += delta;
             self->total_height += delta;
+            self->scroll_y = vertical_anchor_position(self, &layout_anchor) -
+                layout_focus_y;
+            self->scroll_y = CLAMP(
+                self->scroll_y, 0,
+                MAX(0, self->total_height - viewport_height));
             update_adjustments(self);
             gtk_widget_queue_resize(GTK_WIDGET(self));
         }
@@ -870,10 +886,31 @@ on_motion_leave(GtkEventControllerMotion* controller, PdfvDocumentView* self)
 }
 
 static void
+cancel_scroll_momentum(PdfvDocumentView* self)
+{
+    GtkWidget* parent = gtk_widget_get_parent(GTK_WIDGET(self));
+    while (parent && !GTK_IS_SCROLLED_WINDOW(parent))
+        parent = gtk_widget_get_parent(parent);
+    if (!parent)
+        return;
+
+    GtkScrolledWindow* scrolled = GTK_SCROLLED_WINDOW(parent);
+    gboolean kinetic = gtk_scrolled_window_get_kinetic_scrolling(scrolled);
+    if (kinetic) {
+        /* Changing this property cancels GtkScrolledWindow's private kinetic
+         * tick.  Without doing so, that tick can overwrite the adjustment we
+         * set for the pinch anchor and then spring back on a later update. */
+        gtk_scrolled_window_set_kinetic_scrolling(scrolled, FALSE);
+        gtk_scrolled_window_set_kinetic_scrolling(scrolled, TRUE);
+    }
+}
+
+static void
 on_zoom_begin(GtkGestureZoom* gesture, GdkEventSequence* sequence,
               PdfvDocumentView* self)
 {
     (void)sequence;
+    cancel_scroll_momentum(self);
     self->pinch_start_zoom = self->zoom;
     
     /* Store the center point of the pinch gesture */
@@ -904,13 +941,25 @@ static void
 on_zoom_scale_changed(GtkGestureZoom* gesture, gdouble scale,
                       PdfvDocumentView* self)
 {
-    /* Update center point as fingers move */
-    gdouble x, y;
-    if (gtk_gesture_get_bounding_box_center(GTK_GESTURE(gesture), &x, &y)) {
-        self->pinch_center_x = x;
-        self->pinch_center_y = y;
+    GdkEvent* event = gtk_event_controller_get_current_event(
+        GTK_EVENT_CONTROLLER(gesture));
+    gboolean touchpad = event &&
+        gdk_event_get_event_type(event) == GDK_TOUCHPAD_PINCH;
+
+    /* For native touchpad gestures GTK's reported point includes the
+     * accumulated dx/dy of the fingers.  Following that moving point turns a
+     * slightly diagonal pinch into a vertical pan and may snap the page back
+     * as the delta settles.  Keep its focal point fixed for the whole pinch.
+     * Real touchscreen points have absolute positions, so retain combined
+     * pinch-and-pan there. */
+    if (!touchpad) {
+        gdouble x, y;
+        if (gtk_gesture_get_bounding_box_center(GTK_GESTURE(gesture), &x, &y)) {
+            self->pinch_center_x = x;
+            self->pinch_center_y = y;
+        }
     }
-    
+
     gdouble new_zoom = self->pinch_start_zoom * scale;
     zoom_from_anchor(self, new_zoom, self->pinch_anchor_x,
                      &self->pinch_anchor_y, self->pinch_center_x,
@@ -922,6 +971,9 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
           PdfvDocumentView* self)
 {
     (void)dx;
+    if (!self->document)
+        return FALSE;
+
     GdkModifierType state = gtk_event_controller_get_current_event_state(
         GTK_EVENT_CONTROLLER(controller));
     
@@ -957,6 +1009,37 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
     }
     
     return FALSE; /* Let default scrolling happen */
+}
+
+static void
+on_scroll_begin(GtkEventControllerScroll* controller, PdfvDocumentView* self)
+{
+    GdkModifierType state = gtk_event_controller_get_current_event_state(
+        GTK_EVENT_CONTROLLER(controller));
+    if (state & GDK_CONTROL_MASK)
+        cancel_scroll_momentum(self);
+}
+
+void
+pdfv_document_view_capture_zoom_scroll(PdfvDocumentView* self,
+                                       GtkWidget* ancestor)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(GTK_IS_WIDGET(ancestor));
+
+    /* GtkScrolledWindow consumes smooth scroll in its capture phase.  Some
+     * touchpad backends expose pinch zoom as Ctrl+scroll, so a controller on
+     * the document itself runs too late: the same delta has already changed
+     * the vertical adjustment.  Install this on an ancestor outside the
+     * scrolled window to intercept zoom before scrolling can occur. */
+    GtkEventController* controller = gtk_event_controller_scroll_new(
+        GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+    gtk_event_controller_set_propagation_phase(controller, GTK_PHASE_CAPTURE);
+    g_signal_connect_object(controller, "scroll-begin",
+                            G_CALLBACK(on_scroll_begin), self, 0);
+    g_signal_connect_object(controller, "scroll", G_CALLBACK(on_scroll), self,
+                            0);
+    gtk_widget_add_controller(ancestor, controller);
 }
 
 /* Helper to convert screen coordinates to page coordinates */
@@ -1417,6 +1500,8 @@ pdfv_document_view_init(PdfvDocumentView* self)
     /* Scroll controller for zoom */
     self->scroll_controller = gtk_event_controller_scroll_new(
         GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+    g_signal_connect(self->scroll_controller, "scroll-begin",
+        G_CALLBACK(on_scroll_begin), self);
     g_signal_connect(self->scroll_controller, "scroll", G_CALLBACK(on_scroll), self);
     gtk_widget_add_controller(GTK_WIDGET(self), self->scroll_controller);
     

@@ -34,6 +34,10 @@ void pdfv_document_view_zoom_out(PdfvDocumentView* self);
 void pdfv_document_view_zoom_fit_width(PdfvDocumentView* self);
 void pdfv_document_view_zoom_fit_page(PdfvDocumentView* self);
 
+/* Capture Ctrl+scroll pinch emulation before an enclosing scrolled window. */
+void pdfv_document_view_capture_zoom_scroll(PdfvDocumentView* self,
+                                            GtkWidget* ancestor);
+
 void pdfv_document_view_set_continuous(PdfvDocumentView* self, gboolean continuous);
 gboolean pdfv_document_view_get_continuous(PdfvDocumentView* self);
 
