@@ -1,6 +1,6 @@
 /*
  * Phi PDF Viewer - High performance PDF viewer using libphi
- * Copyright (C) 2025  Florian "sp1rit" <sp1rit@disoot.org>
+ * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -54,6 +54,8 @@ struct _PdfvWindow {
   gboolean workspace_search_running;
   gboolean workspace_index_dirty;
   gboolean workspace_suppress_preview;
+  GHashTable *workspace_document_cache; /* URI -> PhiDocument */
+  GQueue workspace_document_cache_order; /* URI strings, oldest first */
 
   /* Floating workspace search */
   GtkWidget *content_overlay;
@@ -597,6 +599,50 @@ static GtkListBoxRow *workspace_find_result_row(PdfvWindow *self, gint group,
   return NULL;
 }
 
+static void workspace_document_cache_clear(PdfvWindow *self) {
+  if (self->workspace_document_cache)
+    g_hash_table_remove_all(self->workspace_document_cache);
+  g_queue_clear_full(&self->workspace_document_cache_order, g_free);
+}
+
+static void workspace_document_cache_touch(PdfvWindow *self,
+                                           const gchar *uri) {
+  GList *link = g_queue_find_custom(&self->workspace_document_cache_order, uri,
+                                    (GCompareFunc)g_strcmp0);
+  if (link) {
+    g_free(link->data);
+    g_queue_delete_link(&self->workspace_document_cache_order, link);
+  }
+  g_queue_push_tail(&self->workspace_document_cache_order, g_strdup(uri));
+}
+
+static PhiDocument *workspace_document_cache_lookup(PdfvWindow *self,
+                                                    GFile *file) {
+  gchar *uri = g_file_get_uri(file);
+  PhiDocument *document = g_hash_table_lookup(self->workspace_document_cache,
+                                              uri);
+  if (document) {
+    workspace_document_cache_touch(self, uri);
+    g_object_ref(document);
+  }
+  g_free(uri);
+  return document;
+}
+
+static void workspace_document_cache_store(PdfvWindow *self, GFile *file,
+                                           PhiDocument *document) {
+  gchar *uri = g_file_get_uri(file);
+  g_hash_table_replace(self->workspace_document_cache, g_strdup(uri),
+                       g_object_ref(document));
+  workspace_document_cache_touch(self, uri);
+  while (g_queue_get_length(&self->workspace_document_cache_order) > 4) {
+    gchar *oldest = g_queue_pop_head(&self->workspace_document_cache_order);
+    g_hash_table_remove(self->workspace_document_cache, oldest);
+    g_free(oldest);
+  }
+  g_free(uri);
+}
+
 static void workspace_preview_selected(PdfvWindow *self) {
   PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
   PdfvWorkspaceMatch *match = workspace_selected_match(self);
@@ -608,7 +654,6 @@ static void workspace_preview_selected(PdfvWindow *self) {
     self->workspace_preview_tab = adw_tab_view_append(self->tab_view, content);
     adw_tab_page_set_title(self->workspace_preview_tab, "Loading…");
   }
-  adw_tab_view_set_selected_page(self->tab_view, self->workspace_preview_tab);
   self->workspace_preview_page = match->page;
 
   if (self->workspace_preview_file &&
@@ -616,8 +661,11 @@ static void workspace_preview_selected(PdfvWindow *self) {
     GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
     PdfvDocumentView *view =
         g_object_get_data(G_OBJECT(stack), "document-view");
-    if (pdfv_document_view_get_document(view))
+    if (pdfv_document_view_get_document(view)) {
+      adw_tab_view_set_selected_page(self->tab_view,
+                                     self->workspace_preview_tab);
       pdfv_document_view_go_to_page(view, match->page);
+    }
     return;
   }
 
@@ -628,6 +676,43 @@ static void workspace_preview_selected(PdfvWindow *self) {
   g_clear_object(&self->workspace_preview_cancellable);
   self->workspace_preview_cancellable = g_cancellable_new();
   self->workspace_preview_generation++;
+
+  PhiDocument *cached =
+      workspace_document_cache_lookup(self, group->file);
+  if (cached) {
+    GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
+    g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+    PdfvDocumentView *view =
+        g_object_get_data(G_OBJECT(stack), "document-view");
+    pdfv_document_view_set_document(view, cached);
+    pdfv_document_view_go_to_page(view, match->page);
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
+    pdfv_document_view_zoom_fit_width(view);
+    g_object_set_data_full(G_OBJECT(stack), "document-file",
+                           g_object_ref(group->file), g_object_unref);
+    gchar *basename = g_file_get_basename(group->file);
+    adw_tab_page_set_title(self->workspace_preview_tab, basename);
+    g_free(basename);
+    adw_tab_view_set_selected_page(self->tab_view,
+                                   self->workspace_preview_tab);
+    self->current_view = view;
+    populate_thumbnails(self, cached);
+    update_navigation_buttons(self);
+    update_zoom_info(self);
+    update_sidebar_button(self);
+    g_object_unref(cached);
+    return;
+  }
+
+  /* Keep the current document visible while an uncached PDF opens. The
+   * search remains fully navigable and the preview appears only when ready. */
+  if (adw_tab_view_get_selected_page(self->tab_view) ==
+          self->workspace_preview_tab &&
+      self->workspace_return_tab &&
+      adw_tab_view_get_page_position(self->tab_view,
+                                     self->workspace_return_tab) >= 0)
+    adw_tab_view_set_selected_page(self->tab_view,
+                                   self->workspace_return_tab);
   open_file_in_tab_async(self, group->file, self->workspace_preview_tab,
                          match->page, TRUE, TRUE,
                          self->workspace_preview_generation);
@@ -1206,6 +1291,8 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
       adw_tab_view_get_page_position(self->tab_view, request->page) >= 0;
   gboolean stale_preview =
       request->preview && request->generation != self->workspace_preview_generation;
+  if (document && request->preview && !stale_preview && self->workspace)
+    workspace_document_cache_store(self, request->file, document);
   GtkWidget *target_stack =
       page_is_open ? adw_tab_page_get_child(request->page) : NULL;
   gboolean current_request =
@@ -1233,6 +1320,9 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
     gchar *basename = g_file_get_basename(request->file);
     adw_tab_page_set_title(request->page, basename);
     g_free(basename);
+
+    if (request->preview)
+      adw_tab_view_set_selected_page(self->tab_view, request->page);
 
     if (adw_tab_view_get_selected_page(self->tab_view) == request->page) {
       self->current_view = view;
@@ -1456,6 +1546,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   g_clear_object(&self->workspace_search_cancellable);
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
+  workspace_document_cache_clear(self);
   self->workspace_search_running = FALSE;
   self->workspace_index_dirty = FALSE;
   self->workspace_suppress_preview = FALSE;
@@ -1926,6 +2017,8 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->workspace_preview_file);
   g_clear_object(&self->workspace_return_tab);
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
+  workspace_document_cache_clear(self);
+  g_clear_pointer(&self->workspace_document_cache, g_hash_table_unref);
   g_clear_object(&self->workspace_menu_section);
 
   if (self->current_outline) {
@@ -1939,6 +2032,8 @@ static void pdfv_window_dispose(GObject *object) {
 static void pdfv_window_init(PdfvWindow *self) {
   self->current_view = NULL;
   self->current_outline = NULL;
+  self->workspace_document_cache =
+      g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
 
   g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                   G_N_ELEMENTS(win_actions), self);
@@ -2309,8 +2404,10 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_css_provider_load_from_string(
       workspace_search_css,
       ".workspace-search-card {"
-      "  background-color: @card_bg_color;"
-      "  color: @card_fg_color;"
+      "  background-color: @window_bg_color;"
+      "  background-image: none;"
+      "  color: @window_fg_color;"
+      "  opacity: 1;"
       "  border: 1px solid alpha(@window_fg_color, 0.12);"
       "  border-radius: 18px;"
       "  box-shadow: 0 12px 32px alpha(black, 0.30);"

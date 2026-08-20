@@ -101,11 +101,16 @@ typedef struct {
 	fz_device super;
 	// GArray<PhiRenderContext>
 	GArray *stack;
+	/* Cloned MuPDF contexts keep using the originating context's lock
+	 * callbacks. Keep their callback owner alive for as long as any render
+	 * node backed by this device can survive. */
+	GObject *context_owner;
 } PhiNodeDevice;
 
 static void phi_node_device_drop(fz_context*, fz_device* dev) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
 	g_array_unref(self->stack);
+	g_clear_object(&self->context_owner);
 }
 
 static GskTransform* phi_node_device_transform_from_matrix(const fz_matrix* ctm) {
@@ -337,13 +342,16 @@ static GskRenderNode* phi_node_device_alpha(GskRenderNode* child, float alpha) {
 typedef struct {
 	fz_context* ctx;
 	fz_pixmap* pixmap;
+	GObject* context_owner;
 } PhiPixmapStorage;
 static void phi_pixmap_storage_free(PhiPixmapStorage* self) {
 	fz_drop_pixmap(self->ctx, self->pixmap);
 	fz_drop_context(self->ctx);
+	g_object_unref(self->context_owner);
 	g_free(self);
 }
-static GskRenderNode* phi_node_device_node_from_image(fz_context* ctx, fz_image* img, fz_matrix ctm) {
+static GskRenderNode* phi_node_device_node_from_image(fz_context* ctx,
+	fz_image* img, fz_matrix ctm, GObject* context_owner) {
 	fz_pixmap* pixmap = NULL;
 	fz_pixmap* converted = NULL;
 	
@@ -419,6 +427,7 @@ static GskRenderNode* phi_node_device_node_from_image(fz_context* ctx, fz_image*
 	PhiPixmapStorage *pixmap_store = g_new(PhiPixmapStorage, 1);
 	pixmap_store->ctx = fz_clone_context(ctx);
 	pixmap_store->pixmap = pixmap; // takes ownership
+	pixmap_store->context_owner = g_object_ref(context_owner);
 
 	GBytes* bytes = g_bytes_new_with_free_func(fz_pixmap_samples(ctx, pixmap), fz_pixmap_size(ctx, pixmap), (GDestroyNotify)phi_pixmap_storage_free, pixmap_store);
 	GdkTexture* texture = gdk_memory_texture_new(width, height, format, bytes, fz_pixmap_stride(ctx, pixmap));
@@ -436,7 +445,8 @@ static GskRenderNode* phi_node_device_node_from_image(fz_context* ctx, fz_image*
 
 static void phi_node_device_fill_image(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, float alpha, fz_color_params) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
-	GskRenderNode *node = phi_node_device_node_from_image(ctx, img, ctm);
+	GskRenderNode *node = phi_node_device_node_from_image(ctx, img, ctm,
+		self->context_owner);
 	node = phi_node_device_alpha(node, alpha);
 	PhiRenderContext* current = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
 	g_ptr_array_add(current->children, node);
@@ -444,7 +454,8 @@ static void phi_node_device_fill_image(fz_context* ctx, fz_device* dev, fz_image
 
 static void phi_node_device_clip_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, fz_rect scissor) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
-	GskRenderNode *node = phi_node_device_node_from_image(ctx, img, ctm);
+	GskRenderNode *node = phi_node_device_node_from_image(ctx, img, ctm,
+		self->context_owner);
 
 	PhiRenderContext new;
 	phi_render_context_init(&new);
@@ -460,7 +471,8 @@ static void phi_node_device_fill_image_mask(fz_context* ctx, fz_device* dev, fz_
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
 	
 	/* Get image as alpha mask */
-	GskRenderNode* mask = phi_node_device_node_from_image(ctx, img, ctm);
+	GskRenderNode* mask = phi_node_device_node_from_image(ctx, img, ctm,
+		self->context_owner);
 	
 	/* Create the color fill */
 	graphene_rect_t bounds;
@@ -812,6 +824,7 @@ static void phi_node_device_fill_shade(fz_context* ctx, fz_device* dev, fz_shade
 	PhiPixmapStorage* pixmap_store = g_new(PhiPixmapStorage, 1);
 	pixmap_store->ctx = fz_clone_context(ctx);
 	pixmap_store->pixmap = pixmap;
+	pixmap_store->context_owner = g_object_ref(self->context_owner);
 	
 	GBytes* bytes = g_bytes_new_with_free_func(
 		fz_pixmap_samples(ctx, pixmap),
@@ -1065,10 +1078,12 @@ static void phi_node_device_end_tile(fz_context* ctx, fz_device* dev) {
 	g_ptr_array_add(parent->children, final);
 }
 
-fz_device* phi_node_device_new(fz_context* ctx) {
+fz_device* phi_node_device_new(fz_context* ctx, GObject* context_owner) {
+	g_return_val_if_fail(G_IS_OBJECT(context_owner), NULL);
 	PhiNodeDevice* self = fz_new_derived_device(ctx, PhiNodeDevice);
 	self->stack = g_array_new(FALSE, FALSE, sizeof(PhiRenderContext));
 	g_array_set_clear_func(self->stack, (GDestroyNotify)phi_render_context_clear);
+	self->context_owner = g_object_ref(context_owner);
 
 	self->super.drop_device = phi_node_device_drop;
 	

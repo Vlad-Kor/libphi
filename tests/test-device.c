@@ -1,6 +1,6 @@
 /*
  * libphi - High performance document renderer for GTK
- * Copyright (C) 2025  Florian "sp1rit" <sp1rit@disoot.org>
+ * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -25,9 +25,25 @@
 #include <gtk/gtk.h>
 #include <mupdf/fitz.h>
 
+#include <phi/phinodedeviceprivate.h>
+
 /* Test counters */
 static int tests_run = 0;
 static int tests_passed = 0;
+
+typedef struct {
+	GMutex locks[FZ_LOCK_MAX];
+} TestContextLocks;
+
+static void test_context_lock(void* user, int lock) {
+	TestContextLocks* locks = user;
+	g_mutex_lock(&locks->locks[lock]);
+}
+
+static void test_context_unlock(void* user, int lock) {
+	TestContextLocks* locks = user;
+	g_mutex_unlock(&locks->locks[lock]);
+}
 
 #define TEST(name, condition) do { \
 	tests_run++; \
@@ -252,6 +268,46 @@ static void test_gsk_render_nodes(void) {
 	gsk_render_node_unref(nodes[1]);
 }
 
+static void test_render_node_context_owner_lifetime(void) {
+	g_print("\n=== Render Node Lifetime Test ===\n");
+
+	TestContextLocks locks = {0};
+	for (guint i = 0; i < G_N_ELEMENTS(locks.locks); i++)
+		g_mutex_init(&locks.locks[i]);
+	fz_locks_context lock_context = {
+		.user = &locks,
+		.lock = test_context_lock,
+		.unlock = test_context_unlock,
+	};
+	fz_context* ctx = fz_new_context(NULL, &lock_context, FZ_STORE_DEFAULT);
+	GObject* owner = g_object_new(G_TYPE_OBJECT, NULL);
+	/* Model PhiDocument: the owner releases the originating context only when
+	 * its last render-node reference disappears. */
+	g_object_set_data_full(owner, "mupdf-context", ctx,
+		(GDestroyNotify)fz_drop_context);
+	GObject* weak_owner = owner;
+	g_object_add_weak_pointer(owner, (gpointer*)&weak_owner);
+
+	fz_pixmap* pixmap = fz_new_pixmap(ctx, fz_device_rgb(ctx), 2, 2, NULL, 1);
+	fz_clear_pixmap_with_value(ctx, pixmap, 0xff);
+	fz_image* image = fz_new_image_from_pixmap(ctx, pixmap, NULL);
+	fz_drop_pixmap(ctx, pixmap);
+
+	fz_device* device = phi_node_device_new(ctx, owner);
+	fz_fill_image(ctx, device, image, fz_identity, 1.0f,
+		fz_default_color_params);
+	GskRenderNode* node = phi_node_device_pop_root(device);
+	fz_drop_device(ctx, device);
+	fz_drop_image(ctx, image);
+
+	g_object_unref(owner);
+	TEST("Render node retains MuPDF context owner", weak_owner != NULL);
+	gsk_render_node_unref(node);
+	TEST("Render node releases MuPDF context owner", weak_owner == NULL);
+	for (guint i = 0; i < G_N_ELEMENTS(locks.locks); i++)
+		g_mutex_clear(&locks.locks[i]);
+}
+
 int main(int argc, char* argv[]) {
 	(void)argc;
 	(void)argv;
@@ -268,6 +324,7 @@ int main(int argc, char* argv[]) {
 	test_matrix_operations();
 	test_gsk_path_builder();
 	test_gsk_render_nodes();
+	test_render_node_context_owner_lifetime();
 	
 	g_print("\n==================\n");
 	g_print("Results: %d/%d tests passed\n", tests_passed, tests_run);

@@ -76,7 +76,8 @@ GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error) {
 	fz_device* device = NULL;
 	GskRenderNode* ret = NULL;
 	fz_try(self->document->ctx) {
-		device = phi_node_device_new(self->document->ctx);
+		device = phi_node_device_new(self->document->ctx,
+			G_OBJECT(self->document));
 		fz_run_page(self->document->ctx, self->page, device, fz_identity, NULL);
 		ret = phi_node_device_pop_root(device);
 	} fz_always(self->document->ctx) {

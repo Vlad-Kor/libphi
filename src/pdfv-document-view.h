@@ -1,6 +1,6 @@
 /*
  * Phi PDF Viewer - High performance PDF viewer using libphi
- * Copyright (C) 2025  Florian "sp1rit" <sp1rit@disoot.org>
+ * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by

@@ -22,7 +22,7 @@
 #include <gsk/gsk.h>
 #include <mupdf/fitz.h>
 
-fz_device* phi_node_device_new(fz_context* ctx);
+fz_device* phi_node_device_new(fz_context* ctx, GObject* context_owner);
 
 GskRenderNode* phi_node_device_pop_root(fz_device *self);
 

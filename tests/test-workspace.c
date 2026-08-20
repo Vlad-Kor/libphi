@@ -1,6 +1,6 @@
 /*
  * Phi PDF Viewer - workspace integration tests
- * Copyright (C) 2025  Florian "sp1rit" <sp1rit@disoot.org>
+ * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  */
 
 #include "pdfv-workspace.h"
