@@ -71,4 +71,21 @@ $$`;
     expect(nodes.find((node) => node.kind === "display-math")?.text)
       .toContain("\\boxed{");
   });
+
+  it("parses linked HTML images, linked Markdown images, and fenced code", () => {
+    const source = `[<img src="https://example.com/button.png" height="100">](https://example.com/extension)
+[![GitHub Sponsors](https://img.shields.io/example)](https://example.com/sponsor)
+
+\`\`\`c
+test();
+\`\`\``;
+    const nodes = parseObsidian(source);
+    const links = nodes.filter((node) => node.kind === "markdown-link");
+    expect(links).toHaveLength(2);
+    expect(links[0].meta).toMatchObject({ target: "https://example.com/extension" });
+    expect(links[1].meta).toMatchObject({ target: "https://example.com/sponsor" });
+    expect(String(links[1].meta?.alias)).toContain("![GitHub Sponsors]");
+    expect(nodes.some((node) => node.kind === "code-block" && node.meta?.language === "c"))
+      .toBe(true);
+  });
 });

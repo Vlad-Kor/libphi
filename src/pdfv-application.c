@@ -42,20 +42,19 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* close_tab_accels[] = { "<Control>w", NULL };
 	const char* save_accels[] = { "<Control>s", NULL };
 	const char* quit_accels[] = { "<Control>q", NULL };
-	const char* zoom_in_accels[] = { "<Control>plus", "<Control>equal", "plus", NULL };
-	const char* zoom_out_accels[] = { "<Control>minus", "minus", NULL };
+	const char* zoom_in_accels[] = { "<Control>plus", "<Control>equal", NULL };
+	const char* zoom_out_accels[] = { "<Control>minus", NULL };
 	const char* zoom_reset_accels[] = { "<Control>0", NULL };
 	const char* fullscreen_accels[] = { "F11", NULL };
-	const char* find_accels[] = { "<Control>f", "slash", NULL };
+	const char* find_accels[] = { "<Control>f", NULL };
+	const char* new_window_accels[] = { "<Control>n", NULL };
 	const char* workspace_find_accels[] = { "<Control><Shift>f", NULL };
 	const char* find_next_accels[] = { "F3", "<Control>g", NULL };
 	const char* find_prev_accels[] = { "<Shift>F3", "<Control><Shift>g", NULL };
 	const char* go_back_accels[] = { "<Alt>Left", NULL };
 	const char* go_forward_accels[] = { "<Alt>Right", NULL };
-	const char* prev_page_accels[] = { "Page_Up", "p", NULL };
-	const char* next_page_accels[] = { "Page_Down", "n", NULL };
-	const char* first_page_accels[] = { "Home", NULL };
-	const char* last_page_accels[] = { "End", NULL };
+	const char* prev_page_accels[] = { "Page_Up", NULL };
+	const char* next_page_accels[] = { "Page_Down", NULL };
 	const char* toggle_sidebar_accels[] = { "F9", NULL };
 	const char* invert_accels[] = { "<Control>i", NULL };
 	
@@ -69,15 +68,14 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-reset", zoom_reset_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.fullscreen", fullscreen_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find", find_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.new-workspace-window", new_window_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.workspace-search", workspace_find_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find-next", find_next_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find-prev", find_prev_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.go-back", go_back_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.go-forward", go_forward_accels);
-	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.prev-page", prev_page_accels);
-	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.next-page", next_page_accels);
-	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.first-page", first_page_accels);
-	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.last-page", last_page_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.page-prev", prev_page_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.page-next", next_page_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.toggle-sidebar", toggle_sidebar_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.invert-colors", invert_accels);
 }
@@ -85,7 +83,12 @@ static void pdfv_application_startup(GApplication* app) {
 static void pdfv_application_quit_action(GSimpleAction* action, GVariant* param, gpointer app) {
 	(void)action;
 	(void)param;
-	g_application_quit(G_APPLICATION(app));
+	GList* windows = g_list_copy(gtk_application_get_windows(GTK_APPLICATION(app)));
+	for (GList* at = windows; at; at = at->next)
+		g_object_ref(at->data);
+	for (GList* at = windows; at; at = at->next)
+		gtk_window_close(GTK_WINDOW(at->data));
+	g_list_free_full(windows, g_object_unref);
 }
 
 static void pdfv_application_about_action(GSimpleAction* action, GVariant* param, gpointer app) {
@@ -125,8 +128,11 @@ static void pdfv_application_init(PdfvApplication* self) {
 }
 
 PdfvApplication* pdfv_application_new(void) {
+	GApplicationFlags flags = G_APPLICATION_HANDLES_OPEN;
+	if (g_getenv("PHI_DEVELOPMENT_NON_UNIQUE"))
+		flags |= G_APPLICATION_NON_UNIQUE;
 	return g_object_new(PDFV_TYPE_APPLICATION,
 		"application-id", "arpa.sp1rit.phi.viewer",
-		"flags", G_APPLICATION_HANDLES_OPEN,
+		"flags", flags,
 		NULL);
 }

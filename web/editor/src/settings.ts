@@ -23,5 +23,6 @@ export function applyTheme(theme: EditorTheme): void {
   const root = document.documentElement;
   root.dataset.theme = theme.dark ? "dark" : "light";
   root.style.setProperty("--editor-font-scale", String(theme.fontScale ?? 1));
+  if (theme.background) root.style.setProperty("--editor-bg", theme.background);
   root.style.colorScheme = theme.dark ? "dark" : "light";
 }

@@ -29,6 +29,7 @@ export interface OpenDocument {
 export interface EditorTheme {
   dark: boolean;
   fontScale?: number;
+  background?: string;
 }
 
 export interface EditorSettings {

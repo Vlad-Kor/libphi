@@ -1,5 +1,7 @@
+import "mathjax/tex-chtml.js";
 import { reportError, sendNative } from "./bridge";
 import { PhiMarkdownEditor } from "./editor";
+import { ensureMathJaxReady } from "./math/mathjax";
 import { applyTheme } from "./settings";
 import type { NativeMessage } from "./types";
 
@@ -22,3 +24,6 @@ window.nativeEditorReceive = (input: NativeMessage | string) => {
 window.addEventListener("error", (event) => reportError(event.error ?? event.message, "window"));
 window.addEventListener("unhandledrejection", (event) => reportError(event.reason, "promise"));
 sendNative("editor/ready", { capabilities: ["source", "live-preview", "mathjax", "mermaid", "latex-suite"] });
+void ensureMathJaxReady()
+  .then(() => sendNative("renderer/ready", { renderer: "mathjax" }))
+  .catch((error) => reportError(error, "mathjax/startup"));

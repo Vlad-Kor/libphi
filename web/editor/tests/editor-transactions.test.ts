@@ -116,6 +116,25 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".math-inline")).toHaveLength(1);
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
+
+  it("indents and outdents hierarchical list items with Tab", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "lists",
+      path: "lists.md",
+      text: "- parent\n- child",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 11 } });
+    expect(key(editor.view, "Tab")).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe("- parent\n  - child");
+    expect(key(editor.view, "Tab", true)).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe("- parent\n- child");
+  });
 });
 
 describe("LaTeX Suite transactions", () => {

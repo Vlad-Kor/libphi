@@ -21,6 +21,7 @@ PdfvMarkdownResourceScheme *pdfv_markdown_resource_scheme_new(
     PdfvMarkdownVaultAdapter *vault);
 WebKitWebContext *pdfv_markdown_resource_scheme_get_context(
     PdfvMarkdownResourceScheme *self);
+gchar *pdfv_markdown_resource_scheme_load_default_snippets(GError **error);
 
 G_END_DECLS
 

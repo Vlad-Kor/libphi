@@ -41,7 +41,7 @@ static void search_finished(GObject *source, GAsyncResult *result,
       PDFV_WORKSPACE(source), result, &error);
   g_assert_no_error(error);
   g_assert_nonnull(groups);
-  g_assert_cmpuint(groups->len, ==, 2);
+  g_assert_cmpuint(groups->len, ==, 3);
   PdfvWorkspaceResultGroup *nearest = g_ptr_array_index(groups, 0);
   g_assert_true(g_file_equal(nearest->file, state->second));
   for (guint i = 0; i < groups->len; i++) {
@@ -63,7 +63,7 @@ static void search_finished(GObject *source, GAsyncResult *result,
 
 static gboolean wait_for_index(gpointer user_data) {
   TestState *state = user_data;
-  if (pdfv_workspace_get_indexed_count(state->workspace) < 2)
+  if (pdfv_workspace_get_indexed_count(state->workspace) < 3)
     return G_SOURCE_CONTINUE;
   pdfv_workspace_search_near_async(state->workspace, "präsentiert",
                                    state->second, NULL, search_finished,
@@ -79,6 +79,7 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
                                            &error));
   g_assert_no_error(error);
   g_assert_cmpuint(pdfv_workspace_get_pdf_count(state->workspace), ==, 2);
+  g_assert_cmpuint(pdfv_workspace_get_document_count(state->workspace), ==, 3);
 
   GListModel *roots = pdfv_workspace_get_items(state->workspace);
   g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 3);
@@ -165,7 +166,9 @@ static void test_workspace_search(void) {
   state.second = g_file_get_child(state.nested, "second.PDF");
   state.note = g_file_get_child(state.empty, "lecture.md");
   gchar *note_path = g_file_get_path(state.note);
-  g_assert_true(g_file_set_contents(note_path, "# Lecture\n", -1, &error));
+  g_assert_true(g_file_set_contents(
+      note_path, "# Lecture\nDieses Dokument präsentiert Markdown.\n", -1,
+      &error));
   g_assert_no_error(error);
   g_free(note_path);
   GFile *fixture =

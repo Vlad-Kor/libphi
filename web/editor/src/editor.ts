@@ -66,7 +66,6 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         keymap.of([
           ...formattingKeymap,
           { key: "Mod-s", preventDefault: true, run: () => { void this.requestSave(); return true; } },
-          { key: "Mod-h", preventDefault: true, run: openSearchPanel },
           ...closeBracketsKeymap,
           ...completionKeymap,
           ...searchKeymap,
@@ -79,12 +78,31 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         wrappingCompartment.of(this.settings.lineWrapping ? EditorView.lineWrapping : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) this.documentChanged();
+          queueMicrotask(() => this.enhanceSearchPanel());
         }),
         EditorView.domEventHandlers({
           paste: (event, view) => this.handlePaste(event, view),
         }),
       ],
     });
+  }
+
+  private enhanceSearchPanel(): void {
+    const panel = this.view.dom.querySelector<HTMLElement>(".cm-panel.cm-search");
+    if (!panel || panel.querySelector(".phi-replace-toggle")) return;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "phi-replace-toggle";
+    toggle.textContent = "›";
+    toggle.setAttribute("aria-label", "Show replace controls");
+    toggle.title = "Show replace controls";
+    toggle.addEventListener("click", () => {
+      const visible = panel.classList.toggle("phi-show-replace");
+      toggle.textContent = visible ? "⌄" : "›";
+      toggle.setAttribute("aria-label", visible ? "Hide replace controls" : "Show replace controls");
+      toggle.title = visible ? "Hide replace controls" : "Show replace controls";
+    });
+    panel.insertBefore(toggle, panel.firstChild);
   }
 
   private documentChanged(): void {

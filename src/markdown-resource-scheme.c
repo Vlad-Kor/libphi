@@ -105,6 +105,8 @@ static void app_scheme_request(WebKitURISchemeRequest *request,
   gchar *contents = NULL;
   gsize length = 0;
   if (!g_file_get_contents(filename, &contents, &length, &error)) {
+    g_debug("Could not serve editor asset '%s': %s", relative,
+            error ? error->message : "unknown error");
     webkit_uri_scheme_request_finish_error(request, error);
     g_clear_error(&error);
   } else {
@@ -119,6 +121,15 @@ static void app_scheme_request(WebKitURISchemeRequest *request,
   g_free(filename);
   g_free(relative);
   g_uri_unref(parsed);
+}
+
+gchar *pdfv_markdown_resource_scheme_load_default_snippets(GError **error) {
+  gchar *filename = editor_asset_filename("default-snippets.txt");
+  gchar *contents = NULL;
+  if (!g_file_get_contents(filename, &contents, NULL, error))
+    g_clear_pointer(&contents, g_free);
+  g_free(filename);
+  return contents;
 }
 
 static void vault_scheme_request(WebKitURISchemeRequest *request,

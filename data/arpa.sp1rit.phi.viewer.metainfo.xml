@@ -47,6 +47,7 @@
     <binary>pdfv</binary>
     <mediatype>application/pdf</mediatype>
     <mediatype>text/markdown</mediatype>
+    <mediatype>text/x-markdown</mediatype>
   </provides>
   <releases>
     <release version="0.1" date="2025-01-05">

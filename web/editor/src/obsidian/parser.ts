@@ -19,6 +19,7 @@ export type ObsidianNodeKind =
   | "callout"
   | "table"
   | "mermaid"
+  | "code-block"
   | "html"
   | "list-item"
   | "tag"
@@ -81,6 +82,73 @@ function lineEnd(text: string, from: number): number {
   return newline < 0 ? text.length : newline;
 }
 
+function isMarkdownEscape(text: string, position: number): boolean {
+  let slashes = 0;
+  for (let at = position - 1; at >= 0 && text[at] === "\\"; at--) slashes++;
+  return slashes % 2 === 1;
+}
+
+function markdownDestination(raw: string): string {
+  const value = raw.trim();
+  if (value.startsWith("<")) {
+    const close = value.indexOf(">");
+    if (close > 0) return value.slice(1, close);
+  }
+  let escaped = false;
+  for (let at = 0; at < value.length; at++) {
+    const character = value[at];
+    if (escaped) { escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (/\s/.test(character)) return value.slice(0, at);
+  }
+  return value;
+}
+
+function collectMarkdownLinks(text: string, protectedRanges: Range[]): ObsidianNode[] {
+  const nodes: ObsidianNode[] = [];
+  for (let open = 0; open < text.length; open++) {
+    if (text[open] !== "[" || isMarkdownEscape(text, open) ||
+        text[open + 1] === "[" || inside(open, protectedRanges)) continue;
+    const image = open > 0 && text[open - 1] === "!" &&
+      !isMarkdownEscape(text, open - 1);
+    const from = image ? open - 1 : open;
+    if (inside(from, protectedRanges)) continue;
+
+    let depth = 1;
+    let close = open + 1;
+    for (; close < text.length && text[close] !== "\n"; close++) {
+      if (isMarkdownEscape(text, close)) continue;
+      if (text[close] === "[") depth++;
+      else if (text[close] === "]" && --depth === 0) break;
+    }
+    if (depth !== 0 || text[close + 1] !== "(") continue;
+
+    let parentheses = 1;
+    let end = close + 2;
+    let angle = false;
+    for (; end < text.length && text[end] !== "\n"; end++) {
+      if (isMarkdownEscape(text, end)) continue;
+      if (text[end] === "<" && parentheses === 1) angle = true;
+      else if (text[end] === ">" && angle) angle = false;
+      else if (!angle && text[end] === "(") parentheses++;
+      else if (!angle && text[end] === ")" && --parentheses === 0) break;
+    }
+    if (parentheses !== 0) continue;
+
+    const label = text.slice(open + 1, close);
+    const target = markdownDestination(text.slice(close + 2, end));
+    if (!target) continue;
+    nodes.push({
+      kind: image ? "markdown-image" : "markdown-link",
+      from,
+      to: end + 1,
+      text: text.slice(from, end + 1),
+      meta: { target, alias: label },
+    });
+  }
+  return nodes;
+}
+
 export function parseObsidian(text: string): ObsidianNode[] {
   const nodes: ObsidianNode[] = [];
   const codeRanges = collectCodeRanges(text);
@@ -107,14 +175,14 @@ export function parseObsidian(text: string): ObsidianNode[] {
 
   const fenced = /^( {0,3})(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1\2[ \t]*$/gm;
   for (const match of text.matchAll(fenced)) {
-    if (match[3].trim().toLowerCase() === "mermaid") {
-      nodes.push({
-        kind: "mermaid",
-        from: match.index,
-        to: match.index + match[0].length,
-        text: match[4],
-      });
-    }
+    const language = match[3].trim().split(/\s+/, 1)[0].toLowerCase();
+    nodes.push({
+      kind: language === "mermaid" ? "mermaid" : "code-block",
+      from: match.index,
+      to: match.index + match[0].length,
+      text: language === "mermaid" ? match[4] : match[0],
+      meta: { language },
+    });
   }
 
   const displayMath = /(^|\n)(\$\$|\\\[)\s*\n?([\s\S]*?)\n?(\$\$|\\\])(?=\n|$)/g;
@@ -171,18 +239,7 @@ export function parseObsidian(text: string): ObsidianNode[] {
     });
   }
 
-  const markdownLinks = /(!)?\[([^\]\n]*)\]\((<?[^\s)>]+>?)(?:\s+["'][^\n]*?["'])?\)/g;
-  for (const match of text.matchAll(markdownLinks)) {
-    if (inside(match.index, protectedRanges)) continue;
-    const target = match[3].replace(/^<|>$/g, "");
-    nodes.push({
-      kind: match[1] ? "markdown-image" : "markdown-link",
-      from: match.index,
-      to: match.index + match[0].length,
-      text: match[0],
-      meta: { target, alias: match[2] },
-    });
-  }
+  nodes.push(...collectMarkdownLinks(text, protectedRanges));
 
   const footnoteDefinitions = new Map<string, number>();
   const definitionPattern = /^\[\^([^\]\n]+)\]:[ \t]*([^\n]*(?:\n(?: {4}|\t)[^\n]*)*)/gm;

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { renderMarkdown, sanitizeHtml, wireRenderedContent } from "../src/obsidian/markdown";
+import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../src/obsidian/markdown";
 
 describe("rendering security", () => {
   it("removes executable HTML while preserving useful formatting", () => {
@@ -31,6 +31,24 @@ describe("rendering security", () => {
     const template = document.createElement("template");
     template.innerHTML = value;
     expect(template.content.querySelector("img")?.hasAttribute("src")).toBe(false);
+  });
+
+  it("keeps safe linked-image presentation attributes", () => {
+    const value = renderMarkdownInline(
+      '<img src="https://example.com/button.png" height="100" align="right">',
+    );
+    const template = document.createElement("template");
+    template.innerHTML = value;
+    const image = template.content.querySelector("img");
+    expect(image?.getAttribute("height")).toBe("100");
+    expect(image?.getAttribute("align")).toBe("right");
+    expect(image?.dataset.remoteSrc).toContain("button.png");
+  });
+
+  it("syntax-highlights known fenced-code languages", () => {
+    const value = renderMarkdown("```c\nint main(void) { return 0; }\n```");
+    expect(value).toContain('class="language-c"');
+    expect(value).toContain('class="token keyword"');
   });
 
   it("renders nested callouts and math while respecting raw HTML boundaries", () => {

@@ -61,6 +61,7 @@ struct _PdfvMarkdownEditor {
   gboolean allow_remote_images;
   gdouble font_scale;
   gchar *snippets;
+  gchar *theme_background;
   guint request_sequence;
   GHashTable *flush_tasks; /* request ID -> FlushPending */
 };
@@ -72,6 +73,7 @@ enum {
   SIGNAL_OPEN_EXTERNAL_URI,
   SIGNAL_CONFLICT,
   SIGNAL_EDITOR_ERROR,
+  SIGNAL_MANUAL_SAVE,
   N_SIGNALS,
 };
 
@@ -148,6 +150,9 @@ static void send_theme(PdfvMarkdownEditor *self) {
   JsonObject *payload = json_object_new_owned();
   json_object_set_boolean_member(payload, "dark", self->theme_dark);
   json_object_set_double_member(payload, "fontScale", self->font_scale);
+  if (self->theme_background)
+    json_object_set_string_member(payload, "background",
+                                  self->theme_background);
   pdfv_markdown_editor_bridge_send(self->bridge, "theme/update", NULL,
                                    payload);
   json_object_unref(payload);
@@ -595,7 +600,9 @@ static void save_requested_done(GObject *source, GAsyncResult *result,
   if (!pdfv_markdown_editor_save_finish(PDFV_MARKDOWN_EDITOR(source), result,
                                         &error)) {
     emit_error(PDFV_MARKDOWN_EDITOR(source), error->message);
-  }
+  } else
+    g_signal_emit(PDFV_MARKDOWN_EDITOR(source),
+                  editor_signals[SIGNAL_MANUAL_SAVE], 0);
   g_clear_error(&error);
 }
 
@@ -643,6 +650,12 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
                                      payload, "uri", "")
                                : "";
     g_signal_emit(self, editor_signals[SIGNAL_OPEN_EXTERNAL_URI], 0, uri);
+  } else if (g_str_equal(type, "renderer/ready")) {
+    const gchar *renderer = payload
+                                ? json_object_get_string_member_with_default(
+                                      payload, "renderer", "unknown")
+                                : "unknown";
+    g_debug("Markdown renderer ready: %s", renderer);
   } else if (g_str_equal(type, "log/error")) {
     const gchar *message = payload
                                ? json_object_get_string_member_with_default(
@@ -1045,9 +1058,17 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
   self->font_scale = font_scale;
   self->theme_set = TRUE;
   if (self->web_view) {
-    GdkRGBA background = dark
-        ? (GdkRGBA){.red = 0.141, .green = 0.141, .blue = 0.141, .alpha = 1.0}
-        : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980, .alpha = 1.0};
+    GdkRGBA background;
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    if (!gtk_style_context_lookup_color(
+            gtk_widget_get_style_context(GTK_WIDGET(self)),
+            "window_bg_color", &background))
+      background = dark
+          ? (GdkRGBA){.red = 0.122, .green = 0.133, .blue = 0.149, .alpha = 1.0}
+          : (GdkRGBA){.red = 0.969, .green = 0.973, .blue = 0.980, .alpha = 1.0};
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    g_free(self->theme_background);
+    self->theme_background = gdk_rgba_to_string(&background);
     webkit_web_view_set_background_color(self->web_view, &background);
   }
   send_theme(self);
@@ -1129,6 +1150,7 @@ static void pdfv_markdown_editor_finalize(GObject *object) {
   g_free(self->persisted_text);
   g_free(self->etag);
   g_free(self->snippets);
+  g_free(self->theme_background);
   G_OBJECT_CLASS(pdfv_markdown_editor_parent_class)->finalize(object);
 }
 
@@ -1154,6 +1176,9 @@ static void pdfv_markdown_editor_class_init(PdfvMarkdownEditorClass *klass) {
   editor_signals[SIGNAL_EDITOR_ERROR] = g_signal_new(
       "editor-error", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL,
       NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING);
+  editor_signals[SIGNAL_MANUAL_SAVE] = g_signal_new(
+      "manual-save", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL,
+      NULL, NULL, G_TYPE_NONE, 0);
 }
 
 static void pdfv_markdown_editor_init(PdfvMarkdownEditor *self) {
@@ -1179,9 +1204,7 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
   gtk_widget_set_vexpand(GTK_WIDGET(self->content_stack), TRUE);
 
   AdwStatusPage *loading = ADW_STATUS_PAGE(adw_status_page_new());
-  adw_status_page_set_title(loading, "Opening Markdown…");
-  adw_status_page_set_description(
-      loading, "Preparing Live Preview and offline renderers");
+  adw_status_page_set_title(loading, "Loading…");
   GtkWidget *spinner = gtk_spinner_new();
   gtk_widget_set_size_request(spinner, 32, 32);
   gtk_spinner_start(GTK_SPINNER(spinner));

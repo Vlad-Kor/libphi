@@ -7,6 +7,11 @@ interface MathJaxApi {
   texReset?: () => void;
 }
 
+interface MathJaxWindow extends Window {
+  MathJax?: MathJaxApi;
+  __phiMathJaxError?: string;
+}
+
 const cache = new Map<string, string>();
 let preamble = "";
 let preambleRevision = 0;
@@ -14,9 +19,11 @@ let preambleRevision = 0;
 async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
   const started = performance.now();
   while (performance.now() - started < timeout) {
+    const failure = (window as MathJaxWindow).__phiMathJaxError;
+    if (failure) throw new Error(`MathJax could not load: ${failure}`);
     const mathjax = api();
     if (mathjax?.typesetPromise) {
-      await mathjax.startup?.promise;
+      if (mathjax.startup?.promise) await mathjax.startup.promise;
       return mathjax;
     }
     await new Promise((resolve) => window.setTimeout(resolve, 25));
@@ -24,8 +31,12 @@ async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
   throw new Error("MathJax did not initialize");
 }
 
+export async function ensureMathJaxReady(): Promise<void> {
+  await waitForMathJax();
+}
+
 function api(): MathJaxApi | undefined {
-  return (window as unknown as { MathJax?: MathJaxApi }).MathJax;
+  return (window as MathJaxWindow).MathJax;
 }
 
 export function updatePreamble(value: string): void {

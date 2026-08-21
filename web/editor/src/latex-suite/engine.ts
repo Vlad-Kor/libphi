@@ -219,6 +219,29 @@ const automaticPlugin = ViewPlugin.fromClass(class {
   }
 });
 
+const indentList: Command = (view) => adjustListIndent(view, false);
+const outdentList: Command = (view) => adjustListIndent(view, true);
+
+function adjustListIndent(view: EditorView, outdent: boolean): boolean {
+  const lineNumbers = new Set<number>();
+  for (const range of view.state.selection.ranges) {
+    const first = view.state.doc.lineAt(range.from).number;
+    const last = view.state.doc.lineAt(range.to).number;
+    for (let number = first; number <= last; number++) lineNumbers.add(number);
+  }
+  const lines = [...lineNumbers].map((number) => view.state.doc.line(number));
+  if (!lines.length || !lines.every((line) => /^\s*(?:[-+*]|\d+[.)])\s+/.test(line.text)))
+    return false;
+  const changes = lines.flatMap((line) => {
+    if (!outdent) return [{ from: line.from, insert: "  " }];
+    const leading = /^(?: {1,2}|\t)/.exec(line.text)?.[0];
+    return leading ? [{ from: line.from, to: line.from + leading.length, insert: "" }] : [];
+  });
+  if (!changes.length) return false;
+  view.dispatch({ changes, annotations: Transaction.userEvent.of("input.indent") });
+  return true;
+}
+
 export const latexSuite = [
   tabstopState,
   automaticPlugin,
@@ -227,8 +250,10 @@ export const latexSuite = [
     { key: "Tab", run: expandManualSnippet },
     { key: "Tab", run: matrixTab },
     { key: "Tab", run: tabOut },
+    { key: "Tab", run: indentList },
     { key: "Tab", run: indentMore },
     { key: "Shift-Tab", run: previousTabstop },
+    { key: "Shift-Tab", run: outdentList },
     { key: "Shift-Tab", run: indentLess },
     { key: "Enter", run: matrixEnter },
     { key: "Shift-Enter", run: matrixShiftEnter },

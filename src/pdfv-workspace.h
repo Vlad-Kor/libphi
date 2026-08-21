@@ -42,6 +42,7 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
 void pdfv_workspace_cancel(PdfvWorkspace *self);
 
 guint pdfv_workspace_get_pdf_count(PdfvWorkspace *self);
+guint pdfv_workspace_get_document_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_indexed_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_cache_hit_count(PdfvWorkspace *self);
 

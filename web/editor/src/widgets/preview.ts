@@ -3,7 +3,7 @@ import { parseDocument } from "yaml";
 import mermaid from "mermaid";
 import { requestNative, reportError, sendNative } from "../bridge";
 import { getMathRevision, renderMath } from "../math/mathjax";
-import { renderMarkdown, sanitizeHtml, wireRenderedContent } from "../obsidian/markdown";
+import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../obsidian/markdown";
 import { remoteImagesAllowed } from "../settings";
 
 let mermaidInitialized = false;
@@ -240,7 +240,8 @@ export class MarkdownLinkWidget extends WidgetType {
     const link = document.createElement("a");
     link.className = "markdown-link";
     link.href = "#";
-    link.textContent = this.label || this.target;
+    link.innerHTML = renderMarkdownInline(this.label || this.target);
+    wireRenderedContent(link);
     link.addEventListener("click", (event) => {
       event.preventDefault();
       if (isExternal(this.target)) sendNative("url/open", { uri: this.target });

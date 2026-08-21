@@ -85,7 +85,21 @@ export function renderMarkdown(source: string): string {
     (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
       .replace(/^<([a-z][\w-]*)(?=\s|>)/i, '<$1 data-phi-raw-html=""'),
   );
-  const sanitized = sanitizeHtml(rendered);
+  return applyRemoteImagePolicy(sanitizeHtml(rendered));
+}
+
+export function renderMarkdownInline(source: string): string {
+  const prepared = prepare(source);
+  let rendered = md.renderInline(prepared.source);
+  rendered = rendered.replace(
+    /<phi-raw-html data-index="(\d+)"><\/phi-raw-html>/g,
+    (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
+      .replace(/^<([a-z][\w-]*)(?=\s|>)/i, '<$1 data-phi-raw-html=""'),
+  );
+  return applyRemoteImagePolicy(sanitizeHtml(rendered));
+}
+
+function applyRemoteImagePolicy(sanitized: string): string {
   if (remoteImagesAllowed()) return sanitized;
   const template = document.createElement("template");
   template.innerHTML = sanitized;

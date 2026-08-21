@@ -84,6 +84,9 @@ typedef struct {
   GPtrArray *roots;
   GPtrArray *pdf_files;
   GPtrArray *pdf_paths;
+  GPtrArray *markdown_files;
+  GPtrArray *markdown_paths;
+  GPtrArray *markdown_texts;
 } ScanResult;
 
 typedef struct {
@@ -112,6 +115,7 @@ struct _PdfvWorkspace {
   GListStore *items;
   GHashTable *index; /* URI -> IndexedDocument */
   guint pdf_count;
+  guint document_count;
   guint indexed_count;
   guint cache_hit_count;
   gint generation;
@@ -142,6 +146,9 @@ static void scan_result_free(ScanResult *result) {
   g_clear_pointer(&result->roots, g_ptr_array_unref);
   g_clear_pointer(&result->pdf_files, g_ptr_array_unref);
   g_clear_pointer(&result->pdf_paths, g_ptr_array_unref);
+  g_clear_pointer(&result->markdown_files, g_ptr_array_unref);
+  g_clear_pointer(&result->markdown_paths, g_ptr_array_unref);
+  g_clear_pointer(&result->markdown_texts, g_ptr_array_unref);
   g_free(result);
 }
 
@@ -383,6 +390,11 @@ guint pdfv_workspace_get_pdf_count(PdfvWorkspace *self) {
   return self->pdf_count;
 }
 
+guint pdfv_workspace_get_document_count(PdfvWorkspace *self) {
+  g_return_val_if_fail(PDFV_IS_WORKSPACE(self), 0);
+  return self->document_count;
+}
+
 guint pdfv_workspace_get_indexed_count(PdfvWorkspace *self) {
   g_return_val_if_fail(PDFV_IS_WORKSPACE(self), 0);
   return self->indexed_count;
@@ -484,6 +496,19 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
       if (filename_is_pdf(name)) {
         g_ptr_array_add(result->pdf_files, g_object_ref(child_file));
         g_ptr_array_add(result->pdf_paths, g_strdup(relative));
+      } else {
+        gchar *contents = NULL;
+        gsize length = 0;
+        if (g_file_load_contents(child_file, cancellable, &contents, &length,
+                                 NULL, NULL) &&
+            g_utf8_validate(contents, length, NULL) &&
+            memchr(contents, '\0', length) == NULL) {
+          g_ptr_array_add(result->markdown_files, g_object_ref(child_file));
+          g_ptr_array_add(result->markdown_paths, g_strdup(relative));
+          g_ptr_array_add(result->markdown_texts, contents);
+        } else {
+          g_free(contents);
+        }
       }
       descendant_pdf_count++;
     }
@@ -513,6 +538,9 @@ static void scan_worker(GTask *task, gpointer source_object, gpointer task_data,
   ScanResult *result = g_new0(ScanResult, 1);
   result->pdf_files = g_ptr_array_new_with_free_func(g_object_unref);
   result->pdf_paths = g_ptr_array_new_with_free_func(g_free);
+  result->markdown_files = g_ptr_array_new_with_free_func(g_object_unref);
+  result->markdown_paths = g_ptr_array_new_with_free_func(g_free);
+  result->markdown_texts = g_ptr_array_new_with_free_func(g_free);
   GError *error = NULL;
   guint pdf_count = 0;
   result->roots =
@@ -862,6 +890,7 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
   self->indexed_count = 0;
   self->cache_hit_count = 0;
   self->pdf_count = scan->pdf_files->len;
+  self->document_count = scan->pdf_files->len + scan->markdown_files->len;
   for (guint i = 0; i < scan->roots->len; i++) {
     PdfvWorkspaceItem *item =
         workspace_item_from_scan(g_ptr_array_index(scan->roots, i));
@@ -871,6 +900,20 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
   for (guint i = 0; i < scan->pdf_files->len; i++)
     queue_index_document(self, g_ptr_array_index(scan->pdf_files, i),
                          g_ptr_array_index(scan->pdf_paths, i));
+  for (guint i = 0; i < scan->markdown_files->len; i++) {
+    IndexedDocument *document = g_new0(IndexedDocument, 1);
+    document->file = g_object_ref(g_ptr_array_index(scan->markdown_files, i));
+    document->relative_path = g_strdup(
+        g_ptr_array_index(scan->markdown_paths, i));
+    document->pages = g_ptr_array_new_with_free_func(
+        (GDestroyNotify)indexed_page_unref);
+    g_ptr_array_add(document->pages, indexed_page_new(g_strdup(
+        g_ptr_array_index(scan->markdown_texts, i))));
+    document->complete = TRUE;
+    gchar *uri = g_file_get_uri(document->file);
+    g_hash_table_insert(self->index, uri, document);
+    self->indexed_count++;
+  }
 
   scan_result_free(scan);
   return TRUE;
