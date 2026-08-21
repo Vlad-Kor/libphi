@@ -22,13 +22,39 @@ pdfv_sources = [
 	'pdfv-window.c',
 	'pdfv-document-view.c',
 	'pdfv-workspace.c',
+	'markdown-editor.c',
+	'markdown-editor-bridge.c',
+	'markdown-resource-scheme.c',
+	'markdown-vault-adapter.c',
 ]
+
+editor_install_dir = get_option('prefix') / get_option('datadir') / 'phi' / 'editor'
+editor_source_dir = meson.project_source_root() / 'web' / 'editor' / 'dist'
 
 pdfv_app = executable('pdfv', pdfv_sources,
 	dependencies: [
 		gtk_dep,
 		adw_dep,
-		phi_dep
+		phi_dep,
+		webkit_dep,
+		json_glib_dep,
+	],
+	c_args: [
+		'-DPDFV_EDITOR_DIR="' + editor_install_dir + '"',
+		'-DPDFV_EDITOR_SOURCE_DIR="' + editor_source_dir + '"',
 	],
 	install: true
 )
+
+install_subdir('../web/editor/dist',
+	install_dir: get_option('datadir') / 'phi' / 'editor',
+	strip_directory: true,
+)
+
+npm = find_program('npm', required: false)
+if npm.found()
+	run_target('markdown-editor-web',
+		command: [npm, '--prefix', meson.project_source_root() / 'web' / 'editor',
+		          'run', 'build'],
+	)
+endif

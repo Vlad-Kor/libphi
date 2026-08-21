@@ -16,6 +16,7 @@ typedef struct {
   GFile *deep_empty;
   GFile *first;
   GFile *second;
+  GFile *note;
   gboolean finished;
   guint timeout_id;
   guint expected_cache_hits;
@@ -80,7 +81,7 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
   g_assert_cmpuint(pdfv_workspace_get_pdf_count(state->workspace), ==, 2);
 
   GListModel *roots = pdfv_workspace_get_items(state->workspace);
-  g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 2);
+  g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 3);
   guint folder_count = 0;
   for (guint i = 0; i < g_list_model_get_n_items(roots); i++) {
     PdfvWorkspaceItem *item = g_list_model_get_item(roots, i);
@@ -92,7 +93,7 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
     }
     g_object_unref(item);
   }
-  g_assert_cmpuint(folder_count, ==, 1);
+  g_assert_cmpuint(folder_count, ==, 2);
   g_timeout_add(10, wait_for_index, state);
 }
 
@@ -162,6 +163,11 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   state.first = g_file_get_child(state.root, "first.pdf");
   state.second = g_file_get_child(state.nested, "second.PDF");
+  state.note = g_file_get_child(state.empty, "lecture.md");
+  gchar *note_path = g_file_get_path(state.note);
+  g_assert_true(g_file_set_contents(note_path, "# Lecture\n", -1, &error));
+  g_assert_no_error(error);
+  g_free(note_path);
   GFile *fixture =
       g_file_new_for_path(TEST_DATA_DIR "/separate-diacritic.pdf");
   g_assert_true(g_file_copy(fixture, state.first, G_FILE_COPY_NONE, NULL, NULL,
@@ -219,6 +225,8 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.first, NULL, &error));
   g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.note, NULL, &error));
+  g_assert_no_error(error);
   g_assert_true(g_file_delete(state.nested, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.deep_empty, NULL, &error));
@@ -229,6 +237,7 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_object_unref(state.second);
   g_object_unref(state.first);
+  g_object_unref(state.note);
   g_object_unref(state.nested);
   g_object_unref(state.deep_empty);
   g_object_unref(state.empty);

@@ -40,6 +40,7 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* open_accels[] = { "<Control>o", NULL };
 	const char* new_tab_accels[] = { "<Control>t", NULL };
 	const char* close_tab_accels[] = { "<Control>w", NULL };
+	const char* save_accels[] = { "<Control>s", NULL };
 	const char* quit_accels[] = { "<Control>q", NULL };
 	const char* zoom_in_accels[] = { "<Control>plus", "<Control>equal", "plus", NULL };
 	const char* zoom_out_accels[] = { "<Control>minus", "minus", NULL };
@@ -61,6 +62,7 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.open", open_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.new-tab", new_tab_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.close-tab", close_tab_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.save", save_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "app.quit", quit_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-in", zoom_in_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-out", zoom_out_accels);
@@ -94,12 +96,12 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	
 	const char* developers[] = { "sp1rit", "Vlad-Kor", NULL };
 	adw_show_about_dialog(GTK_WIDGET(window),
-		"application-name", "Phi PDF Viewer",
+		"application-name", "Phi Document Viewer",
 		"application-icon", "arpa.sp1rit.phi.viewer",
 		"version", "0.1",
 		"developers", developers,
 		"license-type", GTK_LICENSE_AGPL_3_0,
-		"comments", "A high-performance PDF viewer powered by MuPDF and GTK4",
+		"comments", "A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK",
 		"website", "https://github.com/sp1ritCS/libphi",
 		NULL);
 }

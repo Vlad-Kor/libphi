@@ -11,8 +11,11 @@
 #include "pdfv-window.h"
 #include "pdfv-document-view.h"
 #include "pdfv-workspace.h"
+#include "markdown-editor.h"
 #include <phi/phidocument.h>
 #include <phi/phipage.h>
+
+#include <string.h>
 
 #define WORKSPACE_VISIBLE_MATCHES 4
 #define WORKSPACE_PREVIEW_DELAY_MS 90
@@ -97,6 +100,8 @@ struct _PdfvWindow {
 
   /* Current view (active tab) */
   PdfvDocumentView *current_view;
+  PdfvMarkdownEditor *current_editor;
+  gboolean closing_window;
 
   /* Outline data for current document */
   PhiOutlineItem *current_outline;
@@ -111,8 +116,13 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                                    guint generation);
 static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
                                            gboolean fit_width);
+static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
+                                       AdwTabPage *page);
+static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file);
 static void workspace_search_close(PdfvWindow *self, gboolean commit);
 static void workspace_search_schedule(PdfvWindow *self, guint delay_ms);
+static void on_markdown_error(PdfvMarkdownEditor *editor,
+                              const gchar *message, PdfvWindow *self);
 
 static void update_navigation_buttons(PdfvWindow *self) {
   gboolean can_back = FALSE;
@@ -158,6 +168,18 @@ static void update_sidebar_button(PdfvWindow *self) {
 
   /* Hide floating zoom controls when no document */
   gtk_widget_set_visible(self->zoom_box, has_document);
+}
+
+static void update_markdown_actions(PdfvWindow *self) {
+  const gchar *names[] = {"save", "toggle-markdown-source",
+                          "allow-remote-images"};
+  for (guint i = 0; i < G_N_ELEMENTS(names); i++) {
+    GAction *action =
+        g_action_map_lookup_action(G_ACTION_MAP(self), names[i]);
+    if (action)
+      g_simple_action_set_enabled(G_SIMPLE_ACTION(action),
+                                  self->current_editor != NULL);
+  }
 }
 
 static void update_empty_state_chrome(PdfvWindow *self) {
@@ -228,6 +250,221 @@ static void setup_document_view_signals(PdfvWindow *self,
   g_signal_connect(view, "link-activated", G_CALLBACK(on_link_activated), self);
   g_signal_connect(view, "search-completed", G_CALLBACK(on_search_completed),
                    self);
+}
+
+static void on_markdown_open_file(PdfvMarkdownEditor *editor, GFile *file,
+                                  PdfvWindow *self) {
+  (void)editor;
+  pdfv_window_open_file_internal(self, file, FALSE);
+}
+
+static void on_markdown_external_uri(PdfvMarkdownEditor *editor,
+                                     const gchar *uri, PdfvWindow *self) {
+  if (!uri || !*uri)
+    return;
+  gchar *scheme = g_uri_parse_scheme(uri);
+  gboolean allowed = scheme &&
+      (g_ascii_strcasecmp(scheme, "http") == 0 ||
+       g_ascii_strcasecmp(scheme, "https") == 0 ||
+       g_ascii_strcasecmp(scheme, "mailto") == 0 ||
+       g_ascii_strcasecmp(scheme, "obsidian") == 0);
+  g_free(scheme);
+  if (!allowed) {
+    on_markdown_error(editor, "The link uses a blocked URI scheme.", self);
+    return;
+  }
+  GtkUriLauncher *launcher = gtk_uri_launcher_new(uri);
+  gtk_uri_launcher_launch(launcher, GTK_WINDOW(self), NULL, NULL, NULL);
+  g_object_unref(launcher);
+}
+
+static void on_markdown_error(PdfvMarkdownEditor *editor,
+                              const gchar *message, PdfvWindow *self) {
+  (void)editor;
+  AdwDialog *dialog = adw_alert_dialog_new("Markdown Editor Error", message);
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
+  adw_dialog_present(dialog, GTK_WIDGET(self));
+}
+
+static void on_markdown_dirty_changed(PdfvMarkdownEditor *editor,
+                                      gboolean dirty, PdfvWindow *self) {
+  (void)self;
+  AdwTabPage *page =
+      g_object_get_data(G_OBJECT(editor), "markdown-tab-page");
+  if (!page)
+    return;
+  GIcon *icon = dirty ? g_themed_icon_new("document-save-symbolic") : NULL;
+  adw_tab_page_set_indicator_icon(page, icon);
+  adw_tab_page_set_indicator_tooltip(page,
+                                     dirty ? "Unsaved Markdown changes" : "");
+  g_clear_object(&icon);
+}
+
+typedef struct {
+  PdfvWindow *window;
+  PdfvMarkdownEditor *editor;
+} MarkdownConflictData;
+
+static void markdown_conflict_data_free(MarkdownConflictData *data) {
+  g_clear_object(&data->window);
+  g_clear_object(&data->editor);
+  g_free(data);
+}
+
+static void on_markdown_reloaded(GObject *source, GAsyncResult *result,
+                                 gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_open_file_finish(PDFV_MARKDOWN_EDITOR(source),
+                                             result, &error))
+    on_markdown_error(PDFV_MARKDOWN_EDITOR(source), error->message, self);
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static void on_conflict_response(GObject *source, GAsyncResult *result,
+                                 gpointer user_data) {
+  MarkdownConflictData *data = user_data;
+  const gchar *response = adw_alert_dialog_choose_finish(
+      ADW_ALERT_DIALOG(source), result);
+  if (g_strcmp0(response, "reload") == 0)
+    pdfv_markdown_editor_reload_async(data->editor, NULL,
+                                      on_markdown_reloaded,
+                                      g_object_ref(data->window));
+  markdown_conflict_data_free(data);
+}
+
+static void on_markdown_conflict(PdfvMarkdownEditor *editor,
+                                 PdfvWindow *self) {
+  AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
+      "Markdown Changed on Disk",
+      "The file changed outside Phi while this editor has unsaved changes."));
+  adw_alert_dialog_add_responses(dialog, "keep", "Keep Editor Copy",
+                                 "reload", "Reload from Disk", NULL);
+  adw_alert_dialog_set_response_appearance(dialog, "reload",
+                                           ADW_RESPONSE_DESTRUCTIVE);
+  adw_alert_dialog_set_default_response(dialog, "keep");
+  adw_alert_dialog_set_close_response(dialog, "keep");
+  MarkdownConflictData *data = g_new0(MarkdownConflictData, 1);
+  data->window = g_object_ref(self);
+  data->editor = g_object_ref(editor);
+  adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
+                          on_conflict_response, data);
+}
+
+typedef struct {
+  PdfvWindow *window;
+  PdfvMarkdownEditor *editor;
+  GFile *file;
+} MarkdownCreateNoteData;
+
+static void markdown_create_note_data_free(MarkdownCreateNoteData *data) {
+  g_clear_object(&data->window);
+  g_clear_object(&data->editor);
+  g_clear_object(&data->file);
+  g_free(data);
+}
+
+static void on_create_note_response(GObject *source, GAsyncResult *result,
+                                    gpointer user_data) {
+  MarkdownCreateNoteData *data = user_data;
+  const gchar *response = adw_alert_dialog_choose_finish(
+      ADW_ALERT_DIALOG(source), result);
+  if (g_strcmp0(response, "create") == 0) {
+    GError *error = NULL;
+    if (!g_file_query_exists(data->file, NULL)) {
+      GFile *parent = g_file_get_parent(data->file);
+      if (parent &&
+          !g_file_make_directory_with_parents(parent, NULL, &error) &&
+          !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_EXISTS)) {
+        on_markdown_error(data->editor, error->message, data->window);
+        g_clear_error(&error);
+        g_clear_object(&parent);
+        markdown_create_note_data_free(data);
+        return;
+      }
+      g_clear_error(&error);
+      GFileOutputStream *stream =
+          g_file_create(data->file, G_FILE_CREATE_NONE, NULL, &error);
+      if (stream) {
+        g_output_stream_close(G_OUTPUT_STREAM(stream), NULL, NULL);
+        g_object_unref(stream);
+      }
+      g_clear_object(&parent);
+    }
+    if (error)
+      on_markdown_error(data->editor, error->message, data->window);
+    else
+      pdfv_window_open_file_internal(data->window, data->file, FALSE);
+    g_clear_error(&error);
+  }
+  markdown_create_note_data_free(data);
+}
+
+static void on_markdown_create_link(PdfvMarkdownEditor *editor,
+                                    const gchar *target, PdfvWindow *self) {
+  GFile *current = pdfv_markdown_editor_get_file(editor);
+  GError *error = NULL;
+  GFile *file = pdfv_markdown_editor_resolve_new_note(editor, target, &error);
+  if (!file || !current) {
+    on_markdown_error(editor, "The note link is not a safe vault path.", self);
+    g_clear_error(&error);
+    g_clear_object(&file);
+    return;
+  }
+
+  GFile *root = markdown_vault_root_for_file(self, current);
+  gchar *relative = g_file_get_relative_path(root, file);
+  if (!file || !relative || g_str_has_prefix(relative, "../")) {
+    on_markdown_error(editor, "The note link escapes the active vault.", self);
+    g_clear_object(&file);
+    g_object_unref(root);
+    g_free(relative);
+    return;
+  }
+
+  gchar *body = g_strdup_printf("Create “%s” and open it?", relative);
+  AdwAlertDialog *dialog = ADW_ALERT_DIALOG(
+      adw_alert_dialog_new("Create Linked Note?", body));
+  adw_alert_dialog_add_responses(dialog, "cancel", "Cancel", "create",
+                                 "Create", NULL);
+  adw_alert_dialog_set_response_appearance(dialog, "create",
+                                           ADW_RESPONSE_SUGGESTED);
+  adw_alert_dialog_set_default_response(dialog, "create");
+  adw_alert_dialog_set_close_response(dialog, "cancel");
+  MarkdownCreateNoteData *data = g_new0(MarkdownCreateNoteData, 1);
+  data->window = g_object_ref(self);
+  data->editor = g_object_ref(editor);
+  data->file = g_object_ref(file);
+  adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
+                          on_create_note_response, data);
+  g_free(body);
+  g_free(relative);
+  g_object_unref(file);
+  g_object_unref(root);
+}
+
+static void setup_markdown_editor_signals(PdfvWindow *self,
+                                          PdfvMarkdownEditor *editor) {
+  g_signal_connect(editor, "open-file", G_CALLBACK(on_markdown_open_file),
+                   self);
+  g_signal_connect(editor, "open-external-uri",
+                   G_CALLBACK(on_markdown_external_uri), self);
+  g_signal_connect(editor, "editor-error", G_CALLBACK(on_markdown_error),
+                   self);
+  g_signal_connect(editor, "dirty-changed",
+                   G_CALLBACK(on_markdown_dirty_changed), self);
+  g_signal_connect(editor, "conflict", G_CALLBACK(on_markdown_conflict), self);
+  g_signal_connect(editor, "create-link", G_CALLBACK(on_markdown_create_link),
+                   self);
+}
+
+static void on_style_dark_changed(AdwStyleManager *manager, GParamSpec *pspec,
+                                  PdfvWindow *self) {
+  (void)pspec;
+  if (self->current_editor)
+    pdfv_markdown_editor_set_theme(self->current_editor,
+                                   adw_style_manager_get_dark(manager), 1.0);
 }
 
 /* Thumbnail rendering is serialized on one worker. Each document uses a
@@ -525,6 +762,20 @@ static void workspace_set_pdf_icon(GtkImage *image) {
   g_object_unref(icon);
 }
 
+static void workspace_set_markdown_icon(GtkImage *image) {
+  GIcon *icon = g_content_type_get_symbolic_icon("text/markdown");
+  gtk_image_set_from_gicon(image, icon);
+  g_object_unref(icon);
+}
+
+static gboolean file_is_markdown(GFile *file) {
+  gchar *basename = g_file_get_basename(file);
+  const gchar *dot = strrchr(basename, '.');
+  gboolean markdown = dot && g_ascii_strcasecmp(dot, ".md") == 0;
+  g_free(basename);
+  return markdown;
+}
+
 static void workspace_factory_setup(GtkSignalListItemFactory *factory,
                                     GtkListItem *list_item,
                                     PdfvWindow *self) {
@@ -563,6 +814,8 @@ static void workspace_factory_bind(GtkSignalListItemFactory *factory,
       g_object_get_data(G_OBJECT(list_item), "workspace-label"));
   if (pdfv_workspace_item_is_folder(item))
     gtk_image_set_from_icon_name(icon, "folder-symbolic");
+  else if (file_is_markdown(pdfv_workspace_item_get_file(item)))
+    workspace_set_markdown_icon(icon);
   else
     workspace_set_pdf_icon(icon);
   gtk_label_set_text(label, pdfv_workspace_item_get_name(item));
@@ -1411,7 +1664,7 @@ static GtkWidget *create_empty_state(PdfvWindow *self) {
                                 "document-open-symbolic");
   adw_status_page_set_title(ADW_STATUS_PAGE(status), "No Document Open");
   adw_status_page_set_description(ADW_STATUS_PAGE(status),
-                                  "Open a PDF file to view it");
+                                  "Open a PDF or Markdown file");
 
   GtkWidget *button = gtk_button_new_with_label("Open File…");
   gtk_widget_add_css_class(button, "pill");
@@ -1437,9 +1690,9 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   GtkWidget *loading = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(loading),
                                 "document-open-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(loading), "Opening PDF…");
+  adw_status_page_set_title(ADW_STATUS_PAGE(loading), "Opening Document…");
   adw_status_page_set_description(ADW_STATUS_PAGE(loading),
-                                  "Preparing pages in the background");
+                                  "Preparing the document");
   gtk_stack_add_named(GTK_STACK(stack), loading, "loading");
 
   /* Document view */
@@ -1642,6 +1895,114 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                                      on_document_loaded, request);
 }
 
+typedef struct {
+  PdfvWindow *window;
+  AdwTabPage *page;
+  GFile *file;
+  PdfvMarkdownEditor *editor;
+  gchar *fragment;
+} MarkdownOpenRequest;
+
+static void markdown_open_request_free(MarkdownOpenRequest *request) {
+  g_clear_object(&request->window);
+  g_clear_object(&request->page);
+  g_clear_object(&request->file);
+  g_clear_object(&request->editor);
+  g_free(request->fragment);
+  g_free(request);
+}
+
+static void on_markdown_opened(GObject *source, GAsyncResult *result,
+                               gpointer user_data) {
+  MarkdownOpenRequest *request = user_data;
+  PdfvWindow *self = request->window;
+  GError *error = NULL;
+  gboolean opened = pdfv_markdown_editor_open_file_finish(
+      PDFV_MARKDOWN_EDITOR(source), result, &error);
+  gboolean page_is_open =
+      adw_tab_view_get_page_position(self->tab_view, request->page) >= 0;
+  if (opened && page_is_open) {
+    GtkWidget *stack = adw_tab_page_get_child(request->page);
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "markdown");
+    g_object_set_data_full(G_OBJECT(stack), "document-file",
+                           g_object_ref(request->file), g_object_unref);
+    gchar *basename = g_file_get_basename(request->file);
+    adw_tab_page_set_title(request->page, basename);
+    g_free(basename);
+    if (adw_tab_view_get_selected_page(self->tab_view) == request->page) {
+      self->current_editor = request->editor;
+      self->current_view = NULL;
+      populate_thumbnails(self, NULL);
+      update_navigation_buttons(self);
+      update_zoom_info(self);
+      update_sidebar_button(self);
+      update_markdown_actions(self);
+      pdfv_markdown_editor_focus(request->editor);
+      if (request->fragment)
+        pdfv_markdown_editor_reveal_fragment(request->editor,
+                                             request->fragment);
+    }
+  } else if (error && page_is_open &&
+             !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+    GtkWidget *stack = adw_tab_page_get_child(request->page);
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
+    on_markdown_error(request->editor, error->message, self);
+  }
+  g_clear_error(&error);
+  markdown_open_request_free(request);
+}
+
+static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file) {
+  if (self->workspace) {
+    GFile *root = pdfv_workspace_get_folder(self->workspace);
+    gchar *relative = g_file_get_relative_path(root, file);
+    if (relative) {
+      g_free(relative);
+      return g_object_ref(root);
+    }
+  }
+  GFile *parent = g_file_get_parent(file);
+  return parent ? parent : g_object_ref(file);
+}
+
+static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
+                                       AdwTabPage *page) {
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
+  gchar *basename = g_file_get_basename(file);
+  adw_tab_page_set_title(page, basename);
+  g_free(basename);
+
+  GFile *root = markdown_vault_root_for_file(self, file);
+  PdfvMarkdownEditor *editor = pdfv_markdown_editor_new(root);
+  g_object_unref(root);
+  setup_markdown_editor_signals(self, editor);
+  gtk_stack_add_named(GTK_STACK(stack), GTK_WIDGET(editor), "markdown");
+  g_object_set_data(G_OBJECT(stack), "markdown-editor", editor);
+  g_object_set_data(G_OBJECT(editor), "markdown-tab-page", page);
+  AdwStyleManager *style = adw_style_manager_get_default();
+  pdfv_markdown_editor_set_theme(editor, adw_style_manager_get_dark(style),
+                                 1.0);
+  GAction *remote_images = g_action_map_lookup_action(
+      G_ACTION_MAP(self), "allow-remote-images");
+  GVariant *remote_state = remote_images
+                               ? g_action_get_state(remote_images)
+                               : NULL;
+  pdfv_markdown_editor_set_remote_images_allowed(
+      editor, remote_state && g_variant_get_boolean(remote_state));
+  g_clear_pointer(&remote_state, g_variant_unref);
+
+  MarkdownOpenRequest *request = g_new0(MarkdownOpenRequest, 1);
+  request->window = g_object_ref(self);
+  request->page = g_object_ref(page);
+  request->file = g_object_ref(file);
+  request->editor = g_object_ref(editor);
+  request->fragment = g_strdup(g_object_get_data(
+      G_OBJECT(file), "markdown-link-target"));
+  pdfv_markdown_editor_open_file_async(editor, file, NULL,
+                                       on_markdown_opened, request);
+}
+
 static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
                             PdfvWindow *self) {
   (void)pspec;
@@ -1651,9 +2012,11 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
 
   if (!page) {
     self->current_view = NULL;
+    self->current_editor = NULL;
     update_navigation_buttons(self);
     update_zoom_info(self);
     update_sidebar_button(self);
+    update_markdown_actions(self);
     if (!self->workspace)
       adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
     return;
@@ -1661,10 +2024,15 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
 
   GtkWidget *stack = adw_tab_page_get_child(page);
   self->current_view = g_object_get_data(G_OBJECT(stack), "document-view");
+  self->current_editor =
+      g_object_get_data(G_OBJECT(stack), "markdown-editor");
+  if (self->current_editor)
+    self->current_view = NULL;
 
   update_navigation_buttons(self);
   update_zoom_info(self);
   update_sidebar_button(self);
+  update_markdown_actions(self);
 
   if (self->current_view) {
     PhiDocument *doc = pdfv_document_view_get_document(self->current_view);
@@ -1675,6 +2043,110 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
         adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
       populate_thumbnails(self, NULL);
     }
+  }
+  if (self->current_editor) {
+    AdwStyleManager *style = adw_style_manager_get_default();
+    pdfv_markdown_editor_set_theme(
+        self->current_editor, adw_style_manager_get_dark(style), 1.0);
+    GAction *remote_images = g_action_map_lookup_action(
+        G_ACTION_MAP(self), "allow-remote-images");
+    GVariant *remote_state = remote_images
+                                 ? g_action_get_state(remote_images)
+                                 : NULL;
+    pdfv_markdown_editor_set_remote_images_allowed(
+        self->current_editor,
+        remote_state && g_variant_get_boolean(remote_state));
+    g_clear_pointer(&remote_state, g_variant_unref);
+  }
+}
+
+typedef struct {
+  PdfvWindow *window;
+  AdwTabView *tab_view;
+  AdwTabPage *page;
+  PdfvMarkdownEditor *editor;
+} MarkdownCloseRequest;
+
+static gboolean continue_window_close_idle(gpointer user_data) {
+  gtk_window_close(GTK_WINDOW(user_data));
+  return G_SOURCE_REMOVE;
+}
+
+static void markdown_close_request_free(MarkdownCloseRequest *request) {
+  g_clear_object(&request->window);
+  g_clear_object(&request->tab_view);
+  g_clear_object(&request->page);
+  g_clear_object(&request->editor);
+  g_free(request);
+}
+
+static void finish_markdown_close(MarkdownCloseRequest *request,
+                                  gboolean close_page) {
+  PdfvWindow *self = request->window;
+  g_object_set_data(G_OBJECT(request->page), "markdown-close-pending", NULL);
+  if (!close_page) {
+    self->closing_window = FALSE;
+  } else {
+    g_signal_handlers_disconnect_by_data(request->editor, self);
+    if (self->current_editor == request->editor)
+      self->current_editor = NULL;
+  }
+  adw_tab_view_close_page_finish(request->tab_view, request->page, close_page);
+  gboolean continue_window_close = close_page && self->closing_window;
+  gboolean last_page = close_page &&
+                       adw_tab_view_get_n_pages(request->tab_view) == 0;
+  if (continue_window_close || last_page)
+    g_object_ref(self);
+  markdown_close_request_free(request);
+  if (continue_window_close || last_page) {
+    gtk_window_close(GTK_WINDOW(self));
+    g_object_unref(self);
+  }
+}
+
+static void on_close_flush_done(GObject *source, GAsyncResult *result,
+                                gpointer user_data) {
+  MarkdownCloseRequest *request = user_data;
+  GError *error = NULL;
+  gboolean flushed = pdfv_markdown_editor_flush_finish(
+      PDFV_MARKDOWN_EDITOR(source), result, &error);
+  if (!flushed && error &&
+      !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_INITIALIZED)) {
+    on_markdown_error(request->editor, error->message, request->window);
+    finish_markdown_close(request, FALSE);
+  } else {
+    finish_markdown_close(request, TRUE);
+  }
+  g_clear_error(&error);
+}
+
+static void on_close_save_done(GObject *source, GAsyncResult *result,
+                               gpointer user_data) {
+  MarkdownCloseRequest *request = user_data;
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_save_finish(PDFV_MARKDOWN_EDITOR(source), result,
+                                        &error)) {
+    on_markdown_error(request->editor, error->message, request->window);
+    finish_markdown_close(request, FALSE);
+  } else {
+    finish_markdown_close(request, TRUE);
+  }
+  g_clear_error(&error);
+}
+
+static void on_close_dialog_response(GObject *source, GAsyncResult *result,
+                                     gpointer user_data) {
+  MarkdownCloseRequest *request = user_data;
+  const gchar *response = adw_alert_dialog_choose_finish(
+      ADW_ALERT_DIALOG(source), result);
+  if (g_strcmp0(response, "save") == 0) {
+    pdfv_markdown_editor_save_async(request->editor, NULL,
+                                    on_close_save_done, request);
+  } else if (g_strcmp0(response, "discard") == 0) {
+    pdfv_markdown_editor_flush_async(request->editor, NULL,
+                                     on_close_flush_done, request);
+  } else {
+    finish_markdown_close(request, FALSE);
   }
 }
 
@@ -1696,6 +2168,38 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
   if (open_cancellable)
     g_cancellable_cancel(open_cancellable);
   PdfvDocumentView *view = g_object_get_data(G_OBJECT(stack), "document-view");
+  PdfvMarkdownEditor *editor =
+      g_object_get_data(G_OBJECT(stack), "markdown-editor");
+  if (editor) {
+    if (g_object_get_data(G_OBJECT(page), "markdown-close-pending"))
+      return GDK_EVENT_STOP;
+    g_object_set_data(G_OBJECT(page), "markdown-close-pending",
+                      GINT_TO_POINTER(1));
+    MarkdownCloseRequest *request = g_new0(MarkdownCloseRequest, 1);
+    request->window = g_object_ref(self);
+    request->tab_view = g_object_ref(tab_view);
+    request->page = g_object_ref(page);
+    request->editor = g_object_ref(editor);
+    if (pdfv_markdown_editor_get_dirty(editor)) {
+      AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
+          "Save Markdown Changes?",
+          "The note has changes that have not been saved."));
+      adw_alert_dialog_add_responses(dialog, "cancel", "Cancel", "discard",
+                                     "Discard", "save", "Save", NULL);
+      adw_alert_dialog_set_response_appearance(dialog, "discard",
+                                               ADW_RESPONSE_DESTRUCTIVE);
+      adw_alert_dialog_set_response_appearance(dialog, "save",
+                                               ADW_RESPONSE_SUGGESTED);
+      adw_alert_dialog_set_default_response(dialog, "save");
+      adw_alert_dialog_set_close_response(dialog, "cancel");
+      adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
+                              on_close_dialog_response, request);
+    } else {
+      pdfv_markdown_editor_flush_async(editor, NULL, on_close_flush_done,
+                                       request);
+    }
+    return GDK_EVENT_STOP;
+  }
   if (view == self->current_view) {
     /* Disconnect signals before destruction */
     g_signal_handlers_disconnect_by_data(view, self);
@@ -1703,6 +2207,9 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
   }
 
   adw_tab_view_close_page_finish(tab_view, page, TRUE);
+  if (self->closing_window || adw_tab_view_get_n_pages(tab_view) == 0)
+    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, continue_window_close_idle,
+                    g_object_ref(self), g_object_unref);
   return GDK_EVENT_STOP;
 }
 
@@ -1725,12 +2232,14 @@ static void action_open(GSimpleAction *action, GVariant *parameter,
   PdfvWindow *self = PDFV_WINDOW(user_data);
 
   GtkFileDialog *dialog = gtk_file_dialog_new();
-  gtk_file_dialog_set_title(dialog, "Open PDF");
+  gtk_file_dialog_set_title(dialog, "Open Document");
 
   GtkFileFilter *filter = gtk_file_filter_new();
-  gtk_file_filter_set_name(filter, "PDF Documents");
+  gtk_file_filter_set_name(filter, "PDF and Markdown Documents");
   gtk_file_filter_add_mime_type(filter, "application/pdf");
+  gtk_file_filter_add_mime_type(filter, "text/markdown");
   gtk_file_filter_add_pattern(filter, "*.pdf");
+  gtk_file_filter_add_pattern(filter, "*.md");
 
   GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
   g_list_store_append(filters, filter);
@@ -1896,7 +2405,7 @@ static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
   adw_status_page_set_title(self->workspace_loading_page,
                             "Loading Workspace…");
   adw_status_page_set_description(self->workspace_loading_page,
-                                  "Scanning for PDF files");
+                                  "Scanning for PDF and Markdown files");
   gtk_widget_set_visible(GTK_WIDGET(self->workspace_loading_spinner), TRUE);
   gtk_spinner_start(self->workspace_loading_spinner);
   gtk_stack_set_visible_child_name(self->workspace_content_stack, "loading");
@@ -1974,6 +2483,50 @@ static void action_close_tab(GSimpleAction *action, GVariant *parameter,
   AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
   if (page)
     adw_tab_view_close_page(self->tab_view, page);
+}
+
+static void on_window_markdown_saved(GObject *source, GAsyncResult *result,
+                                     gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_save_finish(PDFV_MARKDOWN_EDITOR(source), result,
+                                        &error))
+    on_markdown_error(PDFV_MARKDOWN_EDITOR(source), error->message, self);
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static void action_save(GSimpleAction *action, GVariant *parameter,
+                        gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->current_editor)
+    pdfv_markdown_editor_save_async(self->current_editor, NULL,
+                                    on_window_markdown_saved,
+                                    g_object_ref(self));
+}
+
+static void action_toggle_markdown_source(GSimpleAction *action,
+                                          GVariant *parameter,
+                                          gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->current_editor)
+    pdfv_markdown_editor_run_command(self->current_editor,
+                                     "editor.toggleSourceMode");
+}
+
+static void action_allow_remote_images(GSimpleAction *action,
+                                       GVariant *value,
+                                       gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  gboolean allowed = g_variant_get_boolean(value);
+  g_simple_action_set_state(action, value);
+  if (self->current_editor)
+    pdfv_markdown_editor_set_remote_images_allowed(self->current_editor,
+                                                    allowed);
 }
 
 static void action_go_back(GSimpleAction *action, GVariant *parameter,
@@ -2105,6 +2658,11 @@ static void action_find(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
 
+  if (self->current_editor) {
+    pdfv_markdown_editor_run_command(self->current_editor, "editor.find");
+    return;
+  }
+
   gtk_search_bar_set_search_mode(self->search_bar, TRUE);
   gtk_widget_grab_focus(GTK_WIDGET(self->search_entry));
 }
@@ -2114,6 +2672,11 @@ static void action_find_next(GSimpleAction *action, GVariant *parameter,
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->current_editor) {
+    pdfv_markdown_editor_run_command(self->current_editor,
+                                     "editor.findNext");
+    return;
+  }
   if (self->current_view)
     pdfv_document_view_search_next(self->current_view);
 }
@@ -2123,6 +2686,11 @@ static void action_find_prev(GSimpleAction *action, GVariant *parameter,
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->current_editor) {
+    pdfv_markdown_editor_run_command(self->current_editor,
+                                     "editor.findPrevious");
+    return;
+  }
   if (self->current_view)
     pdfv_document_view_search_prev(self->current_view);
 }
@@ -2134,6 +2702,11 @@ static GActionEntry win_actions[] = {
     {.name = "close-workspace", .activate = action_close_workspace},
     {.name = "new-tab", .activate = action_new_tab},
     {.name = "close-tab", .activate = action_close_tab},
+    {.name = "save", .activate = action_save},
+    {.name = "toggle-markdown-source",
+     .activate = action_toggle_markdown_source},
+    {.name = "allow-remote-images", .state = "false",
+     .change_state = action_allow_remote_images},
     {.name = "go-back", .activate = action_go_back},
     {.name = "go-forward", .activate = action_go_forward},
     {.name = "zoom-in", .activate = action_zoom_in},
@@ -2256,19 +2829,20 @@ static gboolean on_window_close_request(GtkWindow *window, PdfvWindow *self) {
   self->workspace_preview_generation++;
 
   guint n_pages = adw_tab_view_get_n_pages(self->tab_view);
-  for (guint i = 0; i < n_pages; i++) {
-    AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
-    GtkWidget *stack = adw_tab_page_get_child(page);
-    GCancellable *cancellable =
-        g_object_get_data(G_OBJECT(stack), "open-cancellable");
-    if (cancellable)
-      g_cancellable_cancel(cancellable);
-  }
-  return GDK_EVENT_PROPAGATE;
+  if (n_pages == 0)
+    return GDK_EVENT_PROPAGATE;
+
+  self->closing_window = TRUE;
+  AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, 0);
+  if (!g_object_get_data(G_OBJECT(page), "markdown-close-pending"))
+    adw_tab_view_close_page(self->tab_view, page);
+  return GDK_EVENT_STOP;
 }
 
 static void pdfv_window_dispose(GObject *object) {
   PdfvWindow *self = PDFV_WINDOW(object);
+
+  g_signal_handlers_disconnect_by_data(adw_style_manager_get_default(), self);
 
   workspace_preview_cancel_delay(self);
   if (self->workspace_search_debounce_id) {
@@ -2315,6 +2889,7 @@ static void pdfv_window_dispose(GObject *object) {
 
 static void pdfv_window_init(PdfvWindow *self) {
   self->current_view = NULL;
+  self->current_editor = NULL;
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->workspace_document_cache =
@@ -2328,8 +2903,11 @@ static void pdfv_window_init(PdfvWindow *self) {
   GAction *close_workspace_action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "close-workspace");
   g_simple_action_set_enabled(G_SIMPLE_ACTION(close_workspace_action), FALSE);
+  update_markdown_actions(self);
   g_signal_connect(self, "close-request", G_CALLBACK(on_window_close_request),
                    self);
+  g_signal_connect(adw_style_manager_get_default(), "notify::dark",
+                   G_CALLBACK(on_style_dark_changed), self);
 
   /* ===== WIDGET HIERARCHY =====
    *
@@ -2439,6 +3017,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   GMenu *file_section = g_menu_new();
   g_menu_append(file_section, "Open…", "win.open");
   g_menu_append(file_section, "Open Folder…", "win.open-folder");
+  g_menu_append(file_section, "Save", "win.save");
   g_menu_append(file_section, "New Tab", "win.new-tab");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(file_section));
 
@@ -2455,12 +3034,16 @@ static void pdfv_window_init(PdfvWindow *self) {
   g_menu_append_section(menu, NULL, G_MENU_MODEL(zoom_section));
 
   GMenu *view_section = g_menu_new();
+  g_menu_append(view_section, "Source / Live Preview",
+                "win.toggle-markdown-source");
+  g_menu_append(view_section, "Allow Remote Images",
+                "win.allow-remote-images");
   g_menu_append(view_section, "Invert Colors", "win.invert-colors");
   g_menu_append(view_section, "Fullscreen", "win.fullscreen");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(view_section));
 
   GMenu *about_section = g_menu_new();
-  g_menu_append(about_section, "About Phi PDF Viewer", "app.about");
+  g_menu_append(about_section, "About Phi Document Viewer", "app.about");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(about_section));
 
   gtk_menu_button_set_menu_model(self->menu_button, G_MENU_MODEL(menu));
@@ -2816,7 +3399,7 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Window setup */
   gtk_window_set_default_size(GTK_WINDOW(self), 900, 700);
-  gtk_window_set_title(GTK_WINDOW(self), "PDF Viewer");
+  gtk_window_set_title(GTK_WINDOW(self), "Phi Document Viewer");
 
   /* Create initial tab */
   pdfv_window_new_tab(self);
@@ -2851,15 +3434,25 @@ static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
 
   AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
   GtkWidget *stack;
-  if (page && self->current_view &&
-      !pdfv_document_view_get_document(self->current_view)) {
+  gboolean selected_is_empty = FALSE;
+  if (page) {
+    GtkWidget *selected = adw_tab_page_get_child(page);
+    selected_is_empty = GTK_IS_STACK(selected) &&
+                        g_strcmp0(gtk_stack_get_visible_child_name(
+                                      GTK_STACK(selected)),
+                                  "empty") == 0;
+  }
+  if (page && selected_is_empty) {
     stack = adw_tab_page_get_child(page);
   } else {
     stack = create_tab_content(self);
     page = adw_tab_view_append(self->tab_view, stack);
     adw_tab_view_set_selected_page(self->tab_view, page);
   }
-  open_file_in_tab_async(self, file, page, 0, FALSE, fit_width, 0);
+  if (file_is_markdown(file))
+    open_markdown_in_tab_async(self, file, page);
+  else
+    open_file_in_tab_async(self, file, page, 0, FALSE, fit_width, 0);
 }
 
 void pdfv_window_open_file(PdfvWindow *self, GFile *file) {

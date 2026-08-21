@@ -39,6 +39,16 @@ test_workspace = executable('test-workspace',
 
 test('workspace-test', test_workspace, timeout: 30)
 
+test_markdown_vault = executable('test-markdown-vault',
+	'test-markdown-vault.c',
+	'../src/markdown-vault-adapter.c',
+	include_directories: [inc, include_directories('../src')],
+	dependencies: [gio_dep],
+	c_args: ['-DTEST_MARKDOWN_FIXTURE_DIR="' + meson.current_source_dir() / 'markdown-fixtures' + '"'],
+)
+
+test('markdown-vault-test', test_markdown_vault)
+
 test_document_view = executable('test-document-view',
 	'test-document-view.c',
 	'../src/pdfv-document-view.c',

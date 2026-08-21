@@ -1,0 +1,39 @@
+[
+  // Text and math delimiters
+  { trigger: "mk", replacement: "$$0$", options: "tA" },
+  { trigger: "dm", replacement: "$$\n$0\n$$", options: "tAw" },
+
+  // Common structures
+  { trigger: "sr", replacement: "^{2}", options: "mA" },
+  { trigger: "cb", replacement: "^{3}", options: "mA" },
+  { trigger: "rd", replacement: "^{$0}$1", options: "mA" },
+  { trigger: "sq", replacement: "\\sqrt{$0}$1", options: "mA" },
+  { trigger: "root", replacement: "\\sqrt[$0]{$1}$2", options: "mA" },
+  { trigger: "//", replacement: "\\frac{$0}{$1}$2", options: "mA" },
+  { trigger: "sum", replacement: "\\sum_{$0}^{$1} $2", options: "mA" },
+  { trigger: "int", replacement: "\\int $0 \\, d${1:x} $2", options: "mA" },
+
+  // Greek letters
+  { trigger: "@a", replacement: "\\alpha", options: "mA" },
+  { trigger: "@b", replacement: "\\beta", options: "mA" },
+  { trigger: "@g", replacement: "\\gamma", options: "mA" },
+  { trigger: "@d", replacement: "\\delta", options: "mA" },
+  { trigger: "@e", replacement: "\\varepsilon", options: "mA" },
+  { trigger: "@t", replacement: "\\theta", options: "mA" },
+  { trigger: "@l", replacement: "\\lambda", options: "mA" },
+  { trigger: "@m", replacement: "\\mu", options: "mA" },
+  { trigger: "@p", replacement: "\\pi", options: "mA" },
+  { trigger: "@s", replacement: "\\sigma", options: "mA" },
+  { trigger: "@f", replacement: "\\phi", options: "mA" },
+  { trigger: "@o", replacement: "\\omega", options: "mA" },
+
+  // Environments
+  { trigger: "pmat", replacement: "\\begin{pmatrix}$0\\end{pmatrix}", options: "mA" },
+  { trigger: "bmat", replacement: "\\begin{bmatrix}$0\\end{bmatrix}", options: "mA" },
+  { trigger: "case", replacement: "\\begin{cases}$0\\end{cases}", options: "mA" },
+  { trigger: "align", replacement: "\\begin{align}$0\\end{align}", options: "mA" },
+
+  // Visual selections
+  { trigger: "C", replacement: "\\cancel{${VISUAL}}$0", options: "mAv" },
+  { trigger: "B", replacement: "\\boxed{${VISUAL}}$0", options: "mAv" }
+]

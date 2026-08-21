@@ -403,6 +403,11 @@ static gboolean filename_is_pdf(const gchar *name) {
   return dot && g_ascii_strcasecmp(dot, ".pdf") == 0;
 }
 
+static gboolean filename_is_markdown(const gchar *name) {
+  const gchar *dot = strrchr(name, '.');
+  return dot && g_ascii_strcasecmp(dot, ".md") == 0;
+}
+
 static gint scan_item_compare(gconstpointer a, gconstpointer b) {
   const ScanItem *left = *(ScanItem *const *)a;
   const ScanItem *right = *(ScanItem *const *)b;
@@ -440,7 +445,8 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
                           ? g_build_filename(parent_path, name, NULL)
                           : g_strdup(name);
 
-    if (type == G_FILE_TYPE_DIRECTORY) {
+    if (type == G_FILE_TYPE_DIRECTORY &&
+        !g_str_equal(name, ".obsidian") && !g_str_equal(name, ".git")) {
       GError *child_error = NULL;
       guint nested_pdf_count = 0;
       GPtrArray *nested = scan_folder(child_file, relative, result, cancellable,
@@ -466,7 +472,8 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
         break;
       }
       g_clear_error(&child_error);
-    } else if (type == G_FILE_TYPE_REGULAR && filename_is_pdf(name)) {
+    } else if (type == G_FILE_TYPE_REGULAR &&
+               (filename_is_pdf(name) || filename_is_markdown(name))) {
       ScanItem *item = g_new0(ScanItem, 1);
       item->file = g_object_ref(child_file);
       item->name = g_strdup(name);
@@ -474,8 +481,10 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
       item->children =
           g_ptr_array_new_with_free_func((GDestroyNotify)scan_item_free);
       g_ptr_array_add(children, item);
-      g_ptr_array_add(result->pdf_files, g_object_ref(child_file));
-      g_ptr_array_add(result->pdf_paths, g_strdup(relative));
+      if (filename_is_pdf(name)) {
+        g_ptr_array_add(result->pdf_files, g_object_ref(child_file));
+        g_ptr_array_add(result->pdf_paths, g_strdup(relative));
+      }
       descendant_pdf_count++;
     }
 
