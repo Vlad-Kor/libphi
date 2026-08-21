@@ -185,19 +185,46 @@ export function parseObsidian(text: string): ObsidianNode[] {
     });
   }
 
-  const displayMath = /(^|\n)(\$\$|\\\[)\s*\n?([\s\S]*?)\n?(\$\$|\\\])(?=\n|$)/g;
-  for (const match of text.matchAll(displayMath)) {
-    const from = match.index + match[1].length;
+  const displayOpener = /^( {0,3})(\$\$|\\\[)[ \t]*(.*)$/gm;
+  let displayMatch: RegExpExecArray | null;
+  while ((displayMatch = displayOpener.exec(text))) {
+    const from = displayMatch.index;
     if (inside(from, protectedRanges)) continue;
-    const to = match.index + match[0].length;
+    const opener = displayMatch[2];
+    const closer = opener === "$$" ? "$$" : "\\]";
+    const openingLineEnd = lineEnd(text, from);
+    const sameLine = displayMatch[3];
+    if (sameLine.endsWith(closer) && sameLine.length > closer.length) {
+      const content = sameLine.slice(0, -closer.length).trim();
+      nodes.push({
+        kind: "display-math",
+        from,
+        to: openingLineEnd,
+        contentFrom: from + displayMatch[1].length + opener.length,
+        contentTo: openingLineEnd - closer.length,
+        text: content,
+      });
+      displayOpener.lastIndex = openingLineEnd;
+      continue;
+    }
+    const closingPattern = new RegExp(
+      `^ {0,3}${closer === "$$" ? "\\$\\$" : "\\\\\\]"}[ \\t]*$`, "gm",
+    );
+    closingPattern.lastIndex = openingLineEnd < text.length ? openingLineEnd + 1 : openingLineEnd;
+    const closing = closingPattern.exec(text);
+    if (!closing) continue;
+    const contentFrom = Math.min(openingLineEnd + 1, text.length);
+    const contentTo = closing.index;
+    const to = lineEnd(text, closing.index);
     nodes.push({
       kind: "display-math",
       from,
       to,
-      contentFrom: from + match[2].length,
-      contentTo: to - match[4].length,
-      text: match[3].trim(),
+      contentFrom,
+      contentTo,
+      text: text.slice(contentFrom, contentTo).trim(),
     });
+    displayOpener.lastIndex = to;
   }
   const occupiedMath = nodes.filter((node) => node.kind === "display-math");
   const inlineMath = /(?<!\\)(\$|\\\()([^\n]+?)(?<!\\)(\$|\\\))/g;
@@ -274,19 +301,28 @@ export function parseObsidian(text: string): ObsidianNode[] {
     });
   }
 
-  const callout = /^(\s*>\s*\[!([^\]\s]+)\]([+-])?([^\n]*)(?:\n(?:\s*>.*|\s*)*)?)/gm;
+  const callout = /^ {0,3}>[ \t]*\[!([^\]\s]+)\]([+-])?([^\n]*)$/gm;
   for (const match of text.matchAll(callout)) {
     if (inside(match.index, protectedRanges)) continue;
-    const body = match[1].split("\n").slice(1).map((line) => line.replace(/^\s*>\s?/, "")).join("\n");
+    let to = lineEnd(text, match.index);
+    const bodyLines: string[] = [];
+    while (to < text.length) {
+      const nextFrom = to + 1;
+      const nextTo = lineEnd(text, nextFrom);
+      const line = text.slice(nextFrom, nextTo);
+      if (!/^ {0,3}>/.test(line)) break;
+      bodyLines.push(line.replace(/^ {0,3}>[ \t]?/, ""));
+      to = nextTo;
+    }
     nodes.push({
       kind: "callout",
       from: match.index,
-      to: match.index + match[1].length,
-      text: body,
+      to,
+      text: bodyLines.join("\n"),
       meta: {
-        type: match[2].toLowerCase(),
-        fold: match[3] ?? "",
-        title: match[4].trim(),
+        type: match[1].toLowerCase(),
+        fold: match[2] ?? "",
+        title: match[3].trim(),
       },
     });
   }
@@ -364,7 +400,9 @@ export function selectionTouches(
   node: Pick<ObsidianNode, "from" | "to">,
   selection: { from: number; to: number },
 ): boolean {
-  return selection.from <= node.to && selection.to >= node.from;
+  if (selection.from === selection.to)
+    return selection.from >= node.from && selection.from < node.to;
+  return selection.from < node.to && selection.to > node.from;
 }
 
 export function inMath(text: string, position: number): boolean {

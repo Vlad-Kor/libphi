@@ -49,6 +49,15 @@ test_markdown_vault = executable('test-markdown-vault',
 
 test('markdown-vault-test', test_markdown_vault)
 
+test_settings = executable('test-settings',
+	'test-settings.c',
+	'../src/pdfv-settings.c',
+	include_directories: [inc, include_directories('../src')],
+	dependencies: [gio_dep],
+)
+
+test('settings-test', test_settings)
+
 test_document_view = executable('test-document-view',
 	'test-document-view.c',
 	'../src/pdfv-document-view.c',

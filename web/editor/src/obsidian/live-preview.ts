@@ -35,10 +35,10 @@ function blockReplacement(node: ObsidianNode): Decoration | undefined {
     case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from), block: true });
     case "math": return Decoration.replace({ widget: new MathWidget(node.text, false, node.from) });
     case "display-math": return Decoration.replace({ widget: new MathWidget(node.text, true, node.from), block: true });
-    case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from) });
-    case "embed": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, true), block: true });
+    case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
+    case "embed": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to, true), block: true });
     case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false) });
-    case "markdown-image": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, true), block: true });
+    case "markdown-image": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, true, node.to), block: true });
     case "footnote-reference": return Decoration.replace({ widget: new FootnoteWidget(String(node.meta?.id ?? node.text), node.from, false, Number(node.meta?.definition ?? node.from)) });
     case "inline-footnote": return Decoration.replace({ widget: new FootnoteWidget(node.text, node.from) });
     case "footnote-definition": return Decoration.replace({ widget: new FootnoteWidget(node.text, node.from, true, node.from, String(node.meta?.id ?? "")), block: true });
@@ -74,6 +74,13 @@ function buildDecorations(state: EditorState): DecorationSet {
   for (const node of nodes) {
     if (node.from < coveredUntil) continue;
     const isActive = active(node, state);
+    if (isActive && (node.kind === "math" || node.kind === "display-math")) {
+      builder.add(node.to, node.to, Decoration.widget({
+        widget: new MathWidget(node.text, node.kind === "display-math", node.from, undefined, true),
+        side: 1,
+        block: node.kind === "display-math",
+      }));
+    }
     if (!isActive) {
       const replacement = blockReplacement(node);
       if (replacement) {

@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runEditingCommand } from "../src/commands";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
-import { TaskWidget } from "../src/widgets/preview";
+import { renderMath } from "../src/math/mathjax";
+import { resizeImageMarkdown, TaskWidget } from "../src/widgets/preview";
 
 const views: EditorView[] = [];
 afterEach(() => {
@@ -52,13 +53,22 @@ describe("CodeMirror document transactions", () => {
   it("toggles task source through the live checkbox widget", () => {
     const view = viewFor("- [ ] Item");
     const checkbox = new TaskWidget(" ", 2).toDOM(view) as HTMLInputElement;
-    checkbox.dispatchEvent(new Event("change"));
+    checkbox.click();
     expect(view.state.doc.toString()).toBe("- [x] Item");
 
     const customView = viewFor("- [-] Cancelled");
     const custom = new TaskWidget("-", 2).toDOM(customView) as HTMLInputElement;
     custom.dispatchEvent(new Event("change"));
     expect(customView.state.doc.toString()).toBe("- [-] Cancelled");
+  });
+
+  it("updates Obsidian and regular Markdown image widths", () => {
+    expect(resizeImageMarkdown("![[diagram.png]]", 341.6)).toBe("![[diagram.png|342]]");
+    expect(resizeImageMarkdown("![[diagram.png|200]]", 480)).toBe("![[diagram.png|480]]");
+    expect(resizeImageMarkdown("![Diagram](<images/my diagram.png>)", 275))
+      .toBe("![Diagram|275](<images/my diagram.png>)");
+    expect(resizeImageMarkdown("![Diagram|200](image.png)", 20))
+      .toBe("![Diagram|40](image.png)");
   });
 
   it("round-trips untouched CRLF and Unicode byte-for-byte", () => {
@@ -115,6 +125,41 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".list-bullet")).toHaveLength(1);
     expect(parent.querySelectorAll(".math-inline")).toHaveLength(1);
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
+  });
+
+  it("keeps a rendered math preview while editing and restores the replacement at its boundary", () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      typesetPromise: () => Promise.resolve(),
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "$$\nx = 0\n$$";
+    editor.openDocument({ documentId: "math", path: "math.md", text, revision: 1, lineEnding: "LF" });
+
+    editor.view.dispatch({ selection: { anchor: 5 } });
+    expect(parent.querySelectorAll(".math-edit-preview")).toHaveLength(1);
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelectorAll(".math-edit-preview")).toHaveLength(0);
+    expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
+  });
+
+  it("passes delimiter-free display source to MathJax's direct renderer", async () => {
+    const calls: Array<{ source: string; display?: boolean }> = [];
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2chtmlPromise: (source: string, options: { display?: boolean }) => {
+        calls.push({ source, display: options.display });
+        return Promise.resolve(document.createElement("mjx-container"));
+      },
+    };
+    const target = document.createElement("div");
+    await renderMath("theta_unique = 7", true, target);
+    expect(calls).toEqual([{ source: "theta_unique = 7", display: true }]);
+    expect(target.querySelector("mjx-container")).not.toBeNull();
+    expect(target.textContent).not.toContain("$$");
   });
 
   it("indents and outdents hierarchical list items with Tab", () => {

@@ -23,6 +23,9 @@ export function applyTheme(theme: EditorTheme): void {
   const root = document.documentElement;
   root.dataset.theme = theme.dark ? "dark" : "light";
   root.style.setProperty("--editor-font-scale", String(theme.fontScale ?? 1));
-  if (theme.background) root.style.setProperty("--editor-bg", theme.background);
+  /* The WebKit style lookup can briefly report the previous Adwaita palette
+   * while the application is switching schemes. Keep the editor palette tied
+   * to the explicit dark bit so it can never become light-on-light/inverted. */
+  root.style.removeProperty("--editor-bg");
   root.style.colorScheme = theme.dark ? "dark" : "light";
 }

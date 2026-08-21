@@ -49,6 +49,8 @@ void pdfv_markdown_editor_set_remote_images_allowed(
     PdfvMarkdownEditor *self, gboolean allowed);
 void pdfv_markdown_editor_set_snippets(PdfvMarkdownEditor *self,
                                        const gchar *snippets);
+void pdfv_markdown_editor_set_attachment_folder(
+    PdfvMarkdownEditor *self, GFile *folder);
 void pdfv_markdown_editor_focus(PdfvMarkdownEditor *self);
 
 gboolean pdfv_markdown_editor_get_dirty(PdfvMarkdownEditor *self);

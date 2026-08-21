@@ -47,16 +47,19 @@ export class MathWidget extends WidgetType {
     readonly display: boolean,
     readonly from: number,
     readonly mathRevision = getMathRevision(),
+    readonly editing = false,
   ) { super(); }
 
   eq(other: MathWidget): boolean {
     return other.latex === this.latex && other.display === this.display &&
-      other.mathRevision === this.mathRevision;
+      other.from === this.from && other.mathRevision === this.mathRevision &&
+      other.editing === this.editing;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const element = document.createElement(this.display ? "div" : "span");
     element.className = this.display ? "math-widget math-display" : "math-widget math-inline";
+    if (this.editing) element.classList.add("math-edit-preview");
     element.tabIndex = 0;
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
     element.addEventListener("click", () => reveal(view, this.from));
@@ -67,16 +70,113 @@ export class MathWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
+export function resizeImageMarkdown(source: string, width: number): string {
+  const size = String(Math.max(40, Math.round(width)));
+  const wiki = /^!\[\[([\s\S]*)\]\]$/.exec(source);
+  if (wiki) {
+    const pipe = wiki[1].lastIndexOf("|");
+    const target = (pipe >= 0 ? wiki[1].slice(0, pipe) : wiki[1]).trimEnd();
+    return `![[${target}|${size}]]`;
+  }
+  const markdown = /^!\[([\s\S]*?)\](\([\s\S]*\))$/.exec(source);
+  if (markdown) {
+    const alt = markdown[1].replace(/\|\d+(?:x\d+)?\s*$/, "");
+    return `![${alt}|${size}]${markdown[2]}`;
+  }
+  return source;
+}
+
+function imageCodeIcon(): SVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M5.5 3.5 1.5 8l4 4.5M10.5 3.5l4 4.5-4 4.5M9.25 2 6.75 14");
+  svg.append(path);
+  return svg;
+}
+
+function interactiveImage(
+  view: EditorView,
+  image: HTMLImageElement,
+  from: number,
+  to: number,
+): HTMLElement {
+  const container = document.createElement("span");
+  container.className = "image-widget";
+  const source = document.createElement("button");
+  source.type = "button";
+  source.className = "image-source-button";
+  source.title = "Edit image source";
+  source.setAttribute("aria-label", "Edit image source");
+  source.append(imageCodeIcon());
+  source.addEventListener("pointerdown", (event) => event.stopPropagation());
+  source.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    reveal(view, from);
+  });
+
+  const handle = document.createElement("span");
+  handle.className = "image-resize-handle";
+  handle.tabIndex = 0;
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-label", "Resize image");
+  handle.title = "Drag to resize";
+  const commit = (width: number) => {
+    const current = view.state.sliceDoc(from, to);
+    const replacement = resizeImageMarkdown(current, width);
+    if (replacement !== current)
+      view.dispatch({ changes: { from, to, insert: replacement }, userEvent: "input.resize-image" });
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = Math.max(40, image.getBoundingClientRect().width || image.naturalWidth || 300);
+    let width = startWidth;
+    handle.setPointerCapture?.(event.pointerId);
+    const move = (moveEvent: PointerEvent) => {
+      width = Math.max(40, Math.min(1600, startWidth + moveEvent.clientX - startX));
+      image.style.width = `${Math.round(width)}px`;
+      image.style.height = "auto";
+    };
+    const finish = (finishEvent: PointerEvent) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", finish);
+      handle.removeEventListener("pointercancel", cancel);
+      if (finishEvent.type === "pointerup") commit(width);
+    };
+    const cancel = (cancelEvent: PointerEvent) => finish(cancelEvent);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", finish);
+    handle.addEventListener("pointercancel", cancel);
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const current = image.getBoundingClientRect().width || image.width || 300;
+    commit(current + (event.key === "ArrowRight" ? 10 : -10));
+  });
+  container.addEventListener("pointerdown", (event) => event.stopPropagation());
+  container.append(image, source, handle);
+  return container;
+}
+
 export class LinkWidget extends WidgetType {
   constructor(
     readonly target: string,
     readonly label: string,
     readonly from: number,
+    readonly to: number,
     readonly embed = false,
   ) { super(); }
 
   eq(other: LinkWidget): boolean {
-    return other.target === this.target && other.label === this.label && other.embed === this.embed;
+    return other.target === this.target && other.label === this.label &&
+      other.from === this.from && other.to === this.to &&
+      other.embed === this.embed;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -126,8 +226,7 @@ export class LinkWidget extends WidgetType {
           reportError(error, "image");
           image.replaceWith(imageError(error));
         });
-      image.addEventListener("dblclick", () => reveal(view, this.from));
-      return image;
+      return interactiveImage(view, image, this.from, this.to);
     }
     if (["mp3", "ogg", "wav", "flac", "m4a"].includes(extension ?? "")) {
       const audio = document.createElement("audio");
@@ -178,7 +277,7 @@ export class LinkWidget extends WidgetType {
     return container;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return this.embed; }
 }
 
 export class MarkdownLinkWidget extends WidgetType {
@@ -187,10 +286,13 @@ export class MarkdownLinkWidget extends WidgetType {
     readonly label: string,
     readonly from: number,
     readonly image: boolean,
+    readonly to = from,
   ) { super(); }
 
   eq(other: MarkdownLinkWidget): boolean {
-    return other.target === this.target && other.label === this.label && other.image === this.image;
+    return other.target === this.target && other.label === this.label &&
+      other.from === this.from && other.image === this.image &&
+      other.to === this.to;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -233,8 +335,7 @@ export class MarkdownLinkWidget extends WidgetType {
           image.replaceWith(imageError(error));
         });
       }
-      image.addEventListener("dblclick", () => reveal(view, this.from));
-      return image;
+      return interactiveImage(view, image, this.from, this.to);
     }
 
     const link = document.createElement("a");
@@ -252,7 +353,7 @@ export class MarkdownLinkWidget extends WidgetType {
     return link;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return this.image; }
 }
 
 function imageError(error: unknown): HTMLElement {
@@ -264,7 +365,9 @@ function imageError(error: unknown): HTMLElement {
 
 export class TaskWidget extends WidgetType {
   constructor(readonly status: string, readonly from: number) { super(); }
-  eq(other: TaskWidget): boolean { return other.status === this.status; }
+  eq(other: TaskWidget): boolean {
+    return other.status === this.status && other.from === this.from;
+  }
 
   toDOM(view: EditorView): HTMLElement {
     const checkbox = document.createElement("input");
@@ -273,7 +376,10 @@ export class TaskWidget extends WidgetType {
     checkbox.checked = this.status.toLowerCase() === "x";
     checkbox.indeterminate = this.status !== " " && this.status.toLowerCase() !== "x";
     checkbox.setAttribute("aria-label", `Task status ${this.status === " " ? "not done" : this.status}`);
-    checkbox.addEventListener("change", () => {
+    checkbox.addEventListener("pointerdown", (event) => event.stopPropagation());
+    checkbox.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       if (this.status !== " " && this.status.toLowerCase() !== "x") {
         checkbox.checked = false;
         checkbox.indeterminate = true;
@@ -286,7 +392,7 @@ export class TaskWidget extends WidgetType {
     return checkbox;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export class TagWidget extends WidgetType {

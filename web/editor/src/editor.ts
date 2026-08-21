@@ -166,9 +166,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       const reader = new FileReader();
       reader.onload = () => {
         const encoded = String(reader.result ?? "").split(",").pop() ?? "";
-        requestNative<{ path?: string }>("attachment/create", { mimeType: file.type, data: encoded })
+        requestNative<{ path?: string; name?: string }>("attachment/create", { mimeType: file.type, data: encoded })
           .then((result) => {
-            if (result.path) view.dispatch(view.state.replaceSelection(`![[${result.path}]]`));
+            if (!result.path) return;
+            const name = (result.name ?? "Pasted image").replace(/\.[^.]+$/, "").replace(/]/g, "\\]");
+            view.dispatch(view.state.replaceSelection(`![${name}](<${result.path}>)`));
           })
           .catch((error) => reportError(error, "attachment/paste", this.documentPath));
       };

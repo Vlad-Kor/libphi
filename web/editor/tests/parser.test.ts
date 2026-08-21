@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mathModeAt, parseObsidian } from "../src/obsidian/parser";
+import { mathModeAt, parseObsidian, selectionTouches } from "../src/obsidian/parser";
 
 describe("Obsidian parser precedence", () => {
   it("does not parse links or math inside code", () => {
@@ -70,6 +70,24 @@ $$`;
     expect(nodes.some((node) => node.kind === "list-item")).toBe(true);
     expect(nodes.find((node) => node.kind === "display-math")?.text)
       .toContain("\\boxed{");
+  });
+
+  it("parses newly typed display math and leaves its closing boundary inactive", () => {
+    const source = "$$\nx = 0\n$$";
+    const math = parseObsidian(source).find((node) => node.kind === "display-math");
+    expect(math).toMatchObject({ from: 0, to: source.length, text: "x = 0" });
+    expect(selectionTouches(math!, { from: 4, to: 4 })).toBe(true);
+    expect(selectionTouches(math!, { from: source.length, to: source.length })).toBe(false);
+  });
+
+  it("limits callouts to contiguous quoted lines and removes the marker from their body", () => {
+    const source = "> [!info] test\n> test\n\n\nplain";
+    const callout = parseObsidian(source).find((node) => node.kind === "callout");
+    expect(callout).toMatchObject({
+      text: "test",
+      meta: { type: "info", title: "test" },
+    });
+    expect(source.slice(callout!.from, callout!.to)).toBe("> [!info] test\n> test");
   });
 
   it("parses linked HTML images, linked Markdown images, and fenced code", () => {

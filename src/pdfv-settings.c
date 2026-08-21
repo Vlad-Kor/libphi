@@ -13,7 +13,19 @@ struct _PdfvSettings {
   gdouble markdown_font_scale;
   gboolean allow_remote_images;
   gchar *latex_snippets;
+  GKeyFile *file;
 };
+
+static gchar *workspace_group(GFile *workspace) {
+  if (!workspace)
+    return NULL;
+  gchar *uri = g_file_get_uri(workspace);
+  gchar *digest = g_compute_checksum_for_string(G_CHECKSUM_SHA256, uri, -1);
+  gchar *group = g_strdup_printf("Workspace %s", digest);
+  g_free(digest);
+  g_free(uri);
+  return group;
+}
 
 static gchar *settings_filename(void) {
   return g_build_filename(g_get_user_config_dir(), "phi-pdf-viewer",
@@ -24,27 +36,27 @@ PdfvSettings *pdfv_settings_new(void) {
   PdfvSettings *self = g_new0(PdfvSettings, 1);
   self->markdown_font_scale = 1.0;
   self->latex_snippets = g_strdup("");
+  self->file = g_key_file_new();
 
   gchar *filename = settings_filename();
-  GKeyFile *file = g_key_file_new();
-  if (g_key_file_load_from_file(file, filename, G_KEY_FILE_NONE, NULL)) {
+  if (g_key_file_load_from_file(self->file, filename,
+                                G_KEY_FILE_KEEP_COMMENTS, NULL)) {
     GError *error = NULL;
-    gdouble scale = g_key_file_get_double(file, SETTINGS_GROUP,
+    gdouble scale = g_key_file_get_double(self->file, SETTINGS_GROUP,
                                           "font-scale", &error);
     if (!error)
       self->markdown_font_scale = CLAMP(scale, 0.6875, 2.0);
     g_clear_error(&error);
     self->allow_remote_images = g_key_file_get_boolean(
-        file, SETTINGS_GROUP, "allow-remote-images", &error);
+        self->file, SETTINGS_GROUP, "allow-remote-images", &error);
     g_clear_error(&error);
-    gchar *snippets = g_key_file_get_string(file, SETTINGS_GROUP,
+    gchar *snippets = g_key_file_get_string(self->file, SETTINGS_GROUP,
                                              "latex-snippets", NULL);
     if (snippets) {
       g_free(self->latex_snippets);
       self->latex_snippets = snippets;
     }
   }
-  g_key_file_unref(file);
   g_free(filename);
   return self;
 }
@@ -52,21 +64,21 @@ PdfvSettings *pdfv_settings_new(void) {
 void pdfv_settings_free(PdfvSettings *self) {
   if (!self)
     return;
+  g_clear_pointer(&self->file, g_key_file_unref);
   g_free(self->latex_snippets);
   g_free(self);
 }
 
 gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
   g_return_val_if_fail(self != NULL, FALSE);
-  GKeyFile *file = g_key_file_new();
-  g_key_file_set_double(file, SETTINGS_GROUP, "font-scale",
+  g_key_file_set_double(self->file, SETTINGS_GROUP, "font-scale",
                         self->markdown_font_scale);
-  g_key_file_set_boolean(file, SETTINGS_GROUP, "allow-remote-images",
+  g_key_file_set_boolean(self->file, SETTINGS_GROUP, "allow-remote-images",
                          self->allow_remote_images);
-  g_key_file_set_string(file, SETTINGS_GROUP, "latex-snippets",
+  g_key_file_set_string(self->file, SETTINGS_GROUP, "latex-snippets",
                         self->latex_snippets);
   gsize length = 0;
-  gchar *contents = g_key_file_to_data(file, &length, error);
+  gchar *contents = g_key_file_to_data(self->file, &length, error);
   gchar *filename = settings_filename();
   gchar *directory = g_path_get_dirname(filename);
   gboolean saved = contents &&
@@ -78,7 +90,6 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
   g_free(directory);
   g_free(filename);
   g_free(contents);
-  g_key_file_unref(file);
   return saved;
 }
 
@@ -116,6 +127,44 @@ void pdfv_settings_set_latex_snippets(PdfvSettings *self,
   self->latex_snippets = g_strdup(snippets ? snippets : "");
 }
 
+gboolean pdfv_settings_get_workspace_attachment_fixed(
+    PdfvSettings *self, GFile *workspace) {
+  g_return_val_if_fail(self != NULL, FALSE);
+  if (!workspace)
+    return FALSE;
+  gchar *group = workspace_group(workspace);
+  gboolean fixed = g_key_file_get_boolean(
+      self->file, group, "fixed-attachment-folder", NULL);
+  g_free(group);
+  return fixed;
+}
+
+gchar *pdfv_settings_dup_workspace_attachment_folder_uri(
+    PdfvSettings *self, GFile *workspace) {
+  g_return_val_if_fail(self != NULL, NULL);
+  if (!workspace)
+    return NULL;
+  gchar *group = workspace_group(workspace);
+  gchar *uri = g_key_file_get_string(
+      self->file, group, "attachment-folder-uri", NULL);
+  g_free(group);
+  return uri;
+}
+
+void pdfv_settings_set_workspace_attachment_policy(
+    PdfvSettings *self, GFile *workspace, gboolean fixed,
+    const gchar *folder_uri) {
+  g_return_if_fail(self != NULL);
+  g_return_if_fail(G_IS_FILE(workspace));
+  gchar *group = workspace_group(workspace);
+  g_key_file_set_boolean(self->file, group, "fixed-attachment-folder",
+                         fixed);
+  if (folder_uri && *folder_uri)
+    g_key_file_set_string(self->file, group, "attachment-folder-uri",
+                          folder_uri);
+  g_free(group);
+}
+
 void pdfv_settings_copy(PdfvSettings *destination,
                         PdfvSettings *source) {
   g_return_if_fail(destination != NULL);
@@ -123,4 +172,15 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->markdown_font_scale = source->markdown_font_scale;
   destination->allow_remote_images = source->allow_remote_images;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
+  gsize length = 0;
+  gchar *data = g_key_file_to_data(source->file, &length, NULL);
+  GKeyFile *copy = g_key_file_new();
+  if (data && g_key_file_load_from_data(copy, data, length,
+                                        G_KEY_FILE_KEEP_COMMENTS, NULL)) {
+    g_key_file_unref(destination->file);
+    destination->file = copy;
+  } else {
+    g_key_file_unref(copy);
+  }
+  g_free(data);
 }

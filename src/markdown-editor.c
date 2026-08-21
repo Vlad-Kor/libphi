@@ -40,6 +40,7 @@ struct _PdfvMarkdownEditor {
   PdfvMarkdownEditorBridge *bridge;
 
   GFile *file;
+  GFile *attachment_folder;
   GFileMonitor *monitor;
   GFileMonitor *preamble_monitor;
   gchar *document_id;
@@ -460,6 +461,63 @@ static const gchar *extension_for_mime(const gchar *mime) {
   return "png";
 }
 
+static gboolean file_is_within(GFile *root, GFile *file) {
+  if (g_file_equal(root, file))
+    return TRUE;
+  gchar *relative = g_file_get_relative_path(root, file);
+  gboolean within = relative != NULL;
+  g_free(relative);
+  return within;
+}
+
+static gboolean attachment_folder_is_safe(PdfvMarkdownEditor *self,
+                                           GFile *folder) {
+  GFile *root = pdfv_markdown_vault_adapter_get_root(self->vault);
+  if (g_file_equal(root, folder))
+    return TRUE;
+  gchar *relative = pdfv_markdown_vault_adapter_relative_path(self->vault,
+                                                              folder);
+  GFile *resolved = relative
+      ? pdfv_markdown_vault_adapter_resolve(self->vault, relative, NULL)
+      : NULL;
+  gboolean safe = resolved && g_file_equal(resolved, folder);
+  g_clear_object(&resolved);
+  g_free(relative);
+  return safe;
+}
+
+static gchar *attachment_link_from_note(PdfvMarkdownEditor *self,
+                                        GFile *file) {
+  gchar *target = pdfv_markdown_vault_adapter_relative_path(self->vault,
+                                                            file);
+  if (!target)
+    return NULL;
+  gchar *note_directory = g_path_get_dirname(self->relative_path);
+  gchar **from_parts = g_strsplit(note_directory, G_DIR_SEPARATOR_S, -1);
+  gchar **to_parts = g_strsplit(target, G_DIR_SEPARATOR_S, -1);
+  guint common = 0;
+  while (from_parts[common] && to_parts[common] &&
+         g_str_equal(from_parts[common], to_parts[common]))
+    common++;
+  GString *link = g_string_new(NULL);
+  if (!g_str_equal(note_directory, ".")) {
+    for (guint i = common; from_parts[i]; i++) {
+      if (*from_parts[i] && !g_str_equal(from_parts[i], "."))
+        g_string_append(link, "../");
+    }
+  }
+  for (guint i = common; to_parts[i]; i++) {
+    if (link->len && link->str[link->len - 1] != '/')
+      g_string_append_c(link, '/');
+    g_string_append(link, to_parts[i]);
+  }
+  g_strfreev(to_parts);
+  g_strfreev(from_parts);
+  g_free(note_directory);
+  g_free(target);
+  return g_string_free(link, FALSE);
+}
+
 static void handle_attachment_create(PdfvMarkdownEditor *self,
                                      const gchar *id, JsonObject *payload) {
   const gchar *encoded = payload ? json_object_get_string_member_with_default(
@@ -475,34 +533,62 @@ static void handle_attachment_create(PdfvMarkdownEditor *self,
     send_response_node(self, id, NULL, "Invalid or oversized attachment");
     return;
   }
+  GError *error = NULL;
+  GFile *root = pdfv_markdown_vault_adapter_get_root(self->vault);
+  GFile *parent = self->attachment_folder
+      ? g_object_ref(self->attachment_folder)
+      : self->file ? g_file_get_parent(self->file) : NULL;
+  if (!parent || !file_is_within(root, parent) ||
+      !attachment_folder_is_safe(self, parent)) {
+    g_set_error(&error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                "The attachment folder must be inside the current vault");
+  } else if (!g_file_make_directory_with_parents(parent, NULL, &error) &&
+             !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_EXISTS)) {
+    /* Keep the directory creation error. */
+  } else {
+    g_clear_error(&error);
+  }
+
   GDateTime *now = g_date_time_new_now_local();
   gchar *stamp = g_date_time_format(now, "%Y-%m-%d %H%M%S");
-  gchar *name = g_strdup_printf("Pasted image %s.%s", stamp,
-                                extension_for_mime(mime));
-  gchar *relative = g_build_filename("attachments", name, NULL);
-  GError *error = NULL;
-  GFile *file = pdfv_markdown_vault_adapter_resolve(self->vault, relative,
-                                                    &error);
-  GFile *parent = file ? g_file_get_parent(file) : NULL;
-  if (parent)
-    g_file_make_directory_with_parents(parent, NULL, NULL);
-  gboolean saved = file && g_file_replace_contents(
-                                file, (const gchar *)data, length, NULL, FALSE,
-                                G_FILE_CREATE_REPLACE_DESTINATION, NULL, NULL,
-                                &error);
+  gchar *name = NULL;
+  GFile *file = NULL;
+  for (guint suffix = 0; parent && !error; suffix++) {
+    g_free(name);
+    name = suffix == 0
+        ? g_strdup_printf("Pasted image %s.%s", stamp,
+                          extension_for_mime(mime))
+        : g_strdup_printf("Pasted image %s %u.%s", stamp, suffix + 1,
+                          extension_for_mime(mime));
+    GFile *candidate = g_file_get_child(parent, name);
+    g_set_object(&file, candidate);
+    g_object_unref(candidate);
+    if (!g_file_query_exists(file, NULL))
+      break;
+  }
+  GFileOutputStream *stream = file && !error
+      ? g_file_create(file, G_FILE_CREATE_NONE, NULL, &error)
+      : NULL;
+  gboolean saved = stream &&
+      g_output_stream_write_all(G_OUTPUT_STREAM(stream), data, length, NULL,
+                                NULL, &error) &&
+      g_output_stream_close(G_OUTPUT_STREAM(stream), NULL, &error);
   if (!saved) {
     send_response_error(self, id, error);
   } else {
+    gchar *relative = attachment_link_from_note(self, file);
     JsonObject *value = json_object_new_owned();
-    json_object_set_string_member(value, "path", relative);
+    json_object_set_string_member(value, "path", relative ? relative : name);
+    json_object_set_string_member(value, "name", name);
     JsonNode *node = json_node_new(JSON_NODE_OBJECT);
     json_node_take_object(node, value);
     send_response_node(self, id, node, NULL);
+    g_free(relative);
   }
+  g_clear_object(&stream);
   g_clear_object(&parent);
   g_clear_object(&file);
   g_clear_error(&error);
-  g_free(relative);
   g_free(name);
   g_free(stamp);
   g_date_time_unref(now);
@@ -1058,15 +1144,9 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
   self->font_scale = font_scale;
   self->theme_set = TRUE;
   if (self->web_view) {
-    GdkRGBA background;
-    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-    if (!gtk_style_context_lookup_color(
-            gtk_widget_get_style_context(GTK_WIDGET(self)),
-            "window_bg_color", &background))
-      background = dark
-          ? (GdkRGBA){.red = 0.122, .green = 0.133, .blue = 0.149, .alpha = 1.0}
-          : (GdkRGBA){.red = 0.969, .green = 0.973, .blue = 0.980, .alpha = 1.0};
-    G_GNUC_END_IGNORE_DEPRECATIONS
+    GdkRGBA background = dark
+        ? (GdkRGBA){.red = 0.122, .green = 0.133, .blue = 0.149, .alpha = 1.0}
+        : (GdkRGBA){.red = 0.969, .green = 0.973, .blue = 0.980, .alpha = 1.0};
     g_free(self->theme_background);
     self->theme_background = gdk_rgba_to_string(&background);
     webkit_web_view_set_background_color(self->web_view, &background);
@@ -1089,6 +1169,18 @@ void pdfv_markdown_editor_set_snippets(PdfvMarkdownEditor *self,
   self->snippets = g_strdup(snippets ? snippets : "");
   self->settings_set = TRUE;
   send_settings(self);
+}
+
+void pdfv_markdown_editor_set_attachment_folder(
+    PdfvMarkdownEditor *self, GFile *folder) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  GFile *root = pdfv_markdown_vault_adapter_get_root(self->vault);
+  if (folder && (!file_is_within(root, folder) ||
+                 !attachment_folder_is_safe(self, folder))) {
+    g_warning("Ignoring an attachment folder outside the Markdown vault");
+    folder = NULL;
+  }
+  g_set_object(&self->attachment_folder, folder);
 }
 
 void pdfv_markdown_editor_focus(PdfvMarkdownEditor *self) {
@@ -1138,6 +1230,7 @@ static void pdfv_markdown_editor_dispose(GObject *object) {
   g_clear_object(&self->vault);
   g_clear_object(&self->content_manager);
   g_clear_object(&self->file);
+  g_clear_object(&self->attachment_folder);
   self->web_view = NULL;
   G_OBJECT_CLASS(pdfv_markdown_editor_parent_class)->dispose(object);
 }
