@@ -1,6 +1,6 @@
 :root {
   color-scheme: light dark;
-  --editor-bg: #ffffff;
+  --editor-bg: #fafafa;
   --editor-fg: #242424;
   --editor-muted: #6e6e73;
   --editor-border: color-mix(in srgb, var(--editor-fg) 15%, transparent);
@@ -13,7 +13,7 @@
 }
 
 :root[data-theme="dark"] {
-  --editor-bg: #1e1e1e;
+  --editor-bg: #242424;
   --editor-fg: #f2f2f2;
   --editor-muted: #a0a0a6;
   --editor-border: color-mix(in srgb, white 16%, transparent);
@@ -29,22 +29,23 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .cm-editor.cm-focused { outline: none; }
 .cm-scroller { font-family: system-ui, sans-serif; line-height: 1.62; overflow: auto; }
 .cm-content { width: min(100% - 48px, 900px); margin: 0 auto; padding: 32px 24px 45vh; caret-color: var(--editor-fg); }
-.cm-gutters { background: var(--editor-bg); color: var(--editor-muted); border-color: var(--editor-border); }
-.cm-activeLine, .cm-activeLineGutter { background: color-mix(in srgb, var(--editor-accent) 5%, transparent); }
+.cm-gutters { display: none; }
+.cm-activeLine, .cm-activeLineGutter { background: transparent !important; }
 .cm-selectionBackground, .cm-content ::selection { background: var(--editor-selection) !important; }
 .cm-cursor { border-left-color: var(--editor-fg); }
 .cm-tooltip { background: var(--editor-bg); color: var(--editor-fg); border: 1px solid var(--editor-border); }
 .cm-panels { background: var(--editor-bg); color: var(--editor-fg); }
 .cm-concealed { display: none; }
-.cm-live-heading { font-family: system-ui, sans-serif; font-weight: 750; line-height: 1.25; }
-.cm-live-heading-1 { font-size: 2em; }
-.cm-live-heading-2 { font-size: 1.6em; }
-.cm-live-heading-3 { font-size: 1.35em; }
+.cm-live-heading, .cm-live-heading * { font-family: system-ui, sans-serif; font-weight: 780; line-height: 1.25; text-decoration: none !important; }
+.cm-live-heading { padding-top: .28em; }
+.cm-live-heading-1 { font-size: 2.25em; font-weight: 820; }
+.cm-live-heading-2 { font-size: 1.75em; }
+.cm-live-heading-3 { font-size: 1.42em; }
 .cm-live-heading-4 { font-size: 1.18em; }
 .cm-live-heading-5 { font-size: 1.08em; }
 .cm-live-heading-6 { font-size: 1em; color: var(--editor-muted); }
 .cm-live-emphasis { font-style: italic; }
-.cm-live-strong { font-weight: 700; }
+.cm-live-strong, .cm-live-strong * { font-weight: 750; text-decoration: none !important; }
 .cm-live-strike { text-decoration: line-through; }
 .cm-live-highlight { background: color-mix(in srgb, #f9f06b 62%, transparent); border-radius: 3px; }
 .cm-live-tag { color: var(--editor-link); background: color-mix(in srgb, var(--editor-link) 12%, transparent); border: 0; border-radius: 999px; padding: 0 4px; cursor: pointer; font: inherit; }
@@ -52,7 +53,9 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .internal-link, a { color: var(--editor-link); text-decoration: none; cursor: pointer; }
 .internal-link:hover, a:hover { text-decoration: underline; }
 .math-widget { color: inherit; cursor: text; }
+.math-loading { color: var(--editor-muted); opacity: .7; }
 .math-display { display: block; width: 100%; overflow-x: auto; padding: .55em 0; text-align: center; }
+.list-bullet { display: inline-block; min-width: .85em; color: var(--editor-fg); font-weight: 700; }
 .task-checkbox { margin: 0 .35em 0 0; accent-color: var(--editor-accent); }
 .footnote-reference { border: 0; background: transparent; color: var(--editor-link); font-size: .72em; vertical-align: super; cursor: pointer; padding: 0 .12em; }
 .footnote-definition { display: grid; grid-template-columns: auto 1fr; gap: .55em; border-top: 1px solid var(--editor-border); color: var(--editor-muted); padding: .4em 0; font-size: .9em; }

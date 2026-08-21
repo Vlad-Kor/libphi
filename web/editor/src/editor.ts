@@ -1,10 +1,11 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { bracketMatching, defaultHighlightStyle, foldGutter, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
 import { findNext, findPrevious, openSearchPanel, searchKeymap } from "@codemirror/search";
-import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
+import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap, rectangularSelection } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { parseDocument } from "yaml";
 import { acceptNativeResponse, requestNative, reportError, sendNative } from "./bridge";
 import { formattingKeymap, runEditingCommand } from "./commands";
@@ -17,6 +18,10 @@ import type { DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEdito
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
+const obsidianHighlightStyle = HighlightStyle.define([
+  { tag: tags.strong, fontWeight: "750", textDecoration: "none" },
+  { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], textDecoration: "none" },
+]);
 
 export class PhiMarkdownEditor implements NativeMarkdownEditor {
   readonly view: EditorView;
@@ -44,8 +49,6 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       doc: text,
       extensions: [
         EditorState.lineSeparator.of(this.lineEnding === "CRLF" ? "\r\n" : "\n"),
-        lineNumbers(),
-        foldGutter(),
         highlightSpecialChars(),
         history(),
         drawSelection(),
@@ -56,9 +59,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         closeBrackets(),
         rectangularSelection(),
         crosshairCursor(),
-        highlightActiveLine(),
-        highlightActiveLineGutter(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(obsidianHighlightStyle),
         markdown({ base: markdownLanguage, addKeymap: true }),
         autocompletion({ override: [obsidianCompletion], activateOnTyping: true }),
         keymap.of([
@@ -95,7 +97,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       dirty: true,
     });
     window.clearTimeout(this.snapshotTimer);
-    this.snapshotTimer = window.setTimeout(() => this.sendSnapshot("document/changed"), 400);
+    this.snapshotTimer = window.setTimeout(() => this.sendSnapshot("document/changed"), 180);
   }
 
   private snapshot(): DocumentSnapshot {
@@ -199,7 +201,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     this.lineEnding = document.lineEnding;
     updatePreamble(document.preamble ?? "");
     this.applyDocumentClasses(document.text);
-    setCustomSnippets(document.snippets);
+    setCustomSnippets(this.settings.snippets);
     this.view.setState(this.createState(document.text));
     this.view.focus();
     sendNative("document/state", { documentId: this.documentId, dirty: false, editorRevision: 0 });
@@ -216,6 +218,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       effects.push(wrappingCompartment.reconfigure(this.settings.lineWrapping ? EditorView.lineWrapping : []));
     if (previous.allowRemoteImages !== this.settings.allowRemoteImages)
       effects.push(refreshLivePreview.of(null));
+    if (previous.snippets !== this.settings.snippets)
+      setCustomSnippets(this.settings.snippets);
     if (effects.length) this.view.dispatch({ effects });
     document.body.classList.toggle("source-mode", this.settings.sourceMode);
   }
@@ -262,12 +266,19 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     return snapshot;
   }
 
-  markSaved(revision: number): void {
-    const text = this.getDocument();
+  markSaved(revision: number, savedEditorRevision = this.editorRevision): void {
     this.baseRevision = revision;
-    this.dirty = false;
-    this.originalText = text;
-    sendNative("document/state", { documentId: this.documentId, dirty: false, revision });
+    if (savedEditorRevision >= this.editorRevision) {
+      const text = this.getDocument();
+      this.dirty = false;
+      this.originalText = text;
+    }
+    sendNative("document/state", {
+      documentId: this.documentId,
+      dirty: this.dirty,
+      revision,
+      savedEditorRevision,
+    });
   }
 
   receive(message: NativeMessage): void {
@@ -279,7 +290,10 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         if (!this.dirty) this.openDocument(payload as unknown as OpenDocument);
         else sendNative("document/state", { documentId: this.documentId, conflict: true, externalRevision: payload.revision });
         break;
-      case "document/saved": this.markSaved(Number(payload.revision ?? this.baseRevision + 1)); break;
+      case "document/saved": this.markSaved(
+        Number(payload.revision ?? this.baseRevision + 1),
+        Number(payload.editorRevision ?? this.editorRevision),
+      ); break;
       case "settings/update": this.updateSettings(payload as EditorSettings); break;
       case "theme/update": this.updateTheme(payload as unknown as EditorTheme); break;
       case "preamble/update":

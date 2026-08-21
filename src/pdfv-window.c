@@ -10,6 +10,7 @@
 
 #include "pdfv-window.h"
 #include "pdfv-document-view.h"
+#include "pdfv-settings.h"
 #include "pdfv-workspace.h"
 #include "markdown-editor.h"
 #include <phi/phidocument.h>
@@ -103,6 +104,10 @@ struct _PdfvWindow {
   PdfvMarkdownEditor *current_editor;
   gboolean closing_window;
 
+  /* Global preferences, mirrored into every window/editor. */
+  PdfvSettings *settings;
+  guint settings_update_timeout_id;
+
   /* Outline data for current document */
   PhiOutlineItem *current_outline;
 };
@@ -123,6 +128,75 @@ static void workspace_search_close(PdfvWindow *self, gboolean commit);
 static void workspace_search_schedule(PdfvWindow *self, guint delay_ms);
 static void on_markdown_error(PdfvMarkdownEditor *editor,
                               const gchar *message, PdfvWindow *self);
+
+static void apply_preferences_to_editor(PdfvWindow *self,
+                                        PdfvMarkdownEditor *editor) {
+  AdwStyleManager *style = adw_style_manager_get_default();
+  pdfv_markdown_editor_set_theme(
+      editor, adw_style_manager_get_dark(style),
+      pdfv_settings_get_markdown_font_scale(self->settings));
+  pdfv_markdown_editor_set_remote_images_allowed(
+      editor, pdfv_settings_get_allow_remote_images(self->settings));
+  pdfv_markdown_editor_set_snippets(
+      editor, pdfv_settings_get_latex_snippets(self->settings));
+}
+
+static void apply_markdown_preferences(PdfvWindow *self) {
+  if (self->tab_view) {
+    guint pages = adw_tab_view_get_n_pages(self->tab_view);
+    for (guint i = 0; i < pages; i++) {
+      AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
+      GtkWidget *stack = adw_tab_page_get_child(page);
+      PdfvMarkdownEditor *editor = GTK_IS_STACK(stack)
+          ? g_object_get_data(G_OBJECT(stack), "markdown-editor")
+          : NULL;
+      if (editor)
+        apply_preferences_to_editor(self, editor);
+    }
+  }
+  GAction *remote = g_action_map_lookup_action(
+      G_ACTION_MAP(self), "allow-remote-images");
+  if (remote)
+    g_simple_action_set_state(
+        G_SIMPLE_ACTION(remote),
+        g_variant_new_boolean(
+            pdfv_settings_get_allow_remote_images(self->settings)));
+}
+
+static void propagate_markdown_preferences(PdfvWindow *source) {
+  GtkApplication *application = gtk_window_get_application(GTK_WINDOW(source));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    if (window != source)
+      pdfv_settings_copy(window->settings, source->settings);
+    apply_markdown_preferences(window);
+  }
+  GError *error = NULL;
+  if (!pdfv_settings_save(source->settings, &error)) {
+    g_warning("Could not save Phi settings: %s",
+              error ? error->message : "unknown error");
+    g_clear_error(&error);
+  }
+}
+
+static gboolean preferences_update_timeout(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  self->settings_update_timeout_id = 0;
+  propagate_markdown_preferences(self);
+  return G_SOURCE_REMOVE;
+}
+
+static void schedule_preferences_update(PdfvWindow *self, guint delay_ms) {
+  if (self->settings_update_timeout_id)
+    g_source_remove(self->settings_update_timeout_id);
+  self->settings_update_timeout_id = g_timeout_add_full(
+      G_PRIORITY_DEFAULT, delay_ms, preferences_update_timeout,
+      g_object_ref(self), g_object_unref);
+}
 
 static void update_navigation_buttons(PdfvWindow *self) {
   gboolean can_back = FALSE;
@@ -461,10 +535,9 @@ static void setup_markdown_editor_signals(PdfvWindow *self,
 
 static void on_style_dark_changed(AdwStyleManager *manager, GParamSpec *pspec,
                                   PdfvWindow *self) {
+  (void)manager;
   (void)pspec;
-  if (self->current_editor)
-    pdfv_markdown_editor_set_theme(self->current_editor,
-                                   adw_style_manager_get_dark(manager), 1.0);
+  apply_markdown_preferences(self);
 }
 
 /* Thumbnail rendering is serialized on one worker. Each document uses a
@@ -1953,6 +2026,19 @@ static void on_markdown_opened(GObject *source, GAsyncResult *result,
 }
 
 static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file) {
+  GFile *cursor = g_file_get_parent(file);
+  while (cursor) {
+    GFile *metadata = g_file_get_child(cursor, ".obsidian");
+    gboolean is_vault =
+        g_file_query_file_type(metadata, G_FILE_QUERY_INFO_NONE, NULL) ==
+        G_FILE_TYPE_DIRECTORY;
+    g_object_unref(metadata);
+    if (is_vault)
+      return cursor;
+    GFile *parent = g_file_get_parent(cursor);
+    g_object_unref(cursor);
+    cursor = parent;
+  }
   if (self->workspace) {
     GFile *root = pdfv_workspace_get_folder(self->workspace);
     gchar *relative = g_file_get_relative_path(root, file);
@@ -1980,17 +2066,7 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
   gtk_stack_add_named(GTK_STACK(stack), GTK_WIDGET(editor), "markdown");
   g_object_set_data(G_OBJECT(stack), "markdown-editor", editor);
   g_object_set_data(G_OBJECT(editor), "markdown-tab-page", page);
-  AdwStyleManager *style = adw_style_manager_get_default();
-  pdfv_markdown_editor_set_theme(editor, adw_style_manager_get_dark(style),
-                                 1.0);
-  GAction *remote_images = g_action_map_lookup_action(
-      G_ACTION_MAP(self), "allow-remote-images");
-  GVariant *remote_state = remote_images
-                               ? g_action_get_state(remote_images)
-                               : NULL;
-  pdfv_markdown_editor_set_remote_images_allowed(
-      editor, remote_state && g_variant_get_boolean(remote_state));
-  g_clear_pointer(&remote_state, g_variant_unref);
+  apply_preferences_to_editor(self, editor);
 
   MarkdownOpenRequest *request = g_new0(MarkdownOpenRequest, 1);
   request->window = g_object_ref(self);
@@ -2045,18 +2121,7 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
     }
   }
   if (self->current_editor) {
-    AdwStyleManager *style = adw_style_manager_get_default();
-    pdfv_markdown_editor_set_theme(
-        self->current_editor, adw_style_manager_get_dark(style), 1.0);
-    GAction *remote_images = g_action_map_lookup_action(
-        G_ACTION_MAP(self), "allow-remote-images");
-    GVariant *remote_state = remote_images
-                                 ? g_action_get_state(remote_images)
-                                 : NULL;
-    pdfv_markdown_editor_set_remote_images_allowed(
-        self->current_editor,
-        remote_state && g_variant_get_boolean(remote_state));
-    g_clear_pointer(&remote_state, g_variant_unref);
+    apply_preferences_to_editor(self, self->current_editor);
   }
 }
 
@@ -2524,9 +2589,130 @@ static void action_allow_remote_images(GSimpleAction *action,
   PdfvWindow *self = PDFV_WINDOW(user_data);
   gboolean allowed = g_variant_get_boolean(value);
   g_simple_action_set_state(action, value);
-  if (self->current_editor)
-    pdfv_markdown_editor_set_remote_images_allowed(self->current_editor,
-                                                    allowed);
+  pdfv_settings_set_allow_remote_images(self->settings, allowed);
+  propagate_markdown_preferences(self);
+}
+
+static void on_preferences_font_changed(AdwSpinRow *row,
+                                        GParamSpec *pspec,
+                                        PdfvWindow *self) {
+  (void)pspec;
+  pdfv_settings_set_markdown_font_scale(
+      self->settings, adw_spin_row_get_value(row) / 16.0);
+  schedule_preferences_update(self, 80);
+}
+
+static void on_preferences_remote_changed(AdwSwitchRow *row,
+                                          GParamSpec *pspec,
+                                          PdfvWindow *self) {
+  (void)pspec;
+  pdfv_settings_set_allow_remote_images(
+      self->settings, adw_switch_row_get_active(row));
+  schedule_preferences_update(self, 80);
+}
+
+static void on_preferences_snippets_changed(GtkTextBuffer *buffer,
+                                            PdfvWindow *self) {
+  GtkTextIter start;
+  GtkTextIter end;
+  gtk_text_buffer_get_bounds(buffer, &start, &end);
+  gchar *text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+  pdfv_settings_set_latex_snippets(self->settings, text);
+  g_free(text);
+  schedule_preferences_update(self, 450);
+}
+
+static void on_reset_snippets_clicked(GtkButton *button,
+                                      GtkTextBuffer *buffer) {
+  (void)button;
+  gtk_text_buffer_set_text(buffer, "", -1);
+}
+
+static void action_preferences(GSimpleAction *action, GVariant *parameter,
+                               gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  AdwDialog *dialog = adw_preferences_dialog_new();
+  adw_dialog_set_title(dialog, "Settings");
+
+  AdwPreferencesPage *page = ADW_PREFERENCES_PAGE(
+      adw_preferences_page_new());
+  adw_preferences_page_set_title(page, "Editor");
+  adw_preferences_page_set_icon_name(page, "document-edit-symbolic");
+  adw_preferences_dialog_add(ADW_PREFERENCES_DIALOG(dialog), page);
+
+  AdwPreferencesGroup *appearance = ADW_PREFERENCES_GROUP(
+      adw_preferences_group_new());
+  adw_preferences_group_set_title(appearance, "Appearance");
+  adw_preferences_page_add(page, appearance);
+
+  AdwSpinRow *font = ADW_SPIN_ROW(
+      adw_spin_row_new_with_range(11.0, 32.0, 1.0));
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(font),
+                                "Markdown font size");
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(font),
+                              "Base editor size in pixels");
+  adw_spin_row_set_value(
+      font, pdfv_settings_get_markdown_font_scale(self->settings) * 16.0);
+  adw_preferences_group_add(appearance, GTK_WIDGET(font));
+  g_signal_connect_object(font, "notify::value",
+                          G_CALLBACK(on_preferences_font_changed), self, 0);
+
+  AdwSwitchRow *remote = ADW_SWITCH_ROW(adw_switch_row_new());
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(remote),
+                                "Allow remote images");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(remote),
+      "Local and vault images are always available");
+  adw_switch_row_set_active(
+      remote, pdfv_settings_get_allow_remote_images(self->settings));
+  adw_preferences_group_add(appearance, GTK_WIDGET(remote));
+  g_signal_connect_object(remote, "notify::active",
+                          G_CALLBACK(on_preferences_remote_changed), self, 0);
+
+  AdwPreferencesGroup *latex = ADW_PREFERENCES_GROUP(
+      adw_preferences_group_new());
+  adw_preferences_group_set_title(latex, "LaTeX Suite snippets");
+  adw_preferences_group_set_description(
+      latex,
+      "Stored globally for Phi. Leave empty to use the built-in defaults.");
+  adw_preferences_page_add(page, latex);
+
+  GtkWidget *snippet_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+  gtk_widget_set_margin_top(snippet_box, 6);
+  gtk_widget_set_margin_bottom(snippet_box, 6);
+  GtkWidget *scroll = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                 GTK_POLICY_AUTOMATIC,
+                                 GTK_POLICY_AUTOMATIC);
+  gtk_widget_set_size_request(scroll, -1, 300);
+  gtk_widget_add_css_class(scroll, "card");
+  GtkWidget *view = gtk_text_view_new();
+  gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
+  gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view), GTK_WRAP_NONE);
+  gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view), 10);
+  gtk_text_view_set_right_margin(GTK_TEXT_VIEW(view), 10);
+  gtk_text_view_set_top_margin(GTK_TEXT_VIEW(view), 10);
+  gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(view), 10);
+  GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
+  gtk_text_buffer_set_text(
+      buffer, pdfv_settings_get_latex_snippets(self->settings), -1);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
+  gtk_box_append(GTK_BOX(snippet_box), scroll);
+
+  GtkWidget *reset = gtk_button_new_with_label("Use Built-in Defaults");
+  gtk_widget_set_halign(reset, GTK_ALIGN_END);
+  gtk_widget_add_css_class(reset, "flat");
+  gtk_box_append(GTK_BOX(snippet_box), reset);
+  adw_preferences_group_add(latex, snippet_box);
+  g_signal_connect_object(buffer, "changed",
+                          G_CALLBACK(on_preferences_snippets_changed),
+                          self, 0);
+  g_signal_connect(reset, "clicked",
+                   G_CALLBACK(on_reset_snippets_clicked), buffer);
+
+  adw_dialog_present(dialog, GTK_WIDGET(self));
 }
 
 static void action_go_back(GSimpleAction *action, GVariant *parameter,
@@ -2707,6 +2893,7 @@ static GActionEntry win_actions[] = {
      .activate = action_toggle_markdown_source},
     {.name = "allow-remote-images", .state = "false",
      .change_state = action_allow_remote_images},
+    {.name = "preferences", .activate = action_preferences},
     {.name = "go-back", .activate = action_go_back},
     {.name = "go-forward", .activate = action_go_forward},
     {.name = "zoom-in", .activate = action_zoom_in},
@@ -2845,6 +3032,10 @@ static void pdfv_window_dispose(GObject *object) {
   g_signal_handlers_disconnect_by_data(adw_style_manager_get_default(), self);
 
   workspace_preview_cancel_delay(self);
+  if (self->settings_update_timeout_id) {
+    g_source_remove(self->settings_update_timeout_id);
+    self->settings_update_timeout_id = 0;
+  }
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
     self->workspace_search_debounce_id = 0;
@@ -2878,6 +3069,7 @@ static void pdfv_window_dispose(GObject *object) {
   workspace_document_cache_clear(self);
   g_clear_pointer(&self->workspace_document_cache, g_hash_table_unref);
   g_clear_object(&self->workspace_menu_section);
+  g_clear_pointer(&self->settings, pdfv_settings_free);
 
   if (self->current_outline) {
     phi_outline_item_free(self->current_outline);
@@ -2892,11 +3084,18 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_editor = NULL;
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
+  self->settings = pdfv_settings_new();
   self->workspace_document_cache =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
 
   g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                   G_N_ELEMENTS(win_actions), self);
+  GAction *remote_images_action = g_action_map_lookup_action(
+      G_ACTION_MAP(self), "allow-remote-images");
+  g_simple_action_set_state(
+      G_SIMPLE_ACTION(remote_images_action),
+      g_variant_new_boolean(
+          pdfv_settings_get_allow_remote_images(self->settings)));
   GAction *workspace_search_action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
   g_simple_action_set_enabled(G_SIMPLE_ACTION(workspace_search_action), FALSE);
@@ -3043,6 +3242,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   g_menu_append_section(menu, NULL, G_MENU_MODEL(view_section));
 
   GMenu *about_section = g_menu_new();
+  g_menu_append(about_section, "Settings", "win.preferences");
   g_menu_append(about_section, "About Phi Document Viewer", "app.about");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(about_section));
 

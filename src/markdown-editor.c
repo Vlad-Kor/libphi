@@ -25,8 +25,14 @@ typedef struct {
   guint timeout_id;
 } FlushPending;
 
+typedef struct {
+  gchar *text;
+  guint64 editor_revision;
+} SaveSnapshot;
+
 struct _PdfvMarkdownEditor {
   GtkBox parent_instance;
+  GtkStack *content_stack;
   WebKitWebView *web_view;
   WebKitUserContentManager *content_manager;
   PdfvMarkdownVaultAdapter *vault;
@@ -46,11 +52,15 @@ struct _PdfvMarkdownEditor {
   gboolean ready;
   gboolean dirty;
   gboolean saving;
+  gboolean autosave_enqueued;
+  guint autosave_timeout_id;
+  GQueue save_queue; /* serialized GTask saves */
   gboolean theme_dark;
   gboolean theme_set;
   gboolean settings_set;
   gboolean allow_remote_images;
   gdouble font_scale;
+  gchar *snippets;
   guint request_sequence;
   GHashTable *flush_tasks; /* request ID -> FlushPending */
 };
@@ -70,6 +80,16 @@ static guint editor_signals[N_SIGNALS];
 G_DEFINE_FINAL_TYPE(PdfvMarkdownEditor, pdfv_markdown_editor, GTK_TYPE_BOX)
 
 static JsonObject *json_object_new_owned(void) { return json_object_new(); }
+
+static void schedule_autosave(PdfvMarkdownEditor *self);
+static void start_next_save(PdfvMarkdownEditor *self);
+
+static void save_snapshot_free(SaveSnapshot *snapshot) {
+  if (!snapshot)
+    return;
+  g_free(snapshot->text);
+  g_free(snapshot);
+}
 
 static void flush_pending_free(FlushPending *pending) {
   if (pending->timeout_id)
@@ -139,6 +159,8 @@ static void send_settings(PdfvMarkdownEditor *self) {
   JsonObject *payload = json_object_new_owned();
   json_object_set_boolean_member(payload, "allowRemoteImages",
                                  self->allow_remote_images);
+  json_object_set_string_member(payload, "snippets",
+                                self->snippets ? self->snippets : "");
   pdfv_markdown_editor_bridge_send(self->bridge, "settings/update", NULL,
                                    payload);
   json_object_unref(payload);
@@ -486,48 +508,8 @@ static GFile *resolve_vault_attachment(PdfvMarkdownEditor *self,
                                        const gchar *target,
                                        gboolean relative_to_note,
                                        GError **error) {
-  gchar *decoded = g_uri_unescape_string(target ? target : "", NULL);
-  if (!decoded || !*decoded || g_path_is_absolute(decoded) ||
-      strchr(decoded, '\\')) {
-    g_free(decoded);
-    g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
-                "Unsafe attachment path");
-    return NULL;
-  }
-  gchar *suffix = strpbrk(decoded, "?#");
-  if (suffix)
-    *suffix = '\0';
-
-  GFile *file = NULL;
-  if (relative_to_note && self->file) {
-    GFile *parent = g_file_get_parent(self->file);
-    GFile *candidate = parent
-                           ? g_file_resolve_relative_path(parent, decoded)
-                           : NULL;
-    gchar *relative = candidate
-                          ? g_file_get_relative_path(
-                                pdfv_markdown_vault_adapter_get_root(
-                                    self->vault), candidate)
-                          : NULL;
-    if (relative)
-      file = pdfv_markdown_vault_adapter_resolve(self->vault, relative,
-                                                  error);
-    else
-      g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
-                  "Attachment path escapes the vault");
-    g_free(relative);
-    g_clear_object(&candidate);
-    g_clear_object(&parent);
-  } else {
-    file = pdfv_markdown_vault_adapter_resolve(self->vault, decoded, error);
-  }
-  g_free(decoded);
-  if (file && !g_file_query_exists(file, NULL)) {
-    g_clear_object(&file);
-    g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                "Attachment was not found");
-  }
-  return file;
+  return pdfv_markdown_vault_adapter_resolve_attachment(
+      self->vault, self->relative_path, target, relative_to_note, error);
 }
 
 static void handle_attachment_action(PdfvMarkdownEditor *self,
@@ -630,6 +612,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
   } else if (g_str_equal(type, "document/changed")) {
     update_snapshot(self, payload);
     set_dirty(self, TRUE);
+    if (payload && json_object_has_member(payload, "text"))
+      schedule_autosave(self);
   } else if (g_str_equal(type, "document/save")) {
     update_snapshot(self, payload);
     set_dirty(self, TRUE);
@@ -640,6 +624,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     if (payload && json_object_get_boolean_member_with_default(
                        payload, "conflict", FALSE))
       g_signal_emit(self, editor_signals[SIGNAL_CONFLICT], 0);
+    else if (self->content_stack)
+      gtk_stack_set_visible_child_name(self->content_stack, "editor");
   } else if (g_str_has_prefix(type, "completion/")) {
     handle_completion(self, type, id, payload);
   } else if (g_str_has_prefix(type, "link/")) {
@@ -911,27 +897,37 @@ static void save_file_done(GObject *source, GAsyncResult *result,
                            gpointer user_data) {
   GTask *task = G_TASK(user_data);
   PdfvMarkdownEditor *self = g_task_get_source_object(task);
+  SaveSnapshot *snapshot = g_task_get_task_data(task);
   gchar *new_etag = NULL;
   GError *error = NULL;
-  self->saving = FALSE;
   if (!g_file_replace_contents_finish(G_FILE(source), result, &new_etag,
                                       &error)) {
+    g_queue_pop_head(&self->save_queue);
+    self->saving = FALSE;
     g_task_return_error(task, error);
+    start_next_save(self);
     g_object_unref(task);
     return;
   }
   g_free(self->etag);
   self->etag = new_etag;
   g_free(self->persisted_text);
-  self->persisted_text = g_strdup(self->current_text);
+  self->persisted_text = g_strdup(snapshot->text);
   self->revision++;
-  set_dirty(self, FALSE);
+  if (snapshot->editor_revision >= self->editor_revision &&
+      g_strcmp0(snapshot->text, self->current_text) == 0)
+    set_dirty(self, FALSE);
   JsonObject *payload = json_object_new_owned();
   json_object_set_int_member(payload, "revision", (gint64)self->revision);
+  json_object_set_int_member(payload, "editorRevision",
+                             (gint64)snapshot->editor_revision);
   pdfv_markdown_editor_bridge_send(self->bridge, "document/saved", NULL,
                                    payload);
   json_object_unref(payload);
+  g_queue_pop_head(&self->save_queue);
+  self->saving = FALSE;
   g_task_return_boolean(task, TRUE);
+  start_next_save(self);
   g_object_unref(task);
 }
 
@@ -941,16 +937,30 @@ static void save_after_flush(GObject *source, GAsyncResult *result,
   GTask *task = G_TASK(user_data);
   GError *error = NULL;
   if (!pdfv_markdown_editor_flush_finish(self, result, &error)) {
+    g_queue_pop_head(&self->save_queue);
+    self->saving = FALSE;
     g_task_return_error(task, error);
+    start_next_save(self);
     g_object_unref(task);
     return;
   }
-  self->saving = TRUE;
+  SaveSnapshot *snapshot = g_new0(SaveSnapshot, 1);
+  snapshot->text = g_strdup(self->current_text ? self->current_text : "");
+  snapshot->editor_revision = self->editor_revision;
+  g_task_set_task_data(task, snapshot, (GDestroyNotify)save_snapshot_free);
   g_file_replace_contents_async(
-      self->file, self->current_text ? self->current_text : "",
-      self->current_text ? strlen(self->current_text) : 0, self->etag, FALSE,
+      self->file, snapshot->text, strlen(snapshot->text), self->etag, FALSE,
       G_FILE_CREATE_REPLACE_DESTINATION, g_task_get_cancellable(task),
       save_file_done, task);
+}
+
+static void start_next_save(PdfvMarkdownEditor *self) {
+  if (self->saving || g_queue_is_empty(&self->save_queue))
+    return;
+  GTask *task = g_queue_peek_head(&self->save_queue);
+  self->saving = TRUE;
+  pdfv_markdown_editor_flush_async(
+      self, g_task_get_cancellable(task), save_after_flush, task);
 }
 
 void pdfv_markdown_editor_save_async(
@@ -965,13 +975,47 @@ void pdfv_markdown_editor_save_async(
     g_object_unref(task);
     return;
   }
-  pdfv_markdown_editor_flush_async(self, cancellable, save_after_flush, task);
+  g_queue_push_tail(&self->save_queue, task);
+  start_next_save(self);
 }
 
 gboolean pdfv_markdown_editor_save_finish(
     PdfvMarkdownEditor *self, GAsyncResult *result, GError **error) {
   g_return_val_if_fail(g_task_is_valid(result, self), FALSE);
   return g_task_propagate_boolean(G_TASK(result), error);
+}
+
+static void autosave_done(GObject *source, GAsyncResult *result,
+                          gpointer user_data) {
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(source);
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_save_finish(self, result, &error) &&
+      !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+    emit_error(self, error->message);
+  g_clear_error(&error);
+  self->autosave_enqueued = FALSE;
+  if (self->dirty)
+    schedule_autosave(self);
+  g_object_unref(user_data);
+}
+
+static gboolean autosave_timeout(gpointer user_data) {
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  self->autosave_timeout_id = 0;
+  if (!self->file || !self->dirty || self->autosave_enqueued)
+    return G_SOURCE_REMOVE;
+  self->autosave_enqueued = TRUE;
+  pdfv_markdown_editor_save_async(self, NULL, autosave_done,
+                                  g_object_ref(self));
+  return G_SOURCE_REMOVE;
+}
+
+static void schedule_autosave(PdfvMarkdownEditor *self) {
+  if (self->autosave_timeout_id)
+    g_source_remove(self->autosave_timeout_id);
+  self->autosave_timeout_id = g_timeout_add_full(
+      G_PRIORITY_DEFAULT, 80, autosave_timeout,
+      g_object_ref(self), g_object_unref);
 }
 
 void pdfv_markdown_editor_run_command(PdfvMarkdownEditor *self,
@@ -1000,6 +1044,12 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
   self->theme_dark = dark;
   self->font_scale = font_scale;
   self->theme_set = TRUE;
+  if (self->web_view) {
+    GdkRGBA background = dark
+        ? (GdkRGBA){.red = 0.141, .green = 0.141, .blue = 0.141, .alpha = 1.0}
+        : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980, .alpha = 1.0};
+    webkit_web_view_set_background_color(self->web_view, &background);
+  }
   send_theme(self);
 }
 
@@ -1007,6 +1057,15 @@ void pdfv_markdown_editor_set_remote_images_allowed(
     PdfvMarkdownEditor *self, gboolean allowed) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
   self->allow_remote_images = allowed;
+  self->settings_set = TRUE;
+  send_settings(self);
+}
+
+void pdfv_markdown_editor_set_snippets(PdfvMarkdownEditor *self,
+                                       const gchar *snippets) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  g_free(self->snippets);
+  self->snippets = g_strdup(snippets ? snippets : "");
   self->settings_set = TRUE;
   send_settings(self);
 }
@@ -1042,6 +1101,10 @@ GFile *pdfv_markdown_editor_resolve_new_note(PdfvMarkdownEditor *self,
 
 static void pdfv_markdown_editor_dispose(GObject *object) {
   PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(object);
+  if (self->autosave_timeout_id) {
+    g_source_remove(self->autosave_timeout_id);
+    self->autosave_timeout_id = 0;
+  }
   if (self->monitor)
     g_file_monitor_cancel(self->monitor);
   if (self->preamble_monitor)
@@ -1065,6 +1128,7 @@ static void pdfv_markdown_editor_finalize(GObject *object) {
   g_free(self->current_text);
   g_free(self->persisted_text);
   g_free(self->etag);
+  g_free(self->snippets);
   G_OBJECT_CLASS(pdfv_markdown_editor_parent_class)->finalize(object);
 }
 
@@ -1096,6 +1160,9 @@ static void pdfv_markdown_editor_init(PdfvMarkdownEditor *self) {
   gtk_orientable_set_orientation(GTK_ORIENTABLE(self),
                                  GTK_ORIENTATION_VERTICAL);
   self->revision = 0;
+  g_queue_init(&self->save_queue);
+  self->font_scale = 1.0;
+  self->snippets = g_strdup("");
   self->flush_tasks = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                             (GDestroyNotify)flush_pending_free);
 }
@@ -1107,13 +1174,30 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
   self->vault = pdfv_markdown_vault_adapter_new(vault_root);
   self->resources = pdfv_markdown_resource_scheme_new(self->vault);
   self->content_manager = webkit_user_content_manager_new();
+  self->content_stack = GTK_STACK(gtk_stack_new());
+  gtk_widget_set_hexpand(GTK_WIDGET(self->content_stack), TRUE);
+  gtk_widget_set_vexpand(GTK_WIDGET(self->content_stack), TRUE);
+
+  AdwStatusPage *loading = ADW_STATUS_PAGE(adw_status_page_new());
+  adw_status_page_set_title(loading, "Opening Markdown…");
+  adw_status_page_set_description(
+      loading, "Preparing Live Preview and offline renderers");
+  GtkWidget *spinner = gtk_spinner_new();
+  gtk_widget_set_size_request(spinner, 32, 32);
+  gtk_spinner_start(GTK_SPINNER(spinner));
+  adw_status_page_set_child(loading, spinner);
+  gtk_stack_add_named(self->content_stack, GTK_WIDGET(loading), "loading");
+
   self->web_view = WEBKIT_WEB_VIEW(g_object_new(
       WEBKIT_TYPE_WEB_VIEW, "web-context",
       pdfv_markdown_resource_scheme_get_context(self->resources),
       "user-content-manager", self->content_manager, NULL));
   gtk_widget_set_hexpand(GTK_WIDGET(self->web_view), TRUE);
   gtk_widget_set_vexpand(GTK_WIDGET(self->web_view), TRUE);
-  gtk_box_append(GTK_BOX(self), GTK_WIDGET(self->web_view));
+  gtk_stack_add_named(self->content_stack, GTK_WIDGET(self->web_view),
+                      "editor");
+  gtk_stack_set_visible_child_name(self->content_stack, "loading");
+  gtk_box_append(GTK_BOX(self), GTK_WIDGET(self->content_stack));
 
   WebKitSettings *settings = webkit_web_view_get_settings(self->web_view);
   g_object_set(settings, "enable-developer-extras", FALSE,

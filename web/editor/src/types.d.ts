@@ -24,7 +24,6 @@ export interface OpenDocument {
   revision: number;
   lineEnding: "LF" | "CRLF";
   preamble?: string;
-  snippets?: string;
 }
 
 export interface EditorTheme {
@@ -38,6 +37,7 @@ export interface EditorSettings {
   latexConceal?: boolean;
   allowRemoteImages?: boolean;
   executableSnippets?: boolean;
+  snippets?: string;
 }
 
 export interface DocumentSnapshot {

@@ -13,6 +13,7 @@ afterEach(() => {
   for (const view of views.splice(0)) view.destroy();
   document.body.replaceChildren();
   document.body.className = "";
+  delete (window as unknown as { MathJax?: unknown }).MathJax;
 });
 
 function viewFor(text: string, anchor = text.length, head = anchor, extensions: unknown[] = []): EditorView {
@@ -93,6 +94,27 @@ describe("CodeMirror document transactions", () => {
     });
     editor.view.dispatch({ changes: { from: text.length, insert: "tail" }, userEvent: "input.type" });
     expect(editor.getDocument().endsWith("tail")).toBe(true);
+  });
+
+  it("creates Live Preview widgets for bullets and both math modes", () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      typesetPromise: () => Promise.resolve(),
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "preview",
+      path: "preview.md",
+      text: "# Preview\n\n- bullet\n\nInline $x^2$\n\n$$\n\\boxed{y}\n$$\n",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    expect(parent.querySelectorAll(".list-bullet")).toHaveLength(1);
+    expect(parent.querySelectorAll(".math-inline")).toHaveLength(1);
+    expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 });
 

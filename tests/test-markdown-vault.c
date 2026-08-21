@@ -15,6 +15,7 @@ typedef struct {
   GFile *root;
   GFile *overview;
   GFile *nested;
+  GFile *assets;
   PdfvMarkdownVaultAdapter *vault;
 } VaultFixture;
 
@@ -51,6 +52,17 @@ static void vault_fixture_setup(VaultFixture *fixture, gconstpointer data) {
   g_free(other_path);
   g_object_unref(other);
 
+  fixture->assets = g_file_get_child(fixture->root, "~Images");
+  g_assert_true(g_file_make_directory(fixture->assets, NULL, &error));
+  g_assert_no_error(error);
+  GFile *image = g_file_get_child(fixture->assets, "Diagram.png");
+  gchar *image_path = g_file_get_path(image);
+  g_assert_true(g_file_set_contents(image_path, "not-a-real-png", -1,
+                                    &error));
+  g_assert_no_error(error);
+  g_free(image_path);
+  g_object_unref(image);
+
   fixture->vault = pdfv_markdown_vault_adapter_new(fixture->root);
 }
 
@@ -59,6 +71,11 @@ static void vault_fixture_teardown(VaultFixture *fixture,
   (void)data;
   GError *error = NULL;
   GFile *other = g_file_get_child(fixture->nested, "Other.md");
+  GFile *image = g_file_get_child(fixture->assets, "Diagram.png");
+  g_assert_true(g_file_delete(image, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(fixture->assets, NULL, &error));
+  g_assert_no_error(error);
   g_assert_true(g_file_delete(other, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(fixture->overview, NULL, &error));
@@ -68,8 +85,10 @@ static void vault_fixture_teardown(VaultFixture *fixture,
   g_assert_true(g_file_delete(fixture->root, NULL, &error));
   g_assert_no_error(error);
   g_object_unref(other);
+  g_object_unref(image);
   g_object_unref(fixture->vault);
   g_object_unref(fixture->nested);
+  g_object_unref(fixture->assets);
   g_object_unref(fixture->overview);
   g_object_unref(fixture->root);
   g_free(fixture->path);
@@ -167,6 +186,22 @@ static void test_note_metadata(VaultFixture *fixture, gconstpointer data) {
   g_assert_cmpstr(relative, ==, "Nested/New lecture.md");
   g_free(relative);
   g_object_unref(new_note);
+
+  GFile *image = pdfv_markdown_vault_adapter_resolve_attachment(
+      fixture->vault, "Nested/Other.md", "Diagram.png", FALSE, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(image);
+  relative = pdfv_markdown_vault_adapter_relative_path(fixture->vault, image);
+  g_assert_cmpstr(relative, ==, "~Images/Diagram.png");
+  g_free(relative);
+  g_object_unref(image);
+
+  image = pdfv_markdown_vault_adapter_resolve_attachment(
+      fixture->vault, "Nested/Other.md", "../~Images/Diagram.png", TRUE,
+      &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(image);
+  g_object_unref(image);
 }
 
 static void test_byte_preserving_read(VaultFixture *fixture,

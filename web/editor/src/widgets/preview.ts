@@ -31,6 +31,16 @@ export class HiddenWidget extends WidgetType {
   }
 }
 
+export class BulletWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const bullet = document.createElement("span");
+    bullet.className = "list-bullet";
+    bullet.textContent = "•";
+    bullet.setAttribute("aria-hidden", "true");
+    return bullet;
+  }
+}
+
 export class MathWidget extends WidgetType {
   constructor(
     readonly latex: string,
@@ -95,12 +105,27 @@ export class LinkWidget extends WidgetType {
       const image = document.createElement("img");
       image.className = "image-embed";
       image.alt = this.label;
-      image.src = vaultUri(path);
+      image.addEventListener("error", () => {
+        const error = new Error(`Could not load image: ${path}`);
+        reportError(error, "image");
+        image.replaceWith(imageError(error));
+      }, { once: true });
       const size = this.label.match(/^(\d+)(?:x(\d+))?$/);
       if (size) {
         image.width = Number(size[1]);
         if (size[2]) image.height = Number(size[2]);
       }
+      image.classList.add("dimmed");
+      requestNative<{ path?: string }>("attachment/resolve", { target: path })
+        .then((result) => {
+          if (!result.path) throw new Error("Image was not found in the vault");
+          image.src = vaultUri(result.path);
+          image.classList.remove("dimmed");
+        })
+        .catch((error) => {
+          reportError(error, "image");
+          image.replaceWith(imageError(error));
+        });
       image.addEventListener("dblclick", () => reveal(view, this.from));
       return image;
     }
@@ -173,6 +198,11 @@ export class MarkdownLinkWidget extends WidgetType {
       const image = document.createElement("img");
       image.className = "image-embed";
       image.alt = this.label.split("|")[0];
+      image.addEventListener("error", () => {
+        const error = new Error(`Could not load image: ${this.target}`);
+        reportError(error, "image");
+        image.replaceWith(imageError(error));
+      }, { once: true });
       const size = this.label.match(/\|(\d+)(?:x(\d+))?$/);
       if (size) {
         image.width = Number(size[1]);
@@ -199,9 +229,8 @@ export class MarkdownLinkWidget extends WidgetType {
           image.src = vaultUri(result.path);
           image.classList.remove("dimmed");
         }).catch((error) => {
-          image.replaceWith(document.createTextNode(
-            `[Image unavailable: ${error instanceof Error ? error.message : String(error)}]`,
-          ));
+          reportError(error, "image");
+          image.replaceWith(imageError(error));
         });
       }
       image.addEventListener("dblclick", () => reveal(view, this.from));
@@ -223,6 +252,13 @@ export class MarkdownLinkWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean { return false; }
+}
+
+function imageError(error: unknown): HTMLElement {
+  const message = document.createElement("span");
+  message.className = "render-error image-error";
+  message.textContent = `Image unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  return message;
 }
 
 export class TaskWidget extends WidgetType {

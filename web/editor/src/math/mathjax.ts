@@ -11,6 +11,19 @@ const cache = new Map<string, string>();
 let preamble = "";
 let preambleRevision = 0;
 
+async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
+  const started = performance.now();
+  while (performance.now() - started < timeout) {
+    const mathjax = api();
+    if (mathjax?.typesetPromise) {
+      await mathjax.startup?.promise;
+      return mathjax;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+  }
+  throw new Error("MathJax did not initialize");
+}
+
 function api(): MathJaxApi | undefined {
   return (window as unknown as { MathJax?: MathJaxApi }).MathJax;
 }
@@ -35,17 +48,19 @@ export async function renderMath(
     target.innerHTML = cached;
     return;
   }
-  const mathjax = api();
   try {
-    await mathjax?.startup?.promise;
-    if (!mathjax?.typesetPromise) throw new Error("MathJax did not initialize");
+    target.classList.add("math-loading");
+    target.textContent = latex;
+    const mathjax = await waitForMathJax();
     target.replaceChildren();
     const source = `${preamble ? `${preamble}\n` : ""}${latex}`;
     target.textContent = display ? `$$${source}$$` : `$${source}$`;
-    await mathjax.typesetPromise([target]);
+    await mathjax.typesetPromise!([target]);
+    target.classList.remove("math-loading");
     cache.set(key, target.innerHTML);
     if (cache.size > 256) cache.delete(cache.keys().next().value as string);
   } catch (error) {
+    target.classList.remove("math-loading");
     target.replaceChildren();
     const message = document.createElement("span");
     message.className = "render-error";

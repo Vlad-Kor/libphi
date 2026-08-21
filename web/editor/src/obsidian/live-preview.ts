@@ -3,6 +3,7 @@ import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { parseObsidian, selectionTouches, type ObsidianNode } from "./parser";
 import {
   CalloutWidget,
+  BulletWidget,
   FootnoteWidget,
   HiddenWidget,
   HtmlPreviewWidget,
@@ -85,6 +86,16 @@ function buildDecorations(state: EditorState): DecorationSet {
         const level = Number(node.meta?.level ?? 1);
         builder.add(node.from, node.from, Decoration.line({ class: `cm-live-heading cm-live-heading-${level}` }));
         if (!isActive && node.contentFrom != null) builder.add(node.from, node.contentFrom, hidden);
+        break;
+      }
+      case "list-item": {
+        if (!isActive) {
+          const markerFrom = Number(node.meta?.markerFrom ?? node.from);
+          const marker = node.meta?.task
+            ? hidden
+            : Decoration.replace({ widget: new BulletWidget() });
+          builder.add(markerFrom, markerFrom + 1, marker);
+        }
         break;
       }
       case "emphasis": if (!isActive) addDelimited(builder, node, emphasis); break;

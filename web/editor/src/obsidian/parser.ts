@@ -20,6 +20,7 @@ export type ObsidianNodeKind =
   | "table"
   | "mermaid"
   | "html"
+  | "list-item"
   | "tag"
   | "block-id";
 
@@ -158,9 +159,9 @@ export function parseObsidian(text: string): ObsidianNode[] {
     if (inside(match.index, protectedRanges)) continue;
     const raw = match[2];
     const separator = raw.lastIndexOf("|");
-    let target = separator >= 0 ? raw.slice(0, separator) : raw;
+    let target = (separator >= 0 ? raw.slice(0, separator) : raw).trim();
     if (separator >= 0 && target.endsWith("\\")) target = target.slice(0, -1);
-    const alias = separator >= 0 ? raw.slice(separator + 1) : target.split(/[#^]/)[0];
+    const alias = separator >= 0 ? raw.slice(separator + 1).trim() : target.split(/[#^]/)[0];
     nodes.push({
       kind: match[1] ? "embed" : "wikilink",
       from: match.index,
@@ -251,6 +252,22 @@ export function parseObsidian(text: string): ObsidianNode[] {
         meta: { level: match[1].length },
       });
     }
+  }
+
+  for (const match of text.matchAll(/^(\s*)([-+*])(?=[ \t]+)/gm)) {
+    if (inside(match.index, protectedRanges)) continue;
+    const markerFrom = match.index + match[1].length;
+    const to = lineEnd(text, markerFrom);
+    nodes.push({
+      kind: "list-item",
+      from: match.index,
+      to,
+      text: match[2],
+      meta: {
+        markerFrom,
+        task: /^\s*\[[^\]]\]/.test(text.slice(markerFrom + 1, to)),
+      },
+    });
   }
 
   for (const match of text.matchAll(/^\s*[-*+]\s+\[([^\]])\]/gm)) {

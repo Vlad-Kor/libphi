@@ -46,4 +46,29 @@ describe("Obsidian parser precedence", () => {
     expect(mathModeAt("$x + y$", 4)).toBe("inline");
     expect(mathModeAt("$$\nx + y\n$$", 6)).toBe("display");
   });
+
+  it("parses spaced image sizes, list items, and multiline boxed math", () => {
+    const source = `# Metrics
+- first item
+
+![[Pasted image.png | 400]]
+
+$$
+\\boxed{
+mAP
+=
+\\frac{1}{C}
+\\sum_{c=1}^{C}AP_c
+}
+$$`;
+    const nodes = parseObsidian(source);
+    const image = nodes.find((node) => node.kind === "embed");
+    expect(image?.meta).toMatchObject({
+      target: "Pasted image.png",
+      alias: "400",
+    });
+    expect(nodes.some((node) => node.kind === "list-item")).toBe(true);
+    expect(nodes.find((node) => node.kind === "display-math")?.text)
+      .toContain("\\boxed{");
+  });
 });

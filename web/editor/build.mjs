@@ -1,14 +1,8 @@
 import { build } from "esbuild";
-import { copyFile, cp, mkdir, readFile } from "node:fs/promises";
+import { copyFile, cp, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const outdir = resolve(process.argv[2] ?? "dist");
-let userSnippets;
-try {
-  userSnippets = await readFile(resolve("../../doc/my_snippets.txt"), "utf8");
-} catch {
-  userSnippets = undefined;
-}
 await mkdir(outdir, { recursive: true });
 await mkdir(resolve(outdir, "mathjax"), { recursive: true });
 
@@ -22,7 +16,6 @@ await build({
   sourcemap: false,
   legalComments: "none",
   loader: { ".txt": "text" },
-  define: { PHI_USER_SNIPPETS: userSnippets == null ? "undefined" : JSON.stringify(userSnippets) },
 });
 
 await copyFile("src/index.html", resolve(outdir, "index.html"));

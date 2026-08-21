@@ -5,5 +5,7 @@ subprojects/mupdf
 subprojects/sassc
 subprojects/wayland-protocols
 *.patch
-doc/
+doc/AGENTS.md
+doc/Spec sheet.txt
+doc/my_snippets.txt
 web/editor/node_modules/

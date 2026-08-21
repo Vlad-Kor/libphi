@@ -55,9 +55,9 @@ function prepare(source: string): { source: string; html: string[] } {
     .replace(/==([^\n=]+)==/g, "<mark>$1</mark>")
     .replace(/(!)?\[\[([^\]\n]+)\]\]/g, (_match, embed: string, raw: string) => {
       const split = raw.lastIndexOf("|");
-      let target = split >= 0 ? raw.slice(0, split) : raw;
+      let target = (split >= 0 ? raw.slice(0, split) : raw).trim();
       if (split >= 0 && target.endsWith("\\")) target = target.slice(0, -1);
-      const label = split >= 0 ? raw.slice(split + 1) : target;
+      const label = split >= 0 ? raw.slice(split + 1).trim() : target;
       const attributes = `data-wikilink="${escapeAttribute(target)}"`;
       if (embed)
         return `<button type="button" class="internal-embed" ${attributes}>${escapeAttribute(label)}</button>`;

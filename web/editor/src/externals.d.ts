@@ -3,8 +3,6 @@ declare module "*.txt" {
   export default value;
 }
 
-declare const PHI_USER_SNIPPETS: string | undefined;
-
 declare module "markdown-it-footnote" {
   const plugin: (markdown: unknown) => void;
   export default plugin;

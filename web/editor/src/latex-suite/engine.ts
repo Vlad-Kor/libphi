@@ -27,17 +27,13 @@ const tabstopState = StateField.define<TabstopState | null>({
 
 let snippets: LatexSnippet[] = [];
 try {
-  const bundledSnippets = typeof PHI_USER_SNIPPETS === "string"
-    ? PHI_USER_SNIPPETS
-    : defaultSnippets;
-  snippets = parseSnippetFile(bundledSnippets);
+  snippets = parseSnippetFile(defaultSnippets);
 } catch (error) {
   reportError(error, "latex-suite/snippets");
 }
 
 export function setCustomSnippets(source?: string): void {
-  if (!source) return;
-  try { snippets = parseSnippetFile(source); }
+  try { snippets = parseSnippetFile(source?.trim() ? source : defaultSnippets); }
   catch (error) { reportError(error, "latex-suite/snippets"); }
 }
 

@@ -6,19 +6,24 @@
 
 #include "markdown-vault-adapter.h"
 
+#include <json-glib/json-glib.h>
 #include <string.h>
 
 struct _PdfvMarkdownVaultAdapter {
   GObject parent_instance;
   GFile *root;
+  gchar *attachment_folder;
 };
 
 G_DEFINE_FINAL_TYPE(PdfvMarkdownVaultAdapter, pdfv_markdown_vault_adapter,
                     G_TYPE_OBJECT)
 
+static gboolean path_is_safe(const gchar *path);
+
 static void pdfv_markdown_vault_adapter_finalize(GObject *object) {
   PdfvMarkdownVaultAdapter *self = PDFV_MARKDOWN_VAULT_ADAPTER(object);
   g_clear_object(&self->root);
+  g_free(self->attachment_folder);
   G_OBJECT_CLASS(pdfv_markdown_vault_adapter_parent_class)->finalize(object);
 }
 
@@ -37,6 +42,28 @@ PdfvMarkdownVaultAdapter *pdfv_markdown_vault_adapter_new(GFile *root) {
   PdfvMarkdownVaultAdapter *self =
       g_object_new(PDFV_TYPE_MARKDOWN_VAULT_ADAPTER, NULL);
   self->root = g_object_ref(root);
+  self->attachment_folder = g_strdup("");
+  GFile *obsidian = g_file_get_child(root, ".obsidian");
+  GFile *configuration = g_file_get_child(obsidian, "app.json");
+  gchar *contents = NULL;
+  if (g_file_load_contents(configuration, NULL, &contents, NULL, NULL, NULL)) {
+    JsonParser *parser = json_parser_new();
+    if (json_parser_load_from_data(parser, contents, -1, NULL)) {
+      JsonNode *node = json_parser_get_root(parser);
+      if (JSON_NODE_HOLDS_OBJECT(node)) {
+        const gchar *folder = json_object_get_string_member_with_default(
+            json_node_get_object(node), "attachmentFolderPath", "");
+        if (folder && *folder && path_is_safe(folder)) {
+          g_free(self->attachment_folder);
+          self->attachment_folder = g_strdup(folder);
+        }
+      }
+    }
+    g_object_unref(parser);
+  }
+  g_free(contents);
+  g_object_unref(configuration);
+  g_object_unref(obsidian);
   return self;
 }
 
@@ -303,6 +330,101 @@ GFile *pdfv_markdown_vault_adapter_resolve_note(
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                 "Note '%s' was not found", target ? target : "");
   g_free(path);
+  return result;
+}
+
+static GFile *find_attachment_recursive(PdfvMarkdownVaultAdapter *self,
+                                        GFile *folder,
+                                        const gchar *basename) {
+  GFileEnumerator *enumerator = g_file_enumerate_children(
+      folder, G_FILE_ATTRIBUTE_STANDARD_NAME ","
+              G_FILE_ATTRIBUTE_STANDARD_TYPE,
+      G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL, NULL);
+  if (!enumerator)
+    return NULL;
+  GFile *result = NULL;
+  for (;;) {
+    GFileInfo *info = g_file_enumerator_next_file(enumerator, NULL, NULL);
+    if (!info)
+      break;
+    const gchar *name = g_file_info_get_name(info);
+    GFileType type = g_file_info_get_file_type(info);
+    GFile *child = g_file_get_child(folder, name);
+    if (type == G_FILE_TYPE_REGULAR &&
+        g_ascii_strcasecmp(name, basename) == 0) {
+      gchar *relative = g_file_get_relative_path(self->root, child);
+      if (relative && path_is_safe(relative))
+        result = g_object_ref(child);
+      g_free(relative);
+    } else if (type == G_FILE_TYPE_DIRECTORY &&
+               !g_str_equal(name, ".obsidian") &&
+               !g_str_equal(name, ".git") &&
+               !g_str_equal(name, ".trash")) {
+      result = find_attachment_recursive(self, child, basename);
+    }
+    g_object_unref(child);
+    g_object_unref(info);
+    if (result)
+      break;
+  }
+  g_object_unref(enumerator);
+  return result;
+}
+
+GFile *pdfv_markdown_vault_adapter_resolve_attachment(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gboolean relative_to_note, GError **error) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_VAULT_ADAPTER(self), NULL);
+  gchar *decoded = g_uri_unescape_string(target ? target : "", NULL);
+  if (!decoded || !*decoded || g_path_is_absolute(decoded) ||
+      strchr(decoded, '\\')) {
+    g_free(decoded);
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                "Unsafe attachment path");
+    return NULL;
+  }
+  gchar *suffix = strpbrk(decoded, "?#");
+  if (suffix)
+    *suffix = '\0';
+  g_strstrip(decoded);
+
+  GFile *result = NULL;
+  if (relative_to_note && source_path && *source_path) {
+    gchar *directory = g_path_get_dirname(source_path);
+    GFile *parent = g_str_equal(directory, ".")
+                        ? g_object_ref(self->root)
+                        : g_file_resolve_relative_path(self->root, directory);
+    GFile *candidate = g_file_resolve_relative_path(parent, decoded);
+    gchar *relative = g_file_get_relative_path(self->root, candidate);
+    if (relative && path_is_safe(relative) &&
+        g_file_query_exists(candidate, NULL))
+      result = g_object_ref(candidate);
+    g_free(relative);
+    g_object_unref(candidate);
+    g_object_unref(parent);
+    g_free(directory);
+  }
+  if (!result) {
+    GFile *candidate = pdfv_markdown_vault_adapter_resolve(self, decoded,
+                                                           NULL);
+    if (candidate && g_file_query_exists(candidate, NULL))
+      result = g_object_ref(candidate);
+    g_clear_object(&candidate);
+  }
+  if (!result && self->attachment_folder[0] && !strchr(decoded, '/')) {
+    gchar *path = g_build_filename(self->attachment_folder, decoded, NULL);
+    GFile *candidate = pdfv_markdown_vault_adapter_resolve(self, path, NULL);
+    if (candidate && g_file_query_exists(candidate, NULL))
+      result = g_object_ref(candidate);
+    g_clear_object(&candidate);
+    g_free(path);
+  }
+  if (!result && !strchr(decoded, '/'))
+    result = find_attachment_recursive(self, self->root, decoded);
+  if (!result)
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                "Attachment '%s' was not found in the vault", decoded);
+  g_free(decoded);
   return result;
 }
 

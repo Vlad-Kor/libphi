@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-adw_dep = dependency('libadwaita-1', version: '>= 1.4')
+adw_dep = dependency('libadwaita-1', version: '>= 1.6')
 
 pdfv_sources = [
 	'main.c',
@@ -22,6 +22,7 @@ pdfv_sources = [
 	'pdfv-window.c',
 	'pdfv-document-view.c',
 	'pdfv-workspace.c',
+	'pdfv-settings.c',
 	'markdown-editor.c',
 	'markdown-editor-bridge.c',
 	'markdown-resource-scheme.c',

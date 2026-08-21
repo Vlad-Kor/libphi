@@ -6,6 +6,7 @@ export const defaultSettings: Required<EditorSettings> = {
   latexConceal: false,
   allowRemoteImages: false,
   executableSnippets: false,
+  snippets: "",
 };
 
 let runtimeSettings: Required<EditorSettings> = { ...defaultSettings };

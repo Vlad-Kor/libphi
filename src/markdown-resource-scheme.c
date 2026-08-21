@@ -67,11 +67,13 @@ static gchar *mime_for_path(const gchar *path, const gchar *contents,
 }
 
 static gchar *editor_asset_filename(const gchar *relative) {
-  gchar *installed = g_build_filename(PDFV_EDITOR_DIR, relative, NULL);
-  if (g_file_test(installed, G_FILE_TEST_IS_REGULAR))
-    return installed;
-  g_free(installed);
-  return g_build_filename(PDFV_EDITOR_SOURCE_DIR, relative, NULL);
+  /* Prefer the source bundle while running from a checkout. Otherwise an older
+   * system installation can silently shadow the assets that were just built. */
+  gchar *source = g_build_filename(PDFV_EDITOR_SOURCE_DIR, relative, NULL);
+  if (g_file_test(source, G_FILE_TEST_IS_REGULAR))
+    return source;
+  g_free(source);
+  return g_build_filename(PDFV_EDITOR_DIR, relative, NULL);
 }
 
 static void app_scheme_request(WebKitURISchemeRequest *request,
