@@ -550,14 +550,27 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     /* Ensure every visible page is cached. */
     ensure_page_range_cached(self, first_visible, last_visible);
     
-    /* Check if system is in dark mode */
+    /* Match the surrounding window, empty tabs, and Markdown editor instead
+     * of maintaining a separate hard-coded PDF canvas color. */
     AdwStyleManager* style_manager = adw_style_manager_get_default();
     gboolean is_dark = adw_style_manager_get_dark(style_manager);
-    
-    /* Background colors based on system theme */
-    static const GdkRGBA bg_light = {0.878, 0.878, 0.878, 1.0};  /* #e0e0e0 */
-    static const GdkRGBA bg_dark = {0.118, 0.118, 0.118, 1.0};   /* #1e1e1e */
-    gtk_snapshot_append_color(snapshot, is_dark ? &bg_dark : &bg_light, 
+    GdkRGBA background;
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    gboolean found = gtk_style_context_lookup_color(
+        gtk_widget_get_style_context(widget), "window_bg_color", &background);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    gdouble luminance = found
+        ? 0.2126 * background.red + 0.7152 * background.green +
+              0.0722 * background.blue
+        : (is_dark ? 0.0 : 1.0);
+    if (!found || (is_dark && luminance > 0.5) ||
+        (!is_dark && luminance < 0.5))
+        background = is_dark
+            ? (GdkRGBA){.red = 0.141, .green = 0.141, .blue = 0.141,
+                        .alpha = 1.0}
+            : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980,
+                        .alpha = 1.0};
+    gtk_snapshot_append_color(snapshot, &background,
         &GRAPHENE_RECT_INIT(0, 0, width, height));
     
     /* Render visible pages - start from first visible page */
