@@ -12,6 +12,7 @@
 #include "pdfv-document-view.h"
 #include "pdfv-settings.h"
 #include "pdfv-workspace.h"
+#include "workspace-file-ops.h"
 #include "markdown-editor.h"
 #include "markdown-resource-scheme.h"
 #include <phi/phidocument.h>
@@ -59,6 +60,16 @@ struct _PdfvWindow {
   GtkListView *workspace_list;
   GtkSingleSelection *workspace_selection;
   GtkTreeListModel *workspace_tree;
+  GtkWidget *workspace_tools;
+  GFile *workspace_pending_selection;
+  GFile *workspace_context_file;
+  gboolean workspace_context_is_folder;
+
+  /* The tab context menu operates on the clicked page, not necessarily the
+   * currently selected one. */
+  AdwTabPage *tab_context_page;
+  GFile *tab_context_file;
+  gboolean workspace_move_running;
 
   /* Workspace and its in-memory index */
   PdfvWorkspace *workspace;
@@ -148,6 +159,28 @@ static void on_markdown_error(PdfvMarkdownEditor *editor,
                               const gchar *message, PdfvWindow *self);
 static void on_markdown_ready(PdfvMarkdownEditor *editor, PdfvWindow *self);
 static void rebuild_main_menu(PdfvWindow *self);
+static void on_workspace_loaded(GObject *source, GAsyncResult *result,
+                                gpointer user_data);
+static void reload_workspace(PdfvWindow *self, GFile *select_file);
+static void save_workspace_tab_session(PdfvWindow *self);
+static void show_workspace_creation_dialog(PdfvWindow *self,
+                                           gboolean folder,
+                                           gboolean use_context);
+static void begin_workspace_move(PdfvWindow *self, GFile *source,
+                                 GFile *destination_folder);
+static void on_workspace_context_pressed(GtkGestureClick *gesture,
+                                         gint n_press, gdouble x, gdouble y,
+                                         PdfvWindow *self);
+static GdkContentProvider *on_workspace_drag_prepare(
+    GtkDragSource *source, gdouble x, gdouble y, PdfvWindow *self);
+static gboolean on_workspace_row_drop(GtkDropTarget *target,
+                                      const GValue *value,
+                                      gdouble x, gdouble y,
+                                      PdfvWindow *self);
+static gboolean on_workspace_root_drop(GtkDropTarget *target,
+                                       const GValue *value,
+                                       gdouble x, gdouble y,
+                                       PdfvWindow *self);
 
 static void apply_preferences_to_editor(PdfvWindow *self,
                                         PdfvMarkdownEditor *editor) {
@@ -1140,6 +1173,25 @@ static void workspace_factory_setup(GtkSignalListItemFactory *factory,
   gtk_tree_expander_set_child(GTK_TREE_EXPANDER(expander), box);
   g_object_set_data(G_OBJECT(list_item), "workspace-icon", icon);
   g_object_set_data(G_OBJECT(list_item), "workspace-label", label);
+
+  GtkGesture *context_click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(context_click),
+                                GDK_BUTTON_SECONDARY);
+  g_signal_connect(context_click, "pressed",
+                   G_CALLBACK(on_workspace_context_pressed), self);
+  gtk_widget_add_controller(expander, GTK_EVENT_CONTROLLER(context_click));
+
+  GtkDragSource *drag_source = gtk_drag_source_new();
+  gtk_drag_source_set_actions(drag_source, GDK_ACTION_MOVE);
+  g_signal_connect(drag_source, "prepare",
+                   G_CALLBACK(on_workspace_drag_prepare), self);
+  gtk_widget_add_controller(expander, GTK_EVENT_CONTROLLER(drag_source));
+
+  GtkDropTarget *drop_target = gtk_drop_target_new(
+      PDFV_TYPE_WORKSPACE_ITEM, GDK_ACTION_MOVE);
+  g_signal_connect(drop_target, "drop",
+                   G_CALLBACK(on_workspace_row_drop), self);
+  gtk_widget_add_controller(expander, GTK_EVENT_CONTROLLER(drop_target));
   gtk_list_item_set_child(list_item, expander);
 }
 
@@ -1166,10 +1218,16 @@ static void workspace_factory_bind(GtkSignalListItemFactory *factory,
   gtk_widget_set_tooltip_text(GTK_WIDGET(label),
                               pdfv_workspace_item_get_relative_path(item));
   g_object_set_data_full(G_OBJECT(expander), "workspace-file",
-                         pdfv_workspace_item_is_folder(item)
-                             ? NULL
-                             : g_object_ref(pdfv_workspace_item_get_file(item)),
+                         g_object_ref(pdfv_workspace_item_get_file(item)),
                          g_object_unref);
+  g_object_set_data_full(G_OBJECT(expander), "workspace-item",
+                         g_object_ref(item), g_object_unref);
+  g_object_set_data(G_OBJECT(expander), "workspace-is-folder",
+                    GINT_TO_POINTER(pdfv_workspace_item_is_folder(item)));
+  guint position = gtk_list_item_get_position(list_item);
+  g_object_set_data(G_OBJECT(expander), "workspace-position",
+                    position == GTK_INVALID_LIST_POSITION
+                        ? NULL : GUINT_TO_POINTER(position + 1));
   if (pdfv_workspace_item_is_folder(item)) {
     gulong handler = g_signal_connect(
         row, "notify::expanded",
@@ -1194,6 +1252,9 @@ static void workspace_factory_unbind(GtkSignalListItemFactory *factory,
     g_signal_handler_disconnect(row, handler);
   g_object_set_data(G_OBJECT(list_item), "workspace-expanded-handler", NULL);
   g_object_set_data(G_OBJECT(expander), "workspace-file", NULL);
+  g_object_set_data(G_OBJECT(expander), "workspace-item", NULL);
+  g_object_set_data(G_OBJECT(expander), "workspace-is-folder", NULL);
+  g_object_set_data(G_OBJECT(expander), "workspace-position", NULL);
   gtk_tree_expander_set_list_row(expander, NULL);
 }
 
@@ -1228,12 +1289,142 @@ static void on_workspace_middle_click(GtkGestureClick *gesture,
   for (GtkWidget *at = picked; at && at != GTK_WIDGET(self->workspace_list);
        at = gtk_widget_get_parent(at)) {
     GFile *file = g_object_get_data(G_OBJECT(at), "workspace-file");
-    if (!file)
+    gboolean folder = GPOINTER_TO_INT(
+        g_object_get_data(G_OBJECT(at), "workspace-is-folder"));
+    if (!file || folder)
       continue;
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
     workspace_open_file(self, file, TRUE);
     return;
   }
+}
+
+static GMenu *workspace_context_menu(gboolean folder) {
+  GMenu *menu = g_menu_new();
+  if (folder) {
+    GMenu *create = g_menu_new();
+    g_menu_append(create, "New Note Here…",
+                  "win.workspace-context-new-note");
+    g_menu_append(create, "New Folder Here…",
+                  "win.workspace-context-new-folder");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(create));
+    g_object_unref(create);
+  } else {
+    GMenu *open = g_menu_new();
+    g_menu_append(open, "Open", "win.workspace-context-open");
+    g_menu_append(open, "Open in New Tab",
+                  "win.workspace-context-open-new-tab");
+    g_menu_append(open, "Open in New Window",
+                  "win.workspace-context-open-new-window");
+    g_menu_append(open, "Open in Default App",
+                  "win.workspace-context-open-default");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(open));
+    g_object_unref(open);
+  }
+  GMenu *files = g_menu_new();
+  g_menu_append(files, "Open Folder in System Files",
+                "win.workspace-context-open-folder");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(files));
+  g_object_unref(files);
+  return menu;
+}
+
+static void on_workspace_context_pressed(GtkGestureClick *gesture,
+                                         gint n_press, gdouble x, gdouble y,
+                                         PdfvWindow *self) {
+  (void)n_press;
+  GtkWidget *row_widget = gtk_event_controller_get_widget(
+      GTK_EVENT_CONTROLLER(gesture));
+  GFile *file = g_object_get_data(G_OBJECT(row_widget), "workspace-file");
+  if (!file)
+    return;
+  gboolean folder = GPOINTER_TO_INT(
+      g_object_get_data(G_OBJECT(row_widget), "workspace-is-folder"));
+  guint encoded_position = GPOINTER_TO_UINT(
+      g_object_get_data(G_OBJECT(row_widget), "workspace-position"));
+  if (encoded_position)
+    gtk_single_selection_set_selected(self->workspace_selection,
+                                      encoded_position - 1);
+  g_set_object(&self->workspace_context_file, file);
+  self->workspace_context_is_folder = folder;
+
+  GMenu *menu = workspace_context_menu(folder);
+  GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+  g_object_unref(menu);
+  gtk_widget_set_parent(popover, row_widget);
+  gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+  GdkRectangle rectangle = {(gint)x, (gint)y, 1, 1};
+  gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rectangle);
+  g_signal_connect_swapped(popover, "closed",
+                           G_CALLBACK(gtk_widget_unparent), popover);
+  gtk_popover_popup(GTK_POPOVER(popover));
+  gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static GdkContentProvider *on_workspace_drag_prepare(
+    GtkDragSource *source, gdouble x, gdouble y, PdfvWindow *self) {
+  (void)x;
+  (void)y;
+  GtkWidget *row_widget = gtk_event_controller_get_widget(
+      GTK_EVENT_CONTROLLER(source));
+  GFile *file = g_object_get_data(G_OBJECT(row_widget), "workspace-file");
+  PdfvWorkspaceItem *item = g_object_get_data(
+      G_OBJECT(row_widget), "workspace-item");
+  if (!file || !item || !self->workspace)
+    return NULL;
+  guint encoded_position = GPOINTER_TO_UINT(
+      g_object_get_data(G_OBJECT(row_widget), "workspace-position"));
+  if (encoded_position)
+    gtk_single_selection_set_selected(self->workspace_selection,
+                                      encoded_position - 1);
+  return gdk_content_provider_new_typed(PDFV_TYPE_WORKSPACE_ITEM, item);
+}
+
+static gboolean on_workspace_row_drop(GtkDropTarget *target,
+                                      const GValue *value,
+                                      gdouble x, gdouble y,
+                                      PdfvWindow *self) {
+  (void)x;
+  (void)y;
+  if (!G_VALUE_HOLDS(value, PDFV_TYPE_WORKSPACE_ITEM) || !self->workspace)
+    return FALSE;
+  PdfvWorkspaceItem *source_item = g_value_get_object(value);
+  GFile *source = source_item
+      ? pdfv_workspace_item_get_file(source_item) : NULL;
+  GtkWidget *row_widget = gtk_event_controller_get_widget(
+      GTK_EVENT_CONTROLLER(target));
+  GFile *target_file = g_object_get_data(
+      G_OBJECT(row_widget), "workspace-file");
+  gboolean target_is_folder = GPOINTER_TO_INT(
+      g_object_get_data(G_OBJECT(row_widget), "workspace-is-folder"));
+  if (!source || !target_file)
+    return FALSE;
+  GFile *folder = target_is_folder
+      ? g_object_ref(target_file) : g_file_get_parent(target_file);
+  if (!folder)
+    return FALSE;
+  begin_workspace_move(self, source, folder);
+  g_object_unref(folder);
+  return TRUE;
+}
+
+static gboolean on_workspace_root_drop(GtkDropTarget *target,
+                                       const GValue *value,
+                                       gdouble x, gdouble y,
+                                       PdfvWindow *self) {
+  (void)target;
+  (void)x;
+  (void)y;
+  if (!G_VALUE_HOLDS(value, PDFV_TYPE_WORKSPACE_ITEM) || !self->workspace)
+    return FALSE;
+  PdfvWorkspaceItem *source_item = g_value_get_object(value);
+  GFile *source = source_item
+      ? pdfv_workspace_item_get_file(source_item) : NULL;
+  if (!source)
+    return FALSE;
+  begin_workspace_move(self, source,
+                       pdfv_workspace_get_folder(self->workspace));
+  return TRUE;
 }
 
 static PdfvWorkspaceResultGroup *workspace_selected_group(PdfvWindow *self) {
@@ -2904,12 +3095,16 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   g_clear_object(&self->workspace_search_cancellable);
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
+  g_clear_object(&self->workspace_pending_selection);
+  g_clear_object(&self->workspace_context_file);
   self->workspace_browse_tab = NULL;
   workspace_document_cache_clear(self);
   self->workspace_search_running = FALSE;
   self->workspace_index_dirty = FALSE;
   self->workspace_suppress_preview = FALSE;
   gtk_widget_set_visible(self->workspace_loading_spinner, FALSE);
+  if (self->workspace_tools)
+    gtk_widget_set_sensitive(self->workspace_tools, FALSE);
 
   adw_view_stack_page_set_visible(self->workspace_sidebar_page, FALSE);
   adw_view_stack_set_visible_child_name(self->sidebar_stack, "pages");
@@ -2932,17 +3127,68 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   update_sidebar_button(self);
 }
 
+static void workspace_expand_parents_for(PdfvWindow *self, GFile *file) {
+  if (!self->workspace || !file)
+    return;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  GFile *cursor = g_file_get_parent(file);
+  while (cursor && !g_file_equal(cursor, root)) {
+    gchar *relative = g_file_get_relative_path(root, cursor);
+    if (!relative)
+      break;
+    g_hash_table_add(self->workspace_expanded_paths, relative);
+    GFile *parent = g_file_get_parent(cursor);
+    g_object_unref(cursor);
+    cursor = parent;
+  }
+  g_clear_object(&cursor);
+}
+
+static void workspace_select_pending_file(PdfvWindow *self) {
+  if (!self->workspace_tree || !self->workspace_pending_selection)
+    return;
+  guint count = g_list_model_get_n_items(G_LIST_MODEL(self->workspace_tree));
+  for (guint position = 0; position < count; position++) {
+    GtkTreeListRow *row = gtk_tree_list_model_get_row(
+        self->workspace_tree, position);
+    if (!row)
+      continue;
+    PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+    gboolean match = g_file_equal(pdfv_workspace_item_get_file(item),
+                                  self->workspace_pending_selection);
+    g_object_unref(item);
+    g_object_unref(row);
+    if (!match)
+      continue;
+    gtk_single_selection_set_selected(self->workspace_selection, position);
+    gtk_list_view_scroll_to(self->workspace_list, position,
+                            GTK_LIST_SCROLL_FOCUS, NULL);
+    break;
+  }
+  g_clear_object(&self->workspace_pending_selection);
+}
+
 static void on_workspace_loaded(GObject *source, GAsyncResult *result,
                                 gpointer user_data) {
   PdfvWindow *self = PDFV_WINDOW(user_data);
   PdfvWorkspace *workspace = PDFV_WORKSPACE(source);
+  gboolean current_request = G_IS_TASK(result) &&
+      g_task_get_cancellable(G_TASK(result)) ==
+          self->workspace_scan_cancellable;
+  if (workspace != self->workspace || !current_request) {
+    g_object_unref(self);
+    return;
+  }
   GError *error = NULL;
   gboolean loaded = pdfv_workspace_load_finish(workspace, result, &error);
-  if (workspace == self->workspace && loaded) {
+  if (loaded) {
     gtk_widget_set_visible(self->workspace_loading_spinner, FALSE);
     gtk_stack_set_visible_child_name(self->workspace_content_stack, "files");
     load_workspace_tree_session(self,
                                 pdfv_workspace_get_folder(workspace));
+    if (self->workspace_pending_selection)
+      workspace_expand_parents_for(self,
+                                   self->workspace_pending_selection);
     g_clear_object(&self->workspace_tree);
     self->workspace_tree = gtk_tree_list_model_new(
         g_object_ref(pdfv_workspace_get_items(workspace)), FALSE, FALSE,
@@ -2950,13 +3196,16 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     restore_workspace_tree_session(self);
     gtk_single_selection_set_model(
         self->workspace_selection, G_LIST_MODEL(self->workspace_tree));
+    workspace_select_pending_file(self);
+    if (self->workspace_tools)
+      gtk_widget_set_sensitive(self->workspace_tools, TRUE);
     adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
     adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
     adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
     remember_workspace(pdfv_workspace_get_folder(workspace));
     apply_markdown_preferences(self);
     update_sidebar_button(self);
-  } else if (workspace == self->workspace && error &&
+  } else if (error &&
              !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
     gtk_widget_set_visible(self->workspace_loading_spinner, FALSE);
     adw_status_page_set_title(self->workspace_loading_page,
@@ -2967,15 +3216,563 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
                                              error->message);
     adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
     adw_dialog_present(dialog, GTK_WIDGET(self));
+    if (self->workspace_tools)
+      gtk_widget_set_sensitive(self->workspace_tools, FALSE);
   }
   g_clear_error(&error);
   g_object_unref(self);
 }
 
-static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
+static void reload_workspace(PdfvWindow *self, GFile *select_file) {
+  if (!self->workspace)
+    return;
+  if (select_file) {
+    g_set_object(&self->workspace_pending_selection, select_file);
+    workspace_expand_parents_for(self, select_file);
+  }
+  if (self->workspace_scan_cancellable)
+    g_cancellable_cancel(self->workspace_scan_cancellable);
+  pdfv_workspace_cancel(self->workspace);
+  g_clear_object(&self->workspace_scan_cancellable);
+  self->workspace_scan_cancellable = g_cancellable_new();
+  pdfv_workspace_load_async(self->workspace,
+                            self->workspace_scan_cancellable,
+                            on_workspace_loaded, g_object_ref(self));
+}
+
+static void reload_matching_workspaces(PdfvWindow *source,
+                                       GFile *select_file) {
+  if (!source->workspace)
+    return;
+  GFile *root = pdfv_workspace_get_folder(source->workspace);
+  GtkApplication *application = gtk_window_get_application(GTK_WINDOW(source));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    if (!window->workspace ||
+        !g_file_equal(pdfv_workspace_get_folder(window->workspace), root))
+      continue;
+    reload_workspace(window, window == source ? select_file : NULL);
+  }
+}
+
+static GFile *workspace_active_file(PdfvWindow *self) {
+  AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
+  if (!page)
+    return NULL;
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  GFile *file = GTK_IS_STACK(stack)
+      ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
+  return file ? g_object_ref(file) : NULL;
+}
+
+static GFile *workspace_creation_folder(PdfvWindow *self,
+                                        gboolean use_context) {
+  if (!self->workspace)
+    return NULL;
+  GFile *selected = NULL;
+  gboolean selected_is_folder = FALSE;
+  if (use_context && self->workspace_context_file) {
+    selected = g_object_ref(self->workspace_context_file);
+    selected_is_folder = self->workspace_context_is_folder;
+  } else {
+    GtkTreeListRow *row = gtk_single_selection_get_selected_item(
+        self->workspace_selection);
+    if (row) {
+      PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+      selected = g_object_ref(pdfv_workspace_item_get_file(item));
+      selected_is_folder = pdfv_workspace_item_is_folder(item);
+      g_object_unref(item);
+      g_object_unref(row);
+    }
+  }
+  GFile *active = workspace_active_file(self);
+  GFile *folder = pdfv_workspace_creation_parent(
+      pdfv_workspace_get_folder(self->workspace), selected,
+      selected_is_folder, active);
+  g_clear_object(&active);
+  g_clear_object(&selected);
+  return folder;
+}
+
+static void show_file_operation_error(PdfvWindow *self, const gchar *title,
+                                      const GError *error) {
+  AdwDialog *dialog = adw_alert_dialog_new(
+      title, error ? error->message : "The operation could not be completed");
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dialog), "ok", "OK");
+  adw_dialog_present(dialog, GTK_WIDGET(self));
+}
+
+typedef struct {
+  PdfvWindow *window;
+  GFile *parent;
+  GtkEntry *entry;
+  gboolean folder;
+} WorkspaceCreationRequest;
+
+static void workspace_creation_request_free(
+    WorkspaceCreationRequest *request) {
+  g_clear_object(&request->window);
+  g_clear_object(&request->parent);
+  g_clear_object(&request->entry);
+  g_free(request);
+}
+
+static void on_workspace_creation_chosen(GObject *source,
+                                         GAsyncResult *result,
+                                         gpointer user_data) {
+  WorkspaceCreationRequest *request = user_data;
+  const gchar *response = adw_alert_dialog_choose_finish(
+      ADW_ALERT_DIALOG(source), result);
+  if (g_strcmp0(response, "create") != 0 ||
+      !request->window->workspace) {
+    workspace_creation_request_free(request);
+    return;
+  }
+  PdfvWindow *self = request->window;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  const gchar *name = gtk_editable_get_text(GTK_EDITABLE(request->entry));
+  GError *error = NULL;
+  GFile *created = request->folder
+      ? pdfv_workspace_create_folder(root, request->parent, name, &error)
+      : pdfv_workspace_create_note(root, request->parent, name, &error);
+  if (!created) {
+    show_file_operation_error(
+        self, request->folder ? "Could Not Create Folder"
+                              : "Could Not Create Note", error);
+    g_clear_error(&error);
+    workspace_creation_request_free(request);
+    return;
+  }
+  if (!request->folder)
+    workspace_open_file(self, created, FALSE);
+  gchar *basename = g_file_get_basename(created);
+  gchar *message = g_strdup_printf("Created %s", basename);
+  adw_toast_overlay_add_toast(self->toast_overlay, adw_toast_new(message));
+  g_free(message);
+  g_free(basename);
+  reload_matching_workspaces(self, created);
+  g_object_unref(created);
+  workspace_creation_request_free(request);
+}
+
+static void show_workspace_creation_dialog(PdfvWindow *self,
+                                           gboolean folder,
+                                           gboolean use_context) {
+  GFile *parent = workspace_creation_folder(self, use_context);
+  if (!parent)
+    return;
+  gchar *parent_name = g_file_get_parse_name(parent);
+  gchar *description = g_strdup_printf(
+      "%s will be created in %s.", folder ? "The folder" : "The note",
+      parent_name);
+  AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
+      folder ? "New Folder" : "New Note", description));
+  GtkEntry *entry = GTK_ENTRY(gtk_entry_new());
+  gtk_editable_set_text(GTK_EDITABLE(entry),
+                        folder ? "New Folder" : "Untitled");
+  gtk_editable_select_region(GTK_EDITABLE(entry), 0, -1);
+  gtk_entry_set_activates_default(entry, TRUE);
+  adw_alert_dialog_set_extra_child(dialog, GTK_WIDGET(entry));
+  adw_alert_dialog_add_responses(dialog, "cancel", "Cancel",
+                                 "create", "Create", NULL);
+  adw_alert_dialog_set_default_response(dialog, "create");
+  adw_alert_dialog_set_close_response(dialog, "cancel");
+  adw_alert_dialog_set_response_appearance(dialog, "create",
+                                           ADW_RESPONSE_SUGGESTED);
+  WorkspaceCreationRequest *request = g_new0(WorkspaceCreationRequest, 1);
+  request->window = g_object_ref(self);
+  request->parent = parent;
+  request->entry = g_object_ref(entry);
+  request->folder = folder;
+  adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
+                          on_workspace_creation_chosen, request);
+  g_free(description);
+  g_free(parent_name);
+}
+
+static gboolean file_is_at_or_below(GFile *parent, GFile *file,
+                                    gboolean parent_is_folder) {
+  if (g_file_equal(parent, file))
+    return TRUE;
+  if (!parent_is_folder)
+    return FALSE;
+  gchar *relative = g_file_get_relative_path(parent, file);
+  gboolean descendant = relative && *relative;
+  g_free(relative);
+  return descendant;
+}
+
+static GFile *file_after_move(GFile *source, GFile *destination,
+                              GFile *file, gboolean source_is_folder) {
+  if (g_file_equal(source, file))
+    return g_object_ref(destination);
+  if (!source_is_folder)
+    return NULL;
+  gchar *relative = g_file_get_relative_path(source, file);
+  if (!relative)
+    return NULL;
+  GFile *mapped = g_file_resolve_relative_path(destination, relative);
+  g_free(relative);
+  return mapped;
+}
+
+typedef struct {
+  PdfvWindow *window;
+  AdwTabPage *page;
+  GFile *new_file;
+  PdfvMarkdownEditor *editor;
+  gint page_number;
+} MovedTab;
+
+static void moved_tab_free(MovedTab *tab) {
+  g_clear_object(&tab->window);
+  g_clear_object(&tab->page);
+  g_clear_object(&tab->new_file);
+  g_clear_object(&tab->editor);
+  g_free(tab);
+}
+
+typedef struct {
+  PdfvWindow *initiator;
+  GFile *root;
+  GFile *source;
+  GFile *destination_folder;
+  GFile *expected_destination;
+  GPtrArray *tabs;
+  guint save_index;
+  gboolean source_is_folder;
+} WorkspaceMoveRequest;
+
+static void workspace_move_request_free(WorkspaceMoveRequest *request) {
+  request->initiator->workspace_move_running = FALSE;
+  g_clear_object(&request->initiator);
+  g_clear_object(&request->root);
+  g_clear_object(&request->source);
+  g_clear_object(&request->destination_folder);
+  g_clear_object(&request->expected_destination);
+  g_clear_pointer(&request->tabs, g_ptr_array_unref);
+  g_free(request);
+}
+
+static void workspace_move_failed(WorkspaceMoveRequest *request,
+                                  const GError *error) {
+  show_file_operation_error(request->initiator, "Could Not Move Item", error);
+  workspace_move_request_free(request);
+}
+
+static void remap_workspace_after_move(PdfvWindow *self, GFile *source,
+                                       GFile *destination,
+                                       gboolean source_is_folder) {
+  if (!self->workspace || !source_is_folder)
+    return;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  gchar *old_path = g_file_get_relative_path(root, source);
+  gchar *new_path = g_file_get_relative_path(root, destination);
+  if (!old_path || !new_path) {
+    g_free(old_path);
+    g_free(new_path);
+    return;
+  }
+  GPtrArray *remove = g_ptr_array_new_with_free_func(g_free);
+  GPtrArray *add = g_ptr_array_new_with_free_func(g_free);
+  GHashTableIter iter;
+  gpointer key = NULL;
+  g_hash_table_iter_init(&iter, self->workspace_expanded_paths);
+  gsize old_length = strlen(old_path);
+  while (g_hash_table_iter_next(&iter, &key, NULL)) {
+    const gchar *path = key;
+    if (g_strcmp0(path, old_path) != 0 &&
+        !(g_str_has_prefix(path, old_path) &&
+          path[old_length] == G_DIR_SEPARATOR))
+      continue;
+    g_ptr_array_add(remove, g_strdup(path));
+    g_ptr_array_add(add, g_strconcat(new_path, path + old_length, NULL));
+  }
+  for (guint i = 0; i < remove->len; i++)
+    g_hash_table_remove(self->workspace_expanded_paths,
+                        g_ptr_array_index(remove, i));
+  for (guint i = 0; i < add->len; i++)
+    g_hash_table_add(self->workspace_expanded_paths,
+                     g_strdup(g_ptr_array_index(add, i)));
+  g_ptr_array_unref(remove);
+  g_ptr_array_unref(add);
+
+  if (pdfv_settings_get_workspace_attachment_fixed(self->settings, root)) {
+    gchar *uri = pdfv_settings_dup_workspace_attachment_folder_uri(
+        self->settings, root);
+    GFile *folder = uri && *uri ? g_file_new_for_uri(uri) : NULL;
+    GFile *mapped = folder
+        ? file_after_move(source, destination, folder, TRUE) : NULL;
+    if (mapped) {
+      gchar *mapped_uri = g_file_get_uri(mapped);
+      pdfv_settings_set_workspace_attachment_policy(
+          self->settings, root, TRUE, mapped_uri);
+      g_free(mapped_uri);
+    }
+    g_clear_object(&mapped);
+    g_clear_object(&folder);
+    g_free(uri);
+  }
+  save_workspace_tree_session(self);
+  g_free(old_path);
+  g_free(new_path);
+}
+
+static void workspace_move_execute(WorkspaceMoveRequest *request) {
+  GError *error = NULL;
+  GFile *destination = pdfv_workspace_move_item(
+      request->root, request->source, request->destination_folder, &error);
+  if (!destination) {
+    workspace_move_failed(request, error);
+    g_clear_error(&error);
+    return;
+  }
+
+  GtkApplication *application = gtk_window_get_application(
+      GTK_WINDOW(request->initiator));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    if (!window->workspace ||
+        !g_file_equal(pdfv_workspace_get_folder(window->workspace),
+                      request->root))
+      continue;
+    remap_workspace_after_move(window, request->source, destination,
+                               request->source_is_folder);
+  }
+
+  for (guint i = 0; i < request->tabs->len; i++) {
+    MovedTab *tab = g_ptr_array_index(request->tabs, i);
+    if (adw_tab_view_get_page_position(tab->window->tab_view, tab->page) < 0)
+      continue;
+    if (tab->editor)
+      open_markdown_in_tab_async(tab->window, tab->new_file, tab->page);
+    else
+      open_file_in_tab_async(tab->window, tab->new_file, tab->page,
+                             tab->page_number, FALSE, FALSE, 0);
+  }
+
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    if (!window->workspace ||
+        !g_file_equal(pdfv_workspace_get_folder(window->workspace),
+                      request->root))
+      continue;
+    save_workspace_tab_session(window);
+    reload_workspace(window, window == request->initiator
+                                  ? destination : NULL);
+  }
+
+  gchar *basename = g_file_get_basename(destination);
+  gchar *message = g_strdup_printf("Moved %s safely", basename);
+  adw_toast_overlay_add_toast(request->initiator->toast_overlay,
+                              adw_toast_new(message));
+  g_free(message);
+  g_free(basename);
+  g_object_unref(destination);
+  workspace_move_request_free(request);
+}
+
+static void workspace_move_save_next(WorkspaceMoveRequest *request);
+
+static void on_workspace_move_editor_saved(GObject *source,
+                                           GAsyncResult *result,
+                                           gpointer user_data) {
+  WorkspaceMoveRequest *request = user_data;
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_save_finish(PDFV_MARKDOWN_EDITOR(source),
+                                        result, &error)) {
+    workspace_move_failed(request, error);
+    g_clear_error(&error);
+    return;
+  }
+  /* The user can keep typing while an asynchronous save is in flight. Do not
+   * move until the just-finished save actually covers the latest revision. */
+  if (pdfv_markdown_editor_get_dirty(PDFV_MARKDOWN_EDITOR(source))) {
+    workspace_move_save_next(request);
+    return;
+  }
+  request->save_index++;
+  workspace_move_save_next(request);
+}
+
+static void on_workspace_move_editor_flushed(GObject *source,
+                                             GAsyncResult *result,
+                                             gpointer user_data) {
+  WorkspaceMoveRequest *request = user_data;
+  PdfvMarkdownEditor *editor = PDFV_MARKDOWN_EDITOR(source);
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_flush_finish(editor, result, &error)) {
+    workspace_move_failed(request, error);
+    g_clear_error(&error);
+    return;
+  }
+  if (pdfv_markdown_editor_get_dirty(editor)) {
+    pdfv_markdown_editor_save_async(editor, NULL,
+                                    on_workspace_move_editor_saved, request);
+    return;
+  }
+  request->save_index++;
+  workspace_move_save_next(request);
+}
+
+static void workspace_move_save_next(WorkspaceMoveRequest *request) {
+  while (request->save_index < request->tabs->len) {
+    MovedTab *tab = g_ptr_array_index(request->tabs, request->save_index);
+    if (!tab->editor) {
+      request->save_index++;
+      continue;
+    }
+    pdfv_markdown_editor_flush_async(
+        tab->editor, NULL, on_workspace_move_editor_flushed, request);
+    return;
+  }
+  /* Recheck earlier editors after awaiting the rest. No user event can run
+   * between this clean pass and the synchronous filesystem move below. */
+  for (guint i = 0; i < request->tabs->len; i++) {
+    MovedTab *tab = g_ptr_array_index(request->tabs, i);
+    if (tab->editor && pdfv_markdown_editor_get_dirty(tab->editor)) {
+      request->save_index = i;
+      pdfv_markdown_editor_flush_async(
+          tab->editor, NULL, on_workspace_move_editor_flushed, request);
+      return;
+    }
+  }
+  workspace_move_execute(request);
+}
+
+static void begin_workspace_move(PdfvWindow *self, GFile *source,
+                                 GFile *destination_folder) {
+  if (!self->workspace || self->workspace_move_running)
+    return;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  GFileType source_type = g_file_query_file_type(
+      source, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
+  GError *validation_error = NULL;
+  if (!pdfv_workspace_file_is_within(root, source) ||
+      g_file_equal(root, source) ||
+      !pdfv_workspace_file_is_within(root, destination_folder)) {
+    g_set_error_literal(&validation_error, G_IO_ERROR,
+                        G_IO_ERROR_PERMISSION_DENIED,
+                        "Items can only be moved within this workspace");
+  } else if (source_type != G_FILE_TYPE_REGULAR &&
+             source_type != G_FILE_TYPE_DIRECTORY) {
+    g_set_error_literal(&validation_error, G_IO_ERROR,
+                        G_IO_ERROR_NOT_FOUND,
+                        "The item no longer exists");
+  } else if (g_file_query_file_type(
+                 destination_folder,
+                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL) !=
+             G_FILE_TYPE_DIRECTORY) {
+    g_set_error_literal(&validation_error, G_IO_ERROR,
+                        G_IO_ERROR_NOT_DIRECTORY,
+                        "The destination folder no longer exists");
+  } else if (source_type == G_FILE_TYPE_DIRECTORY &&
+             pdfv_workspace_file_is_within(source,
+                                           destination_folder)) {
+    g_set_error_literal(&validation_error, G_IO_ERROR,
+                        G_IO_ERROR_WOULD_RECURSE,
+                        "A folder cannot be moved into itself");
+  }
+  GFile *source_parent = g_file_get_parent(source);
+  if (!validation_error && source_parent &&
+      g_file_equal(source_parent, destination_folder)) {
+    g_set_error_literal(&validation_error, G_IO_ERROR, G_IO_ERROR_EXISTS,
+                        "The item is already in that folder");
+  }
+  g_clear_object(&source_parent);
+  if (validation_error) {
+    show_file_operation_error(self, "Could Not Move Item",
+                              validation_error);
+    g_clear_error(&validation_error);
+    return;
+  }
+  gchar *basename = g_file_get_basename(source);
+  GFile *expected_destination = g_file_get_child(destination_folder,
+                                                  basename);
+  g_free(basename);
+  if (g_file_query_exists(expected_destination, NULL)) {
+    g_set_error_literal(&validation_error, G_IO_ERROR, G_IO_ERROR_EXISTS,
+                        "An item with that name already exists there");
+    show_file_operation_error(self, "Could Not Move Item",
+                              validation_error);
+    g_clear_error(&validation_error);
+    g_object_unref(expected_destination);
+    return;
+  }
+  WorkspaceMoveRequest *request = g_new0(WorkspaceMoveRequest, 1);
+  request->initiator = g_object_ref(self);
+  request->root = g_object_ref(root);
+  request->source = g_object_ref(source);
+  request->destination_folder = g_object_ref(destination_folder);
+  request->source_is_folder = source_type == G_FILE_TYPE_DIRECTORY;
+  request->expected_destination = expected_destination;
+  request->tabs = g_ptr_array_new_with_free_func(
+      (GDestroyNotify)moved_tab_free);
+  self->workspace_move_running = TRUE;
+
+  GtkApplication *application = gtk_window_get_application(GTK_WINDOW(self));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    guint pages = adw_tab_view_get_n_pages(window->tab_view);
+    for (guint i = 0; i < pages; i++) {
+      AdwTabPage *page = adw_tab_view_get_nth_page(window->tab_view, i);
+      GtkWidget *stack = adw_tab_page_get_child(page);
+      GFile *open_file = GTK_IS_STACK(stack)
+          ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
+      if (!open_file || !file_is_at_or_below(
+                            source, open_file, request->source_is_folder))
+        continue;
+      GFile *new_file = file_after_move(
+          source, request->expected_destination, open_file,
+          request->source_is_folder);
+      if (!new_file)
+        continue;
+      MovedTab *tab = g_new0(MovedTab, 1);
+      tab->window = g_object_ref(window);
+      tab->page = g_object_ref(page);
+      tab->new_file = new_file;
+      tab->editor = g_object_get_data(G_OBJECT(stack), "markdown-editor");
+      if (tab->editor)
+        g_object_ref(tab->editor);
+      PdfvDocumentView *view = g_object_get_data(
+          G_OBJECT(stack), "document-view");
+      tab->page_number = view && pdfv_document_view_get_document(view)
+          ? pdfv_document_view_get_current_page(view) : 0;
+      g_ptr_array_add(request->tabs, tab);
+    }
+  }
+  if (request->tabs->len > 0) {
+    AdwToast *toast = adw_toast_new(
+        "Saving open notes before moving…");
+    adw_toast_set_timeout(toast, 2);
+    adw_toast_overlay_add_toast(self->toast_overlay, toast);
+  }
+  workspace_move_save_next(request);
+}
+
+static void open_workspace_folder_internal(PdfvWindow *self, GFile *folder,
+                                           gboolean restore_tabs) {
   if (self->workspace)
     close_workspace(self, FALSE);
   self->workspace_scan_cancellable = g_cancellable_new();
+  if (self->workspace_tools)
+    gtk_widget_set_sensitive(self->workspace_tools, FALSE);
 
   self->workspace = pdfv_workspace_new(folder);
   g_signal_connect(self->workspace, "index-updated",
@@ -3004,7 +3801,12 @@ static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
   adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
   pdfv_workspace_load_async(self->workspace, self->workspace_scan_cancellable,
                             on_workspace_loaded, g_object_ref(self));
-  restore_workspace_tab_session(self, folder);
+  if (restore_tabs)
+    restore_workspace_tab_session(self, folder);
+}
+
+static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
+  open_workspace_folder_internal(self, folder, TRUE);
 }
 
 static void on_folder_dialog_selected(GObject *source, GAsyncResult *result,
@@ -3071,6 +3873,261 @@ static void action_new_workspace_window(GSimpleAction *action,
   PdfvWindow *window = pdfv_window_new(ADW_APPLICATION(application));
   pdfv_window_restore_last_workspace(window);
   gtk_window_present(GTK_WINDOW(window));
+}
+
+static void open_file_in_new_tab(PdfvWindow *self, GFile *file) {
+  GtkWidget *content = create_tab_content(self);
+  AdwTabPage *page = adw_tab_view_append(self->tab_view, content);
+  adw_tab_view_set_selected_page(self->tab_view, page);
+  if (file_is_markdown(file))
+    open_markdown_in_tab_async(self, file, page);
+  else
+    open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0);
+}
+
+static void open_file_in_new_window(PdfvWindow *self, GFile *file) {
+  GtkApplication *application = gtk_window_get_application(GTK_WINDOW(self));
+  if (!application)
+    return;
+  PdfvWindow *window = pdfv_window_new(ADW_APPLICATION(application));
+  if (self->workspace) {
+    GFile *root = pdfv_workspace_get_folder(self->workspace);
+    if (pdfv_workspace_file_is_within(root, file))
+      open_workspace_folder_internal(window, root, FALSE);
+  }
+  pdfv_window_open_file(window, file);
+  gtk_window_present(GTK_WINDOW(window));
+}
+
+static void on_default_file_launched(GObject *source, GAsyncResult *result,
+                                     gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  GError *error = NULL;
+  if (!gtk_file_launcher_launch_finish(GTK_FILE_LAUNCHER(source), result,
+                                       &error))
+    show_file_operation_error(self, "Could Not Open Item", error);
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static void open_file_in_default_app(PdfvWindow *self, GFile *file) {
+  GtkFileLauncher *launcher = gtk_file_launcher_new(file);
+  gtk_file_launcher_launch(launcher, GTK_WINDOW(self), NULL,
+                           on_default_file_launched, g_object_ref(self));
+  g_object_unref(launcher);
+}
+
+typedef struct {
+  PdfvWindow *window;
+  gboolean launched_folder;
+} FolderLaunchRequest;
+
+static void on_folder_launched(GObject *source, GAsyncResult *result,
+                               gpointer user_data) {
+  FolderLaunchRequest *request = user_data;
+  GError *error = NULL;
+  gboolean opened = request->launched_folder
+      ? gtk_file_launcher_launch_finish(GTK_FILE_LAUNCHER(source), result,
+                                        &error)
+      : gtk_file_launcher_open_containing_folder_finish(
+            GTK_FILE_LAUNCHER(source), result, &error);
+  if (!opened)
+    show_file_operation_error(request->window,
+                              "Could Not Open System Files", error);
+  g_clear_error(&error);
+  g_object_unref(request->window);
+  g_free(request);
+}
+
+static void open_folder_in_system_files(PdfvWindow *self, GFile *file,
+                                        gboolean folder) {
+  GtkFileLauncher *launcher = gtk_file_launcher_new(file);
+  FolderLaunchRequest *request = g_new0(FolderLaunchRequest, 1);
+  request->window = g_object_ref(self);
+  request->launched_folder = folder;
+  if (folder)
+    gtk_file_launcher_launch(launcher, GTK_WINDOW(self), NULL,
+                             on_folder_launched, request);
+  else
+    gtk_file_launcher_open_containing_folder(
+        launcher, GTK_WINDOW(self), NULL, on_folder_launched, request);
+  g_object_unref(launcher);
+}
+
+static void action_workspace_new_note(GSimpleAction *action,
+                                      GVariant *parameter,
+                                      gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  show_workspace_creation_dialog(PDFV_WINDOW(user_data), FALSE, FALSE);
+}
+
+static void action_workspace_new_folder(GSimpleAction *action,
+                                        GVariant *parameter,
+                                        gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  show_workspace_creation_dialog(PDFV_WINDOW(user_data), TRUE, FALSE);
+}
+
+static void action_workspace_context_new_note(GSimpleAction *action,
+                                              GVariant *parameter,
+                                              gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  show_workspace_creation_dialog(PDFV_WINDOW(user_data), FALSE, TRUE);
+}
+
+static void action_workspace_context_new_folder(GSimpleAction *action,
+                                                GVariant *parameter,
+                                                gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  show_workspace_creation_dialog(PDFV_WINDOW(user_data), TRUE, TRUE);
+}
+
+static void action_workspace_context_open(GSimpleAction *action,
+                                          GVariant *parameter,
+                                          gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file && !self->workspace_context_is_folder)
+    workspace_open_file(self, self->workspace_context_file, FALSE);
+}
+
+static void action_workspace_context_open_new_tab(GSimpleAction *action,
+                                                  GVariant *parameter,
+                                                  gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file && !self->workspace_context_is_folder)
+    open_file_in_new_tab(self, self->workspace_context_file);
+}
+
+static void action_workspace_context_open_new_window(
+    GSimpleAction *action, GVariant *parameter, gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file && !self->workspace_context_is_folder)
+    open_file_in_new_window(self, self->workspace_context_file);
+}
+
+static void action_workspace_context_open_default(GSimpleAction *action,
+                                                  GVariant *parameter,
+                                                  gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file && !self->workspace_context_is_folder)
+    open_file_in_default_app(self, self->workspace_context_file);
+}
+
+static void action_workspace_context_open_folder(GSimpleAction *action,
+                                                 GVariant *parameter,
+                                                 gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file)
+    open_folder_in_system_files(self, self->workspace_context_file,
+                                self->workspace_context_is_folder);
+}
+
+static void action_tab_context_open_new_tab(GSimpleAction *action,
+                                            GVariant *parameter,
+                                            gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->tab_context_file)
+    open_file_in_new_tab(self, self->tab_context_file);
+}
+
+static void action_tab_context_open_new_window(GSimpleAction *action,
+                                               GVariant *parameter,
+                                               gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->tab_context_file)
+    open_file_in_new_window(self, self->tab_context_file);
+}
+
+static void action_tab_context_open_default(GSimpleAction *action,
+                                            GVariant *parameter,
+                                            gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->tab_context_file)
+    open_file_in_default_app(self, self->tab_context_file);
+}
+
+static void action_tab_context_open_folder(GSimpleAction *action,
+                                           GVariant *parameter,
+                                           gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->tab_context_file)
+    open_folder_in_system_files(self, self->tab_context_file, FALSE);
+}
+
+static void action_tab_context_close(GSimpleAction *action,
+                                     GVariant *parameter,
+                                     gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->tab_context_page &&
+      adw_tab_view_get_page_position(self->tab_view,
+                                     self->tab_context_page) >= 0)
+    adw_tab_view_close_page(self->tab_view, self->tab_context_page);
+}
+
+static void action_tab_context_close_others(GSimpleAction *action,
+                                            GVariant *parameter,
+                                            gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->tab_context_page &&
+      adw_tab_view_get_page_position(self->tab_view,
+                                     self->tab_context_page) >= 0)
+    adw_tab_view_close_other_pages(self->tab_view, self->tab_context_page);
+}
+
+static void set_window_action_enabled(PdfvWindow *self, const gchar *name,
+                                      gboolean enabled) {
+  GAction *action = g_action_map_lookup_action(G_ACTION_MAP(self), name);
+  if (action)
+    g_simple_action_set_enabled(G_SIMPLE_ACTION(action), enabled);
+}
+
+static void on_tab_context_menu_setup(AdwTabView *view, AdwTabPage *page,
+                                      PdfvWindow *self) {
+  g_set_object(&self->tab_context_page, page);
+  GFile *file = NULL;
+  if (page) {
+    GtkWidget *stack = adw_tab_page_get_child(page);
+    file = GTK_IS_STACK(stack)
+        ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
+  }
+  g_set_object(&self->tab_context_file, file);
+  gboolean has_file = file != NULL;
+  const gchar *file_actions[] = {
+      "tab-context-open-new-tab", "tab-context-open-new-window",
+      "tab-context-open-default", "tab-context-open-folder",
+  };
+  for (guint i = 0; i < G_N_ELEMENTS(file_actions); i++)
+    set_window_action_enabled(self, file_actions[i], has_file);
+  set_window_action_enabled(self, "tab-context-close", page != NULL);
+  set_window_action_enabled(
+      self, "tab-context-close-others",
+      page != NULL && adw_tab_view_get_n_pages(view) > 1);
 }
 
 static void action_close_tab(GSimpleAction *action, GVariant *parameter,
@@ -3702,6 +4759,36 @@ static GActionEntry win_actions[] = {
     {.name = "open-folder", .activate = action_open_folder},
     {.name = "workspace-search", .activate = action_workspace_search},
     {.name = "close-workspace", .activate = action_close_workspace},
+    {.name = "workspace-new-note",
+     .activate = action_workspace_new_note},
+    {.name = "workspace-new-folder",
+     .activate = action_workspace_new_folder},
+    {.name = "workspace-context-new-note",
+     .activate = action_workspace_context_new_note},
+    {.name = "workspace-context-new-folder",
+     .activate = action_workspace_context_new_folder},
+    {.name = "workspace-context-open",
+     .activate = action_workspace_context_open},
+    {.name = "workspace-context-open-new-tab",
+     .activate = action_workspace_context_open_new_tab},
+    {.name = "workspace-context-open-new-window",
+     .activate = action_workspace_context_open_new_window},
+    {.name = "workspace-context-open-default",
+     .activate = action_workspace_context_open_default},
+    {.name = "workspace-context-open-folder",
+     .activate = action_workspace_context_open_folder},
+    {.name = "tab-context-open-new-tab",
+     .activate = action_tab_context_open_new_tab},
+    {.name = "tab-context-open-new-window",
+     .activate = action_tab_context_open_new_window},
+    {.name = "tab-context-open-default",
+     .activate = action_tab_context_open_default},
+    {.name = "tab-context-open-folder",
+     .activate = action_tab_context_open_folder},
+    {.name = "tab-context-close",
+     .activate = action_tab_context_close},
+    {.name = "tab-context-close-others",
+     .activate = action_tab_context_close_others},
     {.name = "new-tab", .activate = action_new_tab},
     {.name = "new-workspace-window",
      .activate = action_new_workspace_window},
@@ -3889,6 +4976,10 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->workspace_search_cancellable);
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
+  g_clear_object(&self->workspace_pending_selection);
+  g_clear_object(&self->workspace_context_file);
+  g_clear_object(&self->tab_context_page);
+  g_clear_object(&self->tab_context_file);
   g_clear_object(&self->workspace_return_tab);
   g_clear_object(&self->workspace_results_animation);
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
@@ -4225,13 +5316,50 @@ static void pdfv_window_init(PdfvWindow *self) {
                    G_CALLBACK(on_workspace_middle_click), self);
   gtk_widget_add_controller(GTK_WIDGET(self->workspace_list),
                             GTK_EVENT_CONTROLLER(workspace_click));
+  GtkDropTarget *workspace_root_drop = gtk_drop_target_new(
+      PDFV_TYPE_WORKSPACE_ITEM, GDK_ACTION_MOVE);
+  g_signal_connect(workspace_root_drop, "drop",
+                   G_CALLBACK(on_workspace_root_drop), self);
+  gtk_widget_add_controller(workspace_scroll,
+                            GTK_EVENT_CONTROLLER(workspace_root_drop));
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(workspace_scroll),
                                 GTK_WIDGET(self->workspace_list));
   gtk_stack_add_named(self->workspace_content_stack, workspace_scroll,
                       "files");
   gtk_stack_set_visible_child_name(self->workspace_content_stack, "loading");
+
+  GtkWidget *workspace_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  self->workspace_tools = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+  gtk_widget_set_margin_top(self->workspace_tools, 6);
+  gtk_widget_set_margin_bottom(self->workspace_tools, 6);
+  gtk_widget_set_margin_start(self->workspace_tools, 6);
+  gtk_widget_set_margin_end(self->workspace_tools, 6);
+  gtk_widget_add_css_class(self->workspace_tools, "toolbar");
+  gtk_widget_set_sensitive(self->workspace_tools, FALSE);
+
+  GtkWidget *new_note = gtk_button_new_from_icon_name(
+      "document-new-symbolic");
+  gtk_widget_add_css_class(new_note, "flat");
+  gtk_widget_set_tooltip_text(new_note,
+                              "New Note Near the Selected Item");
+  gtk_actionable_set_action_name(GTK_ACTIONABLE(new_note),
+                                 "win.workspace-new-note");
+  gtk_box_append(GTK_BOX(self->workspace_tools), new_note);
+
+  GtkWidget *new_folder = gtk_button_new_from_icon_name(
+      "folder-new-symbolic");
+  gtk_widget_add_css_class(new_folder, "flat");
+  gtk_widget_set_tooltip_text(new_folder,
+                              "New Folder Near the Selected Item");
+  gtk_actionable_set_action_name(GTK_ACTIONABLE(new_folder),
+                                 "win.workspace-new-folder");
+  gtk_box_append(GTK_BOX(self->workspace_tools), new_folder);
+
+  gtk_box_append(GTK_BOX(workspace_page), self->workspace_tools);
+  gtk_box_append(GTK_BOX(workspace_page),
+                 GTK_WIDGET(self->workspace_content_stack));
   self->workspace_sidebar_page = adw_view_stack_add_titled_with_icon(
-      self->sidebar_stack, GTK_WIDGET(self->workspace_content_stack),
+      self->sidebar_stack, workspace_page,
       "workspace", "Workspace", "folder-symbolic");
   adw_view_stack_page_set_visible(self->workspace_sidebar_page, FALSE);
   gtk_box_append(GTK_BOX(sidebar_box), GTK_WIDGET(self->sidebar_stack));
@@ -4240,6 +5368,28 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Tab view */
   self->tab_view = ADW_TAB_VIEW(adw_tab_view_new());
+  GMenu *tab_menu = g_menu_new();
+  GMenu *tab_open_menu = g_menu_new();
+  g_menu_append(tab_open_menu, "Open in New Tab",
+                "win.tab-context-open-new-tab");
+  g_menu_append(tab_open_menu, "Open in New Window",
+                "win.tab-context-open-new-window");
+  g_menu_append(tab_open_menu, "Open in Default App",
+                "win.tab-context-open-default");
+  g_menu_append(tab_open_menu, "Open Folder in System Files",
+                "win.tab-context-open-folder");
+  g_menu_append_section(tab_menu, NULL, G_MENU_MODEL(tab_open_menu));
+  g_object_unref(tab_open_menu);
+  GMenu *tab_close_menu = g_menu_new();
+  g_menu_append(tab_close_menu, "Close Tab", "win.tab-context-close");
+  g_menu_append(tab_close_menu, "Close Other Tabs",
+                "win.tab-context-close-others");
+  g_menu_append_section(tab_menu, NULL, G_MENU_MODEL(tab_close_menu));
+  g_object_unref(tab_close_menu);
+  adw_tab_view_set_menu_model(self->tab_view, G_MENU_MODEL(tab_menu));
+  g_object_unref(tab_menu);
+  g_signal_connect(self->tab_view, "setup-menu",
+                   G_CALLBACK(on_tab_context_menu_setup), self);
   adw_tab_bar_set_view(self->tab_bar, self->tab_view);
   adw_tab_overview_set_view(self->tab_overview, self->tab_view);
 

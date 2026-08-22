@@ -88,9 +88,12 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
     PdfvWorkspaceItem *item = g_list_model_get_item(roots, i);
     if (pdfv_workspace_item_is_folder(item)) {
       folder_count++;
-      g_assert_cmpuint(g_list_model_get_n_items(
-                           pdfv_workspace_item_get_children(item)),
-                       ==, 1);
+      guint children = g_list_model_get_n_items(
+          pdfv_workspace_item_get_children(item));
+      if (g_str_equal(pdfv_workspace_item_get_name(item), "Empty"))
+        g_assert_cmpuint(children, ==, 2);
+      else
+        g_assert_cmpuint(children, ==, 1);
     }
     g_object_unref(item);
   }

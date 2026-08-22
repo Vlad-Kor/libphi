@@ -463,7 +463,7 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
       guint nested_pdf_count = 0;
       GPtrArray *nested = scan_folder(child_file, relative, result, cancellable,
                                       &nested_pdf_count, &child_error);
-      if (nested && nested_pdf_count > 0) {
+      if (nested) {
         ScanItem *item = g_new0(ScanItem, 1);
         item->file = g_object_ref(child_file);
         item->name = g_strdup(name);
@@ -472,8 +472,6 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
         item->children = nested;
         g_ptr_array_add(children, item);
         descendant_pdf_count += nested_pdf_count;
-      } else if (nested) {
-        g_ptr_array_unref(nested);
       }
       if (child_error && !g_error_matches(child_error, G_IO_ERROR,
                                            G_IO_ERROR_PERMISSION_DENIED)) {

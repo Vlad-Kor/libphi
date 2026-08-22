@@ -22,6 +22,7 @@ pdfv_sources = [
 	'pdfv-window.c',
 	'pdfv-document-view.c',
 	'pdfv-workspace.c',
+	'workspace-file-ops.c',
 	'pdfv-settings.c',
 	'markdown-editor.c',
 	'markdown-editor-bridge.c',
