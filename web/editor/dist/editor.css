@@ -157,7 +157,8 @@ pre code { padding: 0; background: transparent; }
 .callout-content > :last-child { margin-bottom: .2em; }
 .note-embed { display: block; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
 .embed-title { border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
-.image-widget { position: relative; max-width: 100%; margin: .35em 0; line-height: 0; vertical-align: top; }
+.image-widget { position: relative; max-width: 100%; margin: 0; line-height: 0; vertical-align: top; }
+.cm-line:has(.image-widget-block) { line-height: 0; }
 .image-widget-block { display: block; width: fit-content; }
 .image-widget-inline { display: inline-block; }
 .image-embed { display: block; max-width: 100%; height: auto; border-radius: 6px; }

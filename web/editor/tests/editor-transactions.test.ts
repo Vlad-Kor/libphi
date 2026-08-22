@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
+/// <reference types="node" />
 import { history, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, runScopeHandlers, showTooltip, type Tooltip } from "@codemirror/view";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runEditingCommand } from "../src/commands";
 import { PhiMarkdownEditor } from "../src/editor";
@@ -208,6 +210,39 @@ $$`;
     editor.view.dispatch({ selection: { anchor: text.length } });
     expect(editor.view.state.facet(showTooltip).filter(Boolean)).toHaveLength(0);
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
+  });
+
+  it("disables MathJax inline line breaking so lone relation symbols are not clipped", () => {
+    const source = readFileSync(
+      "src/math/mathjax-config.js",
+      "utf8",
+    );
+    new Function("window", source)(window);
+    const configured = (window as unknown as {
+      MathJax?: { svg?: { linebreaks?: { inline?: boolean } } };
+    }).MathJax;
+    expect(configured?.svg?.linebreaks?.inline).toBe(false);
+  });
+
+  it("keeps the final callout source line active when clicking its empty area", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "Before\n\n> [!info] test\n> test";
+    editor.openDocument({
+      documentId: "callout-click",
+      path: "callout-click.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    expect(parent.querySelector(".callout")).not.toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".callout")).toBeNull();
+    editor.view.dispatch({ selection: { anchor: text.lastIndexOf("test") + 2 } });
+    expect(parent.querySelector(".callout")).toBeNull();
   });
 
   it("can disable and restore the readable editor width", () => {

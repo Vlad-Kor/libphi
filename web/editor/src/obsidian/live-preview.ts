@@ -27,7 +27,13 @@ const blockId = Decoration.mark({ class: "cm-live-block-id" });
 export const refreshLivePreview = StateEffect.define<null>();
 
 function active(node: ObsidianNode, state: EditorState): boolean {
-  return state.selection.ranges.some((selection) => selectionTouches(node, selection));
+  return state.selection.ranges.some((selection) => {
+    /* A click in the empty area after the final callout line maps to node.to.
+     * Keep that endpoint editable; the next document line starts at to + 1. */
+    if (node.kind === "callout" && selection.from === selection.to)
+      return selection.from >= node.from && selection.from <= node.to;
+    return selectionTouches(node, selection);
+  });
 }
 
 function imageIsInsideListItem(state: EditorState, node: ObsidianNode): boolean {

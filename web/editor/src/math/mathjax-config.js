@@ -38,7 +38,10 @@ window.MathJax = {
     }
   },
   svg: {
-    fontCache: "local"
+    fontCache: "local",
+    linebreaks: {
+      inline: false
+    }
   },
   options: {
     enableMenu: false,
