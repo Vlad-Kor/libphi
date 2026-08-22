@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="node" />
 import { history, undo } from "@codemirror/commands";
+import { getSearchQuery } from "@codemirror/search";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, runScopeHandlers, showTooltip, type Tooltip } from "@codemirror/view";
 import { readFileSync } from "node:fs";
@@ -257,16 +258,79 @@ $$`;
     expect(document.body.classList.contains("full-width-editor")).toBe(false);
   });
 
+  it("restructures search as a centered GNOME-style grid without changing its behavior", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "search-ui",
+      path: "search-ui.md",
+      text: "alpha beta alpha",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.runCommand("editor.find");
+    await settle();
+
+    const panel = parent.querySelector<HTMLElement>(".cm-panel.cm-search");
+    const grid = panel?.querySelector<HTMLElement>(".phi-search-grid");
+    const search = grid?.querySelector<HTMLInputElement>('input[name="search"]');
+    const replace = grid?.querySelector<HTMLInputElement>('input[name="replace"]');
+    const navigation = grid?.querySelector<HTMLElement>(".phi-search-navigation");
+    expect(grid).not.toBeNull();
+    expect(search?.parentElement?.classList.contains("phi-search-field")).toBe(true);
+    expect(replace?.parentElement?.classList.contains("phi-replace-field")).toBe(true);
+    expect([...navigation!.querySelectorAll("button")].map((button) => button.name))
+      .toEqual(["prev", "next"]);
+    expect(grid?.querySelectorAll(".phi-symbolic-icon").length).toBeGreaterThanOrEqual(6);
+    expect(panel?.querySelector(':scope > label')).toBeNull();
+
+    const optionsButton = grid?.querySelector<HTMLButtonElement>(".phi-search-options-button");
+    const options = grid?.querySelector<HTMLElement>(".phi-search-options-popover");
+    expect(options?.hidden).toBe(true);
+    optionsButton?.click();
+    expect(options?.hidden).toBe(false);
+    expect(options?.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
+
+    search!.value = "alpha";
+    search!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
+    expect(getSearchQuery(editor.view.state).search).toBe("alpha");
+    grid?.querySelector<HTMLButtonElement>('button[name="next"]')?.click();
+    expect(editor.view.state.selection.main).toMatchObject({ from: 0, to: 5 });
+
+    const toggle = grid?.querySelector<HTMLButtonElement>(".phi-replace-toggle");
+    toggle?.click();
+    expect(panel?.classList.contains("phi-show-replace")).toBe(true);
+    expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+    replace!.value = "omega";
+    replace!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
+    grid?.querySelector<HTMLButtonElement>('button[name="replace"]')?.click();
+    expect(editor.view.state.doc.toString()).toBe("omega beta alpha");
+  });
+
   it("marks CodeMirror dark so floating previews use its dark tooltip theme", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
     views.push(editor.view);
-    editor.updateTheme({ dark: true });
+    editor.updateTheme({
+      dark: true,
+      foreground: "rgb(238, 238, 236)",
+      toolbar: "rgb(48, 48, 48)",
+      entry: "rgb(58, 58, 58)",
+      border: "rgba(255, 255, 255, .12)",
+      accent: "rgb(120, 174, 237)",
+    });
     expect(editor.view.state.facet(EditorView.darkTheme)).toBe(true);
     expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.style.getPropertyValue("--editor-toolbar-bg"))
+      .toBe("rgb(48, 48, 48)");
+    expect(document.documentElement.style.getPropertyValue("--editor-accent"))
+      .toBe("rgb(120, 174, 237)");
     editor.updateTheme({ dark: false });
     expect(editor.view.state.facet(EditorView.darkTheme)).toBe(false);
+    expect(document.documentElement.style.getPropertyValue("--editor-toolbar-bg")).toBe("");
   });
 
   it("converts display math directly without exposing its delimiters", async () => {

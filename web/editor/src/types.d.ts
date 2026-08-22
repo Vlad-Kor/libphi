@@ -30,6 +30,11 @@ export interface EditorTheme {
   dark: boolean;
   fontScale?: number;
   background?: string;
+  foreground?: string;
+  toolbar?: string;
+  entry?: string;
+  border?: string;
+  accent?: string;
 }
 
 export interface EditorSettings {

@@ -64,6 +64,11 @@ struct _PdfvMarkdownEditor {
   gdouble font_scale;
   gchar *snippets;
   gchar *theme_background;
+  gchar *theme_foreground;
+  gchar *theme_toolbar;
+  gchar *theme_entry;
+  gchar *theme_border;
+  gchar *theme_accent;
   guint request_sequence;
   GHashTable *flush_tasks; /* request ID -> FlushPending */
 };
@@ -155,6 +160,18 @@ static void send_theme(PdfvMarkdownEditor *self) {
   if (self->theme_background)
     json_object_set_string_member(payload, "background",
                                   self->theme_background);
+  if (self->theme_foreground)
+    json_object_set_string_member(payload, "foreground",
+                                  self->theme_foreground);
+  if (self->theme_toolbar)
+    json_object_set_string_member(payload, "toolbar",
+                                  self->theme_toolbar);
+  if (self->theme_entry)
+    json_object_set_string_member(payload, "entry", self->theme_entry);
+  if (self->theme_border)
+    json_object_set_string_member(payload, "border", self->theme_border);
+  if (self->theme_accent)
+    json_object_set_string_member(payload, "accent", self->theme_accent);
   pdfv_markdown_editor_bridge_send(self->bridge, "theme/update", NULL,
                                    payload);
   json_object_unref(payload);
@@ -1144,6 +1161,15 @@ void pdfv_markdown_editor_reveal_fragment(PdfvMarkdownEditor *self,
   json_object_unref(payload);
 }
 
+static gchar *lookup_theme_color(GtkWidget *widget, const gchar *name) {
+  GdkRGBA color;
+  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+  gboolean found = gtk_style_context_lookup_color(
+      gtk_widget_get_style_context(widget), name, &color);
+  G_GNUC_END_IGNORE_DEPRECATIONS
+  return found ? gdk_rgba_to_string(&color) : NULL;
+}
+
 void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
                                     gboolean dark, gdouble font_scale) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
@@ -1167,6 +1193,24 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
           : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980, .alpha = 1.0};
     g_free(self->theme_background);
     self->theme_background = gdk_rgba_to_string(&background);
+    g_free(self->theme_foreground);
+    self->theme_foreground = lookup_theme_color(
+        GTK_WIDGET(self), "window_fg_color");
+    g_free(self->theme_toolbar);
+    self->theme_toolbar = lookup_theme_color(
+        GTK_WIDGET(self), "headerbar_bg_color");
+    g_free(self->theme_entry);
+    self->theme_entry = lookup_theme_color(GTK_WIDGET(self), "card_bg_color");
+    if (!self->theme_entry)
+      self->theme_entry = lookup_theme_color(
+          GTK_WIDGET(self), "view_bg_color");
+    g_free(self->theme_border);
+    self->theme_border = lookup_theme_color(GTK_WIDGET(self), "borders");
+    g_free(self->theme_accent);
+    self->theme_accent = lookup_theme_color(GTK_WIDGET(self), "accent_color");
+    if (!self->theme_accent)
+      self->theme_accent = lookup_theme_color(
+          GTK_WIDGET(self), "accent_bg_color");
     webkit_web_view_set_background_color(self->web_view, &background);
   }
   send_theme(self);
@@ -1275,6 +1319,11 @@ static void pdfv_markdown_editor_finalize(GObject *object) {
   g_free(self->etag);
   g_free(self->snippets);
   g_free(self->theme_background);
+  g_free(self->theme_foreground);
+  g_free(self->theme_toolbar);
+  g_free(self->theme_entry);
+  g_free(self->theme_border);
+  g_free(self->theme_accent);
   G_OBJECT_CLASS(pdfv_markdown_editor_parent_class)->finalize(object);
 }
 

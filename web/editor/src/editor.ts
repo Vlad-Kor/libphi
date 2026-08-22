@@ -19,6 +19,44 @@ import type { DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEdito
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
 const themeCompartment = new Compartment();
+
+type SearchIcon = "search" | "replace" | "previous" | "next" |
+  "options" | "close" | "select-all";
+
+function searchIcon(name: SearchIcon): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("phi-symbolic-icon");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.5");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const paths: Record<SearchIcon, string[]> = {
+    search: ["M11 6.5a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Z", "m10 10 3.5 3.5"],
+    replace: ["M2.5 4.5h9", "m9.5 2 2 2-2 2", "M13.5 11.5h-9", "m6.5-2-2 2 2 2"],
+    previous: ["m4.5 10 3.5-3.5 3.5 3.5"],
+    next: ["m4.5 6 3.5 3.5L11.5 6"],
+    options: ["M8 2.25v1.2M8 12.55v1.2M2.25 8h1.2M12.55 8h1.2M3.95 3.95l.85.85M11.2 11.2l.85.85M12.05 3.95l-.85.85M4.8 11.2l-.85.85", "M10.5 8A2.5 2.5 0 1 1 5.5 8a2.5 2.5 0 0 1 5 0Z"],
+    close: ["m4 4 8 8M12 4l-8 8"],
+    "select-all": ["M6 3H3v3M10 3h3v3M13 10v3h-3M6 13H3v-3"],
+  };
+  for (const data of paths[name]) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", data);
+    svg.append(path);
+  }
+  return svg;
+}
+
+function iconButton(button: HTMLButtonElement, icon: SearchIcon, fallback: string): void {
+  const label = button.getAttribute("aria-label") || button.textContent?.trim() || fallback;
+  button.classList.add("phi-icon-button");
+  button.replaceChildren(searchIcon(icon));
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
 const obsidianHighlightStyle = HighlightStyle.define([
   { tag: tags.strong, fontWeight: "750", textDecoration: "none" },
   { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], textDecoration: "none" },
@@ -92,20 +130,122 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
 
   private enhanceSearchPanel(): void {
     const panel = this.view.dom.querySelector<HTMLElement>(".cm-panel.cm-search");
-    if (!panel || panel.querySelector(".phi-replace-toggle")) return;
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "phi-replace-toggle";
-    toggle.textContent = "›";
-    toggle.setAttribute("aria-label", "Show replace controls");
-    toggle.title = "Show replace controls";
-    toggle.addEventListener("click", () => {
+    if (!panel || panel.querySelector(".phi-search-grid")) return;
+    const search = panel.querySelector<HTMLInputElement>('input[name="search"]');
+    const replace = panel.querySelector<HTMLInputElement>('input[name="replace"]');
+    const previous = panel.querySelector<HTMLButtonElement>('button[name="prev"]');
+    const next = panel.querySelector<HTMLButtonElement>('button[name="next"]');
+    const select = panel.querySelector<HTMLButtonElement>('button[name="select"]');
+    const replaceOne = panel.querySelector<HTMLButtonElement>('button[name="replace"]');
+    const replaceAll = panel.querySelector<HTMLButtonElement>('button[name="replaceAll"]');
+    const close = panel.querySelector<HTMLButtonElement>('button[name="close"]');
+    const caseLabel = panel.querySelector<HTMLElement>('input[name="case"]')?.closest("label");
+    const regexpLabel = panel.querySelector<HTMLElement>('input[name="re"]')?.closest("label");
+    const wordLabel = panel.querySelector<HTMLElement>('input[name="word"]')?.closest("label");
+    if (!search || !replace || !previous || !next || !select || !replaceOne ||
+        !replaceAll || !close || !caseLabel || !regexpLabel || !wordLabel) return;
+
+    const entry = (input: HTMLInputElement, icon: "search" | "replace", label: string) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = `phi-search-entry phi-${icon}-entry`;
+      input.placeholder = label;
+      wrapper.append(searchIcon(icon), input);
+      return wrapper;
+    };
+    const searchEntry = entry(search, "search", "Search");
+    searchEntry.classList.add("phi-search-field");
+    const replaceEntry = entry(replace, "replace", "Replace");
+    replaceEntry.classList.add("phi-replace-field", "phi-replace-row-item");
+
+    iconButton(previous, "previous", "Previous Match");
+    iconButton(next, "next", "Next Match");
+    iconButton(close, "close", "Close Search");
+    const navigation = document.createElement("div");
+    navigation.className = "phi-search-navigation";
+    navigation.append(previous, next);
+
+    const replaceToggle = document.createElement("button");
+    replaceToggle.type = "button";
+    replaceToggle.className = "phi-icon-button phi-replace-toggle";
+    replaceToggle.append(searchIcon("replace"));
+    replaceToggle.setAttribute("aria-label", "Search and Replace");
+    replaceToggle.setAttribute("aria-pressed", "false");
+    replaceToggle.title = "Search and Replace";
+    replaceToggle.addEventListener("click", () => {
       const visible = panel.classList.toggle("phi-show-replace");
-      toggle.textContent = visible ? "⌄" : "›";
-      toggle.setAttribute("aria-label", visible ? "Hide replace controls" : "Show replace controls");
-      toggle.title = visible ? "Hide replace controls" : "Show replace controls";
+      replaceToggle.setAttribute("aria-pressed", String(visible));
+      if (visible) replace.focus();
+      else search.focus();
     });
-    panel.insertBefore(toggle, panel.firstChild);
+
+    const optionsButton = document.createElement("button");
+    optionsButton.type = "button";
+    optionsButton.className = "phi-icon-button phi-search-options-button";
+    optionsButton.append(searchIcon("options"));
+    optionsButton.setAttribute("aria-label", "Search Options");
+    optionsButton.setAttribute("aria-haspopup", "menu");
+    optionsButton.setAttribute("aria-expanded", "false");
+    optionsButton.title = "Search Options";
+    const options = document.createElement("div");
+    options.className = "phi-search-options-popover";
+    options.id = "phi-search-options";
+    options.role = "menu";
+    options.hidden = true;
+    optionsButton.setAttribute("aria-controls", options.id);
+    for (const label of [regexpLabel, caseLabel, wordLabel]) {
+      label.classList.add("phi-search-option");
+      options.append(label);
+    }
+    select.classList.add("phi-select-all");
+    select.replaceChildren(searchIcon("select-all"), document.createTextNode("Select All Matches"));
+    const optionsSeparator = document.createElement("div");
+    optionsSeparator.className = "phi-search-options-separator";
+    optionsSeparator.setAttribute("role", "separator");
+    options.append(optionsSeparator, select);
+    const optionsWrapper = document.createElement("div");
+    optionsWrapper.className = "phi-search-options";
+    optionsWrapper.append(optionsButton, options);
+    const setOptionsVisible = (visible: boolean) => {
+      options.hidden = !visible;
+      optionsButton.setAttribute("aria-expanded", String(visible));
+      optionsButton.classList.toggle("phi-active", visible);
+    };
+    optionsButton.addEventListener("click", () =>
+      setOptionsVisible(options.hasAttribute("hidden")));
+    options.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOptionsVisible(false);
+      optionsButton.focus();
+    });
+    const outsideOptions = (event: PointerEvent) => {
+      if (!optionsWrapper.contains(event.target as Node)) setOptionsVisible(false);
+    };
+    document.addEventListener("pointerdown", outsideOptions, true);
+    const observer = new MutationObserver(() => {
+      if (panel.isConnected) return;
+      document.removeEventListener("pointerdown", outsideOptions, true);
+      observer.disconnect();
+    });
+    observer.observe(this.view.dom, { childList: true, subtree: true });
+
+    replaceOne.classList.add("phi-replace-one", "phi-replace-row-item");
+    replaceAll.classList.add("phi-replace-all", "phi-replace-row-item");
+    close.classList.add("phi-search-close");
+    const grid = document.createElement("div");
+    grid.className = "phi-search-grid";
+    grid.append(
+      searchEntry,
+      navigation,
+      replaceToggle,
+      optionsWrapper,
+      close,
+      replaceEntry,
+      replaceOne,
+      replaceAll,
+    );
+    panel.replaceChildren(grid);
   }
 
   private documentChanged(): void {
