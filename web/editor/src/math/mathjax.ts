@@ -63,6 +63,41 @@ function api(): MathJaxApi | undefined {
   return (window as MathJaxWindow).MathJax;
 }
 
+function retryPromise(error: unknown): Promise<unknown> | undefined {
+  if (!error || typeof error !== "object" || !("retry" in error)) return undefined;
+  const retry = (error as { retry?: unknown }).retry;
+  if (!retry || typeof (retry as PromiseLike<unknown>).then !== "function")
+    return undefined;
+  return Promise.resolve(retry as PromiseLike<unknown>);
+}
+
+async function convertMath(
+  mathjax: MathJaxApi,
+  source: string,
+  display: boolean,
+): Promise<Element> {
+  if (!mathjax.tex2svg) {
+    if (mathjax.tex2svgPromise)
+      return mathjax.tex2svgPromise(source, { display });
+    throw new Error("MathJax SVG renderer is unavailable");
+  }
+
+  // MathJax's synchronous converter throws an Error with a `retry` promise
+  // when an extension or dynamic font must be loaded. Await precisely that
+  // work and retry instead of displaying MathJax's internal exception. The
+  // browser-wide tex2svgPromise() queue can remain pending in WebKitGTK.
+  for (let attempt = 0; attempt < 32; attempt++) {
+    try {
+      return mathjax.tex2svg(source, { display });
+    } catch (error) {
+      const retry = retryPromise(error);
+      if (!retry) throw error;
+      await retry;
+    }
+  }
+  throw new Error("MathJax could not finish loading this expression");
+}
+
 export function updatePreamble(value: string): void {
   if (value === preamble) return;
   preamble = value;
@@ -88,14 +123,7 @@ export async function renderMath(
     target.textContent = latex;
     const mathjax = await waitForMathJax();
     const source = `${preamble ? `${preamble}\n` : ""}${latex}`;
-    if (!mathjax.tex2svgPromise && !mathjax.tex2svg)
-      throw new Error("MathJax SVG renderer is unavailable");
-    // MathJax can discover that an extension or font needs asynchronous work
-    // while converting the expression. Its synchronous API reports that case
-    // as a visible "MathJax retry" error; the promise API waits and retries it.
-    const rendered = mathjax.tex2svgPromise
-      ? await mathjax.tex2svgPromise(source, { display })
-      : mathjax.tex2svg!(source, { display });
+    const rendered = await convertMath(mathjax, source, display);
     target.replaceChildren(rendered);
     target.classList.remove("math-loading");
     cache.set(key, target.innerHTML);

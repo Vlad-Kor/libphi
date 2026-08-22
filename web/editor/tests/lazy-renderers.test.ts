@@ -19,15 +19,19 @@ describe("lazy preview renderers", () => {
       'script[data-phi-renderer="mathjax"]',
     );
     expect(script?.src).toBe("app://editor/mathjax/tex-svg.js");
-    let resolveConversion: ((element: Element) => void) | undefined;
-    const tex2svgPromise = vi.fn(() => new Promise<Element>((resolve) => {
-      resolveConversion = resolve;
-    }));
+    let resolveRetry: (() => void) | undefined;
+    const retry = new Promise<void>((resolve) => { resolveRetry = resolve; });
+    const rendered = document.createElement("mjx-container");
+    const tex2svg = vi.fn()
+      .mockImplementationOnce(() => {
+        const error = Object.assign(new Error("MathJax retry"), { retry });
+        throw error;
+      })
+      .mockImplementationOnce(() => rendered);
+    const tex2svgPromise = vi.fn(() => new Promise<Element>(() => undefined));
     (window as unknown as { MathJax: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
-      tex2svg: vi.fn(() => {
-        throw new Error("the synchronous renderer must not be used");
-      }),
+      tex2svg,
       tex2svgPromise,
     };
     script?.dispatchEvent(new Event("load"));
@@ -35,13 +39,15 @@ describe("lazy preview renderers", () => {
 
     const target = document.createElement("span");
     const rendering = renderMath("x = 0", false, target);
-    await vi.waitFor(() => expect(tex2svgPromise).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(tex2svg).toHaveBeenCalledWith(
       "x = 0",
       { display: false },
     ));
     expect(target.classList.contains("math-loading")).toBe(true);
-    resolveConversion?.(document.createElement("mjx-container"));
+    expect(tex2svgPromise).not.toHaveBeenCalled();
+    resolveRetry?.();
     await rendering;
+    expect(tex2svg).toHaveBeenCalledTimes(2);
     expect(target.querySelector("mjx-container")).not.toBeNull();
     expect(target.classList.contains("math-loading")).toBe(false);
   });
