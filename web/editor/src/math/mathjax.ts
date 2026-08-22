@@ -107,6 +107,30 @@ export function updatePreamble(value: string): void {
 
 export function getMathRevision(): number { return preambleRevision; }
 
+/**
+ * Keep a horizontal touchpad gesture inside an overflowing equation. WebKitGTK
+ * otherwise applies the gesture's small vertical component to CodeMirror's
+ * outer scroller, which makes the document jump while the formula moves.
+ */
+export function wireMathScroll(target: HTMLElement): void {
+  target.addEventListener("wheel", (event) => {
+    // Pinch zoom is exposed as a Ctrl-modified wheel gesture by WebKit. Leave it
+    // to the browser, as well as ordinary vertical document scrolling.
+    if (event.ctrlKey || event.defaultPrevented ||
+        Math.abs(event.deltaX) <= Math.abs(event.deltaY) ||
+        target.scrollWidth <= target.clientWidth)
+      return;
+
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
+      event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? target.clientWidth : 1;
+    const maximum = target.scrollWidth - target.clientWidth;
+    target.scrollLeft = Math.max(0, Math.min(maximum,
+      target.scrollLeft + event.deltaX * scale));
+    event.preventDefault();
+    event.stopPropagation();
+  }, { passive: false });
+}
+
 export async function renderMath(
   latex: string,
   display: boolean,

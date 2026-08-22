@@ -2,7 +2,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureMathJaxReady, renderMath } from "../src/math/mathjax";
+import { ensureMathJaxReady, renderMath, wireMathScroll } from "../src/math/mathjax";
 import { MermaidWidget } from "../src/widgets/preview";
 
 afterEach(() => {
@@ -12,6 +12,67 @@ afterEach(() => {
 });
 
 describe("lazy preview renderers", () => {
+  it("keeps horizontal touchpad panning inside an overflowing equation", () => {
+    const parent = document.createElement("div");
+    const equation = document.createElement("div");
+    parent.append(equation);
+    Object.defineProperties(equation, {
+      clientWidth: { value: 300 },
+      scrollWidth: { value: 900 },
+      scrollLeft: { value: 100, writable: true },
+    });
+    wireMathScroll(equation);
+    const bubbled = vi.fn();
+    parent.addEventListener("wheel", bubbled);
+
+    const pan = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 48,
+      deltaY: 3,
+    });
+    equation.dispatchEvent(pan);
+
+    expect(equation.scrollLeft).toBe(148);
+    expect(pan.defaultPrevented).toBe(true);
+    expect(bubbled).not.toHaveBeenCalled();
+  });
+
+  it("leaves vertical scrolling and pinch zoom gestures to the editor", () => {
+    const parent = document.createElement("div");
+    const equation = document.createElement("div");
+    parent.append(equation);
+    Object.defineProperties(equation, {
+      clientWidth: { value: 300 },
+      scrollWidth: { value: 900 },
+      scrollLeft: { value: 100, writable: true },
+    });
+    wireMathScroll(equation);
+    const bubbled = vi.fn();
+    parent.addEventListener("wheel", bubbled);
+
+    const vertical = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 2,
+      deltaY: 40,
+    });
+    equation.dispatchEvent(vertical);
+    const zoom = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaX: 40,
+      deltaY: 1,
+    });
+    equation.dispatchEvent(zoom);
+
+    expect(equation.scrollLeft).toBe(100);
+    expect(vertical.defaultPrevented).toBe(false);
+    expect(zoom.defaultPrevented).toBe(false);
+    expect(bubbled).toHaveBeenCalledTimes(2);
+  });
+
   it("loads the offline MathJax runtime only when requested", async () => {
     expect(document.querySelector('script[data-phi-renderer="mathjax"]')).toBeNull();
     const ready = ensureMathJaxReady();

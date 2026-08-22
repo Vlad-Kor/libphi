@@ -1,7 +1,7 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { parseDocument } from "yaml";
 import { requestNative, reportError, sendNative } from "../bridge";
-import { getMathRevision, renderMath } from "../math/mathjax";
+import { getMathRevision, renderMath, wireMathScroll } from "../math/mathjax";
 import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../obsidian/markdown";
 import { remoteImagesAllowed } from "../settings";
 
@@ -102,6 +102,7 @@ export class MathWidget extends WidgetType {
     element.tabIndex = 0;
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
     element.addEventListener("click", () => reveal(view, this.from));
+    if (this.display) wireMathScroll(element);
     void renderMath(this.latex, this.display, element);
     return element;
   }

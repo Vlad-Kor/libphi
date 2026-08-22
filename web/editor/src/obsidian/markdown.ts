@@ -17,7 +17,7 @@ import "prismjs/components/prism-rust";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-yaml";
 import { sendNative } from "../bridge";
-import { renderMath } from "../math/mathjax";
+import { renderMath, wireMathScroll } from "../math/mathjax";
 import { remoteImagesAllowed } from "../settings";
 
 const escapeHtml = (value: string): string => value
@@ -195,6 +195,7 @@ function wireRenderedMath(root: HTMLElement): void {
       element.className = display ? "math-widget math-display" : "math-widget math-inline";
       element.tabIndex = 0;
       element.setAttribute("aria-label", `LaTeX: ${latex}`);
+      if (display) wireMathScroll(element);
       fragment.append(element);
       void renderMath(latex, display, element);
       cursor = match.index + match[0].length;
