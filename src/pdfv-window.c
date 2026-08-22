@@ -159,6 +159,8 @@ static void apply_preferences_to_editor(PdfvWindow *self,
       editor, pdfv_settings_get_allow_remote_images(self->settings));
   pdfv_markdown_editor_set_readable_line_width(
       editor, pdfv_settings_get_readable_line_width(self->settings));
+  pdfv_markdown_editor_set_latex_conceal(
+      editor, pdfv_settings_get_latex_conceal(self->settings));
   pdfv_markdown_editor_set_snippets(
       editor, pdfv_settings_get_latex_snippets(self->settings));
   GFile *workspace_root = self->workspace
@@ -3160,6 +3162,15 @@ static void on_preferences_remote_changed(AdwSwitchRow *row,
   schedule_preferences_update(self, 80);
 }
 
+static void on_preferences_latex_conceal_changed(AdwSwitchRow *row,
+                                                 GParamSpec *pspec,
+                                                 PdfvWindow *self) {
+  (void)pspec;
+  pdfv_settings_set_latex_conceal(
+      self->settings, adw_switch_row_get_active(row));
+  schedule_preferences_update(self, 40);
+}
+
 static void on_preferences_snippets_changed(GtkTextBuffer *buffer,
                                             PdfvWindow *self) {
   GtkTextIter start;
@@ -3453,11 +3464,24 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
 
   AdwPreferencesGroup *latex = ADW_PREFERENCES_GROUP(
       adw_preferences_group_new());
-  adw_preferences_group_set_title(latex, "LaTeX Suite snippets");
+  adw_preferences_group_set_title(latex, "LaTeX Suite");
   adw_preferences_group_set_description(
       latex,
-      "The active built-in or custom set is shown below and stored globally.");
+      "Editor enhancements and snippets are stored globally.");
   adw_preferences_page_add(page, latex);
+
+  AdwSwitchRow *conceal = ADW_SWITCH_ROW(adw_switch_row_new());
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(conceal),
+                                "Conceal LaTeX syntax");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(conceal),
+      "Show readable symbols outside the cursor; disabled by default");
+  adw_switch_row_set_active(
+      conceal, pdfv_settings_get_latex_conceal(self->settings));
+  adw_preferences_group_add(latex, GTK_WIDGET(conceal));
+  g_signal_connect_object(conceal, "notify::active",
+                          G_CALLBACK(on_preferences_latex_conceal_changed),
+                          self, 0);
 
   GtkWidget *snippet_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
   gtk_widget_set_margin_top(snippet_box, 6);

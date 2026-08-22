@@ -13,6 +13,7 @@ struct _PdfvSettings {
   gdouble markdown_font_scale;
   gboolean readable_line_width;
   gboolean allow_remote_images;
+  gboolean latex_conceal;
   gchar *latex_snippets;
   GKeyFile *file;
 };
@@ -57,6 +58,11 @@ PdfvSettings *pdfv_settings_new(void) {
     self->allow_remote_images = g_key_file_get_boolean(
         self->file, SETTINGS_GROUP, "allow-remote-images", &error);
     g_clear_error(&error);
+    gboolean conceal = g_key_file_get_boolean(
+        self->file, SETTINGS_GROUP, "latex-conceal", &error);
+    if (!error)
+      self->latex_conceal = conceal;
+    g_clear_error(&error);
     gchar *snippets = g_key_file_get_string(self->file, SETTINGS_GROUP,
                                              "latex-snippets", NULL);
     if (snippets) {
@@ -84,6 +90,8 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
                          self->readable_line_width);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "allow-remote-images",
                          self->allow_remote_images);
+  g_key_file_set_boolean(self->file, SETTINGS_GROUP, "latex-conceal",
+                         self->latex_conceal);
   g_key_file_set_string(self->file, SETTINGS_GROUP, "latex-snippets",
                         self->latex_snippets);
   gsize length = 0;
@@ -133,6 +141,17 @@ void pdfv_settings_set_allow_remote_images(PdfvSettings *self,
                                            gboolean allowed) {
   g_return_if_fail(self != NULL);
   self->allow_remote_images = allowed;
+}
+
+gboolean pdfv_settings_get_latex_conceal(PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, FALSE);
+  return self->latex_conceal;
+}
+
+void pdfv_settings_set_latex_conceal(PdfvSettings *self,
+                                     gboolean enabled) {
+  g_return_if_fail(self != NULL);
+  self->latex_conceal = enabled;
 }
 
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self) {
@@ -269,6 +288,7 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->markdown_font_scale = source->markdown_font_scale;
   destination->readable_line_width = source->readable_line_width;
   destination->allow_remote_images = source->allow_remote_images;
+  destination->latex_conceal = source->latex_conceal;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   gsize length = 0;
   gchar *data = g_key_file_to_data(source->file, &length, NULL);

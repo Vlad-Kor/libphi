@@ -314,6 +314,25 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .math-widget mjx-container[jax="SVG"] [data-c] { stroke: none; }
 .math-loading { color: var(--editor-muted); opacity: .7; }
 .math-display { display: block; width: 100%; overflow-x: auto; padding: .55em 0; text-align: center; }
+.cm-latex-delimiter { color: color-mix(in srgb, #2ec27e 82%, var(--editor-fg)); font-weight: 650; }
+.cm-latex-command { color: color-mix(in srgb, #c061cb 78%, var(--editor-fg)); }
+.cm-latex-number { color: color-mix(in srgb, #e66100 82%, var(--editor-fg)); }
+.cm-latex-operator, .cm-latex-script-operator { color: color-mix(in srgb, var(--editor-link) 82%, var(--editor-fg)); }
+.cm-latex-comment { color: var(--editor-muted); font-style: italic; }
+.cm-latex-bracket-depth-0 { color: #47a8e8; }
+.cm-latex-bracket-depth-1 { color: #dc5fbd; }
+.cm-latex-bracket-depth-2 { color: #69b723; }
+.cm-latex-bracket-mismatch { color: #e01b24; text-decoration: wavy underline; }
+.cm-latex-bracket-active {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--editor-accent) 28%, transparent);
+}
+.cm-latex-conceal { color: var(--editor-fg); font-style: italic; }
+.cm-latex-conceal-unicode { font-family: "JuliaMono", "DejaVu Sans", "Noto Sans Math", sans-serif; }
+.cm-latex-conceal-bold { font-weight: 750; }
+.cm-latex-conceal-underline { text-decoration: underline; }
+.cm-latex-conceal-roman { font-style: normal; }
+sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
 .cm-editor .cm-tooltip.math-preview-bubble {
   box-sizing: border-box;
   max-width: min(720px, calc(100vw - 32px));

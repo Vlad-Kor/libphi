@@ -10,6 +10,7 @@ import { parseDocument } from "yaml";
 import { acceptNativeResponse, requestNative, reportError, sendNative } from "./bridge";
 import { formattingKeymap, runEditingCommand } from "./commands";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
+import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { obsidianCompletion } from "./obsidian/completion";
 import { livePreview, refreshLivePreview } from "./obsidian/live-preview";
@@ -19,6 +20,7 @@ import type { DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEdito
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
 const themeCompartment = new Compartment();
+const latexEnhancementsCompartment = new Compartment();
 
 type SearchIcon = "search" | "replace" | "previous" | "next" |
   "options" | "close" | "select-all";
@@ -114,6 +116,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
           indentWithTab,
         ]),
         ...latexSuite,
+        latexEnhancementsCompartment.of(
+          latexEnhancements(this.settings.latexConceal),
+        ),
         previewCompartment.of(this.settings.sourceMode ? [] : livePreview),
         wrappingCompartment.of(this.settings.lineWrapping ? EditorView.lineWrapping : []),
         themeCompartment.of(EditorView.theme({}, { dark: this.darkTheme })),
@@ -379,6 +384,10 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       effects.push(previewCompartment.reconfigure(this.settings.sourceMode ? [] : livePreview));
     if (previous.lineWrapping !== this.settings.lineWrapping)
       effects.push(wrappingCompartment.reconfigure(this.settings.lineWrapping ? EditorView.lineWrapping : []));
+    if (previous.latexConceal !== this.settings.latexConceal)
+      effects.push(latexEnhancementsCompartment.reconfigure(
+        latexEnhancements(this.settings.latexConceal),
+      ));
     if (previous.allowRemoteImages !== this.settings.allowRemoteImages)
       effects.push(refreshLivePreview.of(null));
     if (previous.snippets !== this.settings.snippets)

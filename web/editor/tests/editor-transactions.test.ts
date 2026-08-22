@@ -132,6 +132,50 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
+  it("syntax-highlights LaTeX and enables cursor-aware conceal on demand", () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: () => document.createElement("mjx-container"),
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = String.raw`Formula $\frac{a_1}{b^2} + \alpha + \dot{x}^{2}$`;
+    editor.openDocument({
+      documentId: "latex-enhancements",
+      path: "latex-enhancements.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.indexOf(" + ") + 1 } });
+
+    expect(parent.querySelector(".cm-latex-command")).not.toBeNull();
+    expect(parent.querySelector(".cm-latex-bracket")).not.toBeNull();
+    expect(parent.querySelector(".cm-latex-script-operator")).not.toBeNull();
+    expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
+    editor.view.dispatch({ selection: { anchor: text.indexOf("a_1") + 1 } });
+    expect(parent.querySelectorAll(".cm-latex-bracket-active")).toHaveLength(2);
+    editor.view.dispatch({ selection: { anchor: text.indexOf(" + ") + 1 } });
+
+    editor.updateSettings({ latexConceal: true });
+    const concealed = [...parent.querySelectorAll<HTMLElement>(".cm-latex-conceal")];
+    expect(concealed.map((element) => element.textContent)).toEqual(
+      expect.arrayContaining(["(", ")", "/", "1", "α", "x\u0307", "2"]),
+    );
+
+    const alpha = text.indexOf(String.raw`\alpha`);
+    editor.view.dispatch({ selection: { anchor: alpha + 2 } });
+    expect([...parent.querySelectorAll<HTMLElement>(".cm-latex-conceal")]
+      .some((element) => element.title === String.raw`\alpha`)).toBe(false);
+    expect(parent.querySelector(".cm-latex-command")).not.toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    expect(parent.querySelector(".math-inline")).not.toBeNull();
+    expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
+  });
+
   it("builds sorted previews for nested rich lists and keeps list images inline", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },

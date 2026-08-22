@@ -24,6 +24,9 @@ void pdfv_settings_set_readable_line_width(PdfvSettings *self,
 gboolean pdfv_settings_get_allow_remote_images(PdfvSettings *self);
 void pdfv_settings_set_allow_remote_images(PdfvSettings *self,
                                            gboolean allowed);
+gboolean pdfv_settings_get_latex_conceal(PdfvSettings *self);
+void pdfv_settings_set_latex_conceal(PdfvSettings *self,
+                                     gboolean enabled);
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self);
 void pdfv_settings_set_latex_snippets(PdfvSettings *self,
                                       const gchar *snippets);

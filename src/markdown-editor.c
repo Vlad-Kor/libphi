@@ -61,6 +61,7 @@ struct _PdfvMarkdownEditor {
   gboolean settings_set;
   gboolean allow_remote_images;
   gboolean readable_line_width;
+  gboolean latex_conceal;
   gdouble font_scale;
   gchar *snippets;
   gchar *theme_background;
@@ -186,6 +187,8 @@ static void send_settings(PdfvMarkdownEditor *self) {
                                  self->allow_remote_images);
   json_object_set_boolean_member(payload, "readableLineWidth",
                                  self->readable_line_width);
+  json_object_set_boolean_member(payload, "latexConceal",
+                                 self->latex_conceal);
   json_object_set_string_member(payload, "snippets",
                                 self->snippets ? self->snippets : "");
   pdfv_markdown_editor_bridge_send(self->bridge, "settings/update", NULL,
@@ -1232,6 +1235,14 @@ void pdfv_markdown_editor_set_readable_line_width(
     PdfvMarkdownEditor *self, gboolean enabled) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
   self->readable_line_width = enabled;
+  self->settings_set = TRUE;
+  send_settings(self);
+}
+
+void pdfv_markdown_editor_set_latex_conceal(
+    PdfvMarkdownEditor *self, gboolean enabled) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  self->latex_conceal = enabled;
   self->settings_set = TRUE;
   send_settings(self);
 }
