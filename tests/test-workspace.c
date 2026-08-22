@@ -20,6 +20,10 @@ typedef struct {
   GFile *second;
   GFile *note;
   GFile *filename_note;
+  GFile *weak_transform_note;
+  GFile *weak_action_note;
+  GFile *ranked_fuzzy_note;
+  GFile *monotone_note;
   gboolean finished;
   guint timeout_id;
   guint expected_cache_hits;
@@ -31,6 +35,8 @@ static gboolean wait_for_index(gpointer user_data);
 static void fuzzy_filename_search_finished(GObject *source,
                                            GAsyncResult *result,
                                            gpointer user_data);
+static void monotone_search_finished(GObject *source, GAsyncResult *result,
+                                     gpointer user_data);
 
 static gboolean test_timeout(gpointer user_data) {
   TestState *state = user_data;
@@ -85,6 +91,31 @@ static void fuzzy_filename_search_finished(GObject *source,
   PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, 0);
   g_assert_true(match->filename_match);
   g_ptr_array_unref(groups);
+  pdfv_workspace_search_near_async(state->workspace, "monoton",
+                                   state->second, NULL,
+                                   monotone_search_finished, state);
+}
+
+static void monotone_search_finished(GObject *source, GAsyncResult *result,
+                                     gpointer user_data) {
+  TestState *state = user_data;
+  GError *error = NULL;
+  GPtrArray *groups = pdfv_workspace_search_finish(
+      PDFV_WORKSPACE(source), result, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(groups);
+  g_assert_cmpuint(groups->len, ==, 2);
+  PdfvWorkspaceResultGroup *content_group = g_ptr_array_index(groups, 0);
+  g_assert_true(g_file_equal(content_group->file, state->monotone_note));
+  PdfvWorkspaceMatch *match = g_ptr_array_index(content_group->matches, 0);
+  g_assert_false(match->filename_match);
+  g_assert_nonnull(g_strstr_len(match->snippet, -1, "monoton"));
+  PdfvWorkspaceResultGroup *fuzzy_group = g_ptr_array_index(groups, 1);
+  g_assert_true(g_file_equal(fuzzy_group->file, state->ranked_fuzzy_note));
+  match = g_ptr_array_index(fuzzy_group->matches, 0);
+  g_assert_true(match->filename_match);
+  g_assert_cmpstr(match->snippet, ==, "Fuzzy filename match");
+  g_ptr_array_unref(groups);
   state->finished = TRUE;
   if (state->timeout_id) {
     g_source_remove(state->timeout_id);
@@ -113,7 +144,7 @@ static void initial_filename_search_finished(GObject *source,
 
 static gboolean wait_for_index(gpointer user_data) {
   TestState *state = user_data;
-  if (pdfv_workspace_get_indexed_count(state->workspace) < 4)
+  if (pdfv_workspace_get_indexed_count(state->workspace) < 8)
     return G_SOURCE_CONTINUE;
   pdfv_workspace_search_near_async(state->workspace, "präsentiert",
                                    state->second, NULL, search_finished,
@@ -129,10 +160,10 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
                                            &error));
   g_assert_no_error(error);
   g_assert_cmpuint(pdfv_workspace_get_pdf_count(state->workspace), ==, 2);
-  g_assert_cmpuint(pdfv_workspace_get_document_count(state->workspace), ==, 4);
+  g_assert_cmpuint(pdfv_workspace_get_document_count(state->workspace), ==, 8);
 
   GListModel *roots = pdfv_workspace_get_items(state->workspace);
-  g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 4);
+  g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 8);
   guint folder_count = 0;
   for (guint i = 0; i < g_list_model_get_n_items(roots); i++) {
     PdfvWorkspaceItem *item = g_list_model_get_item(roots, i);
@@ -244,6 +275,33 @@ static void test_workspace_search(void) {
                                     -1, &error));
   g_assert_no_error(error);
   g_free(filename_note_path);
+  state.weak_transform_note = g_file_get_child(
+      state.root, "DBS-04-Modelltransformation.md");
+  gchar *weak_transform_path = g_file_get_path(state.weak_transform_note);
+  g_assert_true(g_file_set_contents(weak_transform_path, "# Database model\n",
+                                    -1, &error));
+  g_assert_no_error(error);
+  g_free(weak_transform_path);
+  state.weak_action_note = g_file_get_child(
+      state.root, "Exercise_VLM_ActionRecognition.md");
+  gchar *weak_action_path = g_file_get_path(state.weak_action_note);
+  g_assert_true(g_file_set_contents(weak_action_path, "# Video exercise\n",
+                                    -1, &error));
+  g_assert_no_error(error);
+  g_free(weak_action_path);
+  state.ranked_fuzzy_note = g_file_get_child(state.root, "ModelNotation.md");
+  gchar *ranked_fuzzy_path = g_file_get_path(state.ranked_fuzzy_note);
+  g_assert_true(g_file_set_contents(ranked_fuzzy_path, "# Schema notation\n",
+                                    -1, &error));
+  g_assert_no_error(error);
+  g_free(ranked_fuzzy_path);
+  state.monotone_note = g_file_get_child(state.root, "analysis.md");
+  gchar *monotone_path = g_file_get_path(state.monotone_note);
+  g_assert_true(g_file_set_contents(
+      monotone_path, "# Analysis\nDiese Funktion ist monoton.\n", -1,
+      &error));
+  g_assert_no_error(error);
+  g_free(monotone_path);
   GFile *fixture =
       g_file_new_for_path(TEST_DATA_DIR "/separate-diacritic.pdf");
   g_assert_true(g_file_copy(fixture, state.first, G_FILE_COPY_NONE, NULL, NULL,
@@ -305,6 +363,14 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.filename_note, NULL, &error));
   g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.weak_transform_note, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.weak_action_note, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.ranked_fuzzy_note, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.monotone_note, NULL, &error));
+  g_assert_no_error(error);
   g_assert_true(g_file_delete(state.trashed_note, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.trash, NULL, &error));
@@ -321,6 +387,10 @@ static void test_workspace_search(void) {
   g_object_unref(state.first);
   g_object_unref(state.note);
   g_object_unref(state.filename_note);
+  g_object_unref(state.weak_transform_note);
+  g_object_unref(state.weak_action_note);
+  g_object_unref(state.ranked_fuzzy_note);
+  g_object_unref(state.monotone_note);
   g_object_unref(state.trashed_note);
   g_object_unref(state.trash);
   g_object_unref(state.nested);

@@ -969,6 +969,7 @@ typedef struct {
   PdfvWorkspaceResultGroup *group;
   guint filename_score;
   guint proximity;
+  gboolean content_match;
 } RankedSearchGroup;
 
 static void search_document_free(SearchDocument *document) {
@@ -1088,7 +1089,11 @@ static guint fuzzy_subsequence_penalty(const gchar *needle,
 
   guint span = last - first + 1;
   guint gaps = span - needle_length;
-  if (gaps > MAX(3u, needle_length * 2))
+  /* A loose subsequence across a long filename produces implausible hits:
+   * for example, "monoton" used to match both "Modelltransformation" and
+   * "VLM_ActionRecognition". Allow abbreviations, but require their letters
+   * to remain reasonably clustered. */
+  if (gaps > needle_length + 3)
     return G_MAXUINT;
   guint candidate_length = g_utf8_strlen(candidate, -1);
   guint trailing = candidate_length > last ? candidate_length - last - 1 : 0;
@@ -1151,14 +1156,30 @@ static guint search_filename_score(const gchar *query_key,
 static gint ranked_search_group_compare(gconstpointer a, gconstpointer b) {
   const RankedSearchGroup *left = *(RankedSearchGroup *const *)a;
   const RankedSearchGroup *right = *(RankedSearchGroup *const *)b;
-  gboolean left_filename = left->filename_score != G_MAXUINT;
-  gboolean right_filename = right->filename_score != G_MAXUINT;
-  if (left_filename != right_filename)
-    return left_filename ? -1 : 1;
-  if (left->filename_score < right->filename_score)
+  /* Exact, prefix, and substring basename matches deserve hard priority.
+   * Weak fuzzy/path matches do not: an exact content occurrence is much more
+   * useful than a filename which merely contains the query as a sparse
+   * subsequence. */
+  guint left_class = left->filename_score < 72
+                         ? 0
+                         : left->content_match
+                               ? 1
+                               : left->filename_score != G_MAXUINT ? 2 : 3;
+  guint right_class = right->filename_score < 72
+                          ? 0
+                          : right->content_match
+                                ? 1
+                                : right->filename_score != G_MAXUINT ? 2 : 3;
+  if (left_class < right_class)
     return -1;
-  if (left->filename_score > right->filename_score)
+  if (left_class > right_class)
     return 1;
+  if (left_class == 0 || left_class == 2) {
+    if (left->filename_score < right->filename_score)
+      return -1;
+    if (left->filename_score > right->filename_score)
+      return 1;
+  }
   if (left->proximity < right->proximity)
     return -1;
   if (left->proximity > right->proximity)
@@ -1237,6 +1258,7 @@ static void search_worker(GTask *task, gpointer source_object,
     }
     SearchDocument *document = g_ptr_array_index(data->documents, d);
     PdfvWorkspaceResultGroup *group = NULL;
+    gboolean content_match = FALSE;
     guint filename_score = search_filename_score(filename_needle,
                                                  document->relative_path);
     if (filename_score != G_MAXUINT) {
@@ -1248,7 +1270,9 @@ static void search_worker(GTask *task, gpointer source_object,
       PdfvWorkspaceMatch *match = g_new0(PdfvWorkspaceMatch, 1);
       match->page = 0;
       match->filename_match = TRUE;
-      match->snippet = g_strdup("Filename match");
+      match->snippet = g_strdup(filename_score < 72
+                                    ? "Filename match"
+                                    : "Fuzzy filename match");
       g_ptr_array_add(group->matches, match);
     }
     for (guint p = 0; p < document->pages->len; p++) {
@@ -1271,12 +1295,14 @@ static void search_worker(GTask *task, gpointer source_object,
       match->page = p;
       match->snippet = make_snippet(page->text, page->folded, found);
       g_ptr_array_add(group->matches, match);
+      content_match = TRUE;
     }
     if (group) {
       RankedSearchGroup *ranked = g_new0(RankedSearchGroup, 1);
       ranked->group = group;
       ranked->filename_score = filename_score;
       ranked->proximity = document->proximity;
+      ranked->content_match = content_match;
       g_ptr_array_add(ranked_groups, ranked);
     }
   }
