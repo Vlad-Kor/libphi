@@ -2,7 +2,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureMathJaxReady } from "../src/math/mathjax";
+import { ensureMathJaxReady, renderMath } from "../src/math/mathjax";
 import { MermaidWidget } from "../src/widgets/preview";
 
 afterEach(() => {
@@ -19,12 +19,31 @@ describe("lazy preview renderers", () => {
       'script[data-phi-renderer="mathjax"]',
     );
     expect(script?.src).toBe("app://editor/mathjax/tex-svg.js");
+    let resolveConversion: ((element: Element) => void) | undefined;
+    const tex2svgPromise = vi.fn(() => new Promise<Element>((resolve) => {
+      resolveConversion = resolve;
+    }));
     (window as unknown as { MathJax: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
-      tex2svg: () => document.createElement("mjx-container"),
+      tex2svg: vi.fn(() => {
+        throw new Error("the synchronous renderer must not be used");
+      }),
+      tex2svgPromise,
     };
     script?.dispatchEvent(new Event("load"));
     await ready;
+
+    const target = document.createElement("span");
+    const rendering = renderMath("x = 0", false, target);
+    await vi.waitFor(() => expect(tex2svgPromise).toHaveBeenCalledWith(
+      "x = 0",
+      { display: false },
+    ));
+    expect(target.classList.contains("math-loading")).toBe(true);
+    resolveConversion?.(document.createElement("mjx-container"));
+    await rendering;
+    expect(target.querySelector("mjx-container")).not.toBeNull();
+    expect(target.classList.contains("math-loading")).toBe(false);
   });
 
   it("loads and initializes Mermaid only for a Mermaid widget", async () => {

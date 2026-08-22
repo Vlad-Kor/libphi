@@ -3,6 +3,10 @@ import { reportError } from "../bridge";
 interface MathJaxApi {
   startup?: { promise?: Promise<unknown> };
   tex2svg?: (latex: string, options?: { display?: boolean }) => Element;
+  tex2svgPromise?: (
+    latex: string,
+    options?: { display?: boolean },
+  ) => Promise<Element>;
   texReset?: () => void;
 }
 
@@ -17,7 +21,7 @@ let preambleRevision = 0;
 let mathJaxScript: Promise<void> | undefined;
 
 function startMathJax(): Promise<void> {
-  if (api()?.tex2svg) return Promise.resolve();
+  if (api()?.tex2svgPromise || api()?.tex2svg) return Promise.resolve();
   if (mathJaxScript) return mathJaxScript;
   mathJaxScript = new Promise<void>((resolve, reject) => {
     const script = document.createElement("script");
@@ -42,7 +46,7 @@ async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
     const failure = (window as MathJaxWindow).__phiMathJaxError;
     if (failure) throw new Error(`MathJax could not load: ${failure}`);
     const mathjax = api();
-    if (mathjax?.tex2svg) {
+    if (mathjax?.tex2svgPromise || mathjax?.tex2svg) {
       if (mathjax.startup?.promise) await mathjax.startup.promise;
       return mathjax;
     }
@@ -84,8 +88,14 @@ export async function renderMath(
     target.textContent = latex;
     const mathjax = await waitForMathJax();
     const source = `${preamble ? `${preamble}\n` : ""}${latex}`;
-    if (!mathjax.tex2svg) throw new Error("MathJax SVG renderer is unavailable");
-    const rendered = mathjax.tex2svg(source, { display });
+    if (!mathjax.tex2svgPromise && !mathjax.tex2svg)
+      throw new Error("MathJax SVG renderer is unavailable");
+    // MathJax can discover that an extension or font needs asynchronous work
+    // while converting the expression. Its synchronous API reports that case
+    // as a visible "MathJax retry" error; the promise API waits and retries it.
+    const rendered = mathjax.tex2svgPromise
+      ? await mathjax.tex2svgPromise(source, { display })
+      : mathjax.tex2svg!(source, { display });
     target.replaceChildren(rendered);
     target.classList.remove("math-loading");
     cache.set(key, target.innerHTML);

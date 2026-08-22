@@ -74,6 +74,7 @@ struct _PdfvMarkdownEditor {
 };
 
 enum {
+  SIGNAL_READY,
   SIGNAL_DIRTY_CHANGED,
   SIGNAL_OPEN_FILE,
   SIGNAL_CREATE_LINK,
@@ -718,10 +719,13 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
                               PdfvMarkdownEditor *self) {
   (void)bridge;
   if (g_str_equal(type, "editor/ready")) {
+    gboolean became_ready = !self->ready;
     self->ready = TRUE;
     send_theme(self);
     send_settings(self);
     send_open_document(self, "document/open");
+    if (became_ready)
+      g_signal_emit(self, editor_signals[SIGNAL_READY], 0);
   } else if (g_str_equal(type, "document/changed")) {
     update_snapshot(self, payload);
     set_dirty(self, TRUE);
@@ -1263,6 +1267,11 @@ gboolean pdfv_markdown_editor_get_dirty(PdfvMarkdownEditor *self) {
   return self->dirty;
 }
 
+gboolean pdfv_markdown_editor_get_ready(PdfvMarkdownEditor *self) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), FALSE);
+  return self->ready;
+}
+
 GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self) {
   g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
   return self->file;
@@ -1331,6 +1340,9 @@ static void pdfv_markdown_editor_class_init(PdfvMarkdownEditorClass *klass) {
   GObjectClass *object_class = G_OBJECT_CLASS(klass);
   object_class->dispose = pdfv_markdown_editor_dispose;
   object_class->finalize = pdfv_markdown_editor_finalize;
+  editor_signals[SIGNAL_READY] = g_signal_new(
+      "ready", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+      NULL, G_TYPE_NONE, 0);
   editor_signals[SIGNAL_DIRTY_CHANGED] = g_signal_new(
       "dirty-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL,
       NULL, NULL, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
@@ -1378,16 +1390,30 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
 
   AdwStatusPage *loading = ADW_STATUS_PAGE(adw_status_page_new());
   adw_status_page_set_title(loading, "Loading…");
-  GtkWidget *spinner = gtk_spinner_new();
+  GtkWidget *spinner = adw_spinner_new();
   gtk_widget_set_size_request(spinner, 32, 32);
-  gtk_spinner_start(GTK_SPINNER(spinner));
   adw_status_page_set_child(loading, spinner);
   gtk_stack_add_named(self->content_stack, GTK_WIDGET(loading), "loading");
 
-  self->web_view = WEBKIT_WEB_VIEW(g_object_new(
-      WEBKIT_TYPE_WEB_VIEW, "web-context",
-      pdfv_markdown_resource_scheme_get_context(self->resources),
-      "user-content-manager", self->content_manager, NULL));
+  static GWeakRef related_view_ref;
+  static gsize related_view_ref_initialized;
+  if (g_once_init_enter(&related_view_ref_initialized)) {
+    g_weak_ref_init(&related_view_ref, NULL);
+    g_once_init_leave(&related_view_ref_initialized, 1);
+  }
+  WebKitWebView *related_view = g_weak_ref_get(&related_view_ref);
+  if (related_view) {
+    self->web_view = WEBKIT_WEB_VIEW(g_object_new(
+        WEBKIT_TYPE_WEB_VIEW, "related-view", related_view,
+        "user-content-manager", self->content_manager, NULL));
+  } else {
+    self->web_view = WEBKIT_WEB_VIEW(g_object_new(
+        WEBKIT_TYPE_WEB_VIEW, "web-context",
+        pdfv_markdown_resource_scheme_get_context(self->resources),
+        "user-content-manager", self->content_manager, NULL));
+  }
+  g_weak_ref_set(&related_view_ref, self->web_view);
+  g_clear_object(&related_view);
   pdfv_markdown_resource_scheme_bind_web_view(self->resources,
                                                self->web_view);
   gtk_widget_set_hexpand(GTK_WIDGET(self->web_view), TRUE);

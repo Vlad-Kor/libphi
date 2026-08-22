@@ -56,6 +56,7 @@ void pdfv_markdown_editor_set_attachment_folder(
 void pdfv_markdown_editor_focus(PdfvMarkdownEditor *self);
 
 gboolean pdfv_markdown_editor_get_dirty(PdfvMarkdownEditor *self);
+gboolean pdfv_markdown_editor_get_ready(PdfvMarkdownEditor *self);
 GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self);
 GFile *pdfv_markdown_editor_get_vault_root(PdfvMarkdownEditor *self);
 const gchar *pdfv_markdown_editor_get_relative_path(
