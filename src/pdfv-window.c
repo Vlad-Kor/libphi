@@ -398,34 +398,6 @@ static void rebuild_main_menu(PdfvWindow *self) {
   g_menu_append(self->view_menu_section, "Fullscreen", "win.fullscreen");
 }
 
-static void update_empty_state_chrome(PdfvWindow *self) {
-  if (!self->toolbar_view || !self->tab_view)
-    return;
-
-  gboolean empty = FALSE;
-  AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
-  if (page) {
-    GtkWidget *content = adw_tab_page_get_child(page);
-    if (GTK_IS_STACK(content))
-      empty = g_strcmp0(
-                  gtk_stack_get_visible_child_name(GTK_STACK(content)),
-                  "empty") == 0;
-  }
-
-  /* A flat toolbar lets the transparent tab bar share the empty page's
-   * background. Restore the normal raised chrome for loading/documents;
-   * tab visibility is deliberately never changed here. */
-  adw_toolbar_view_set_top_bar_style(
-      self->toolbar_view, empty ? ADW_TOOLBAR_FLAT : ADW_TOOLBAR_RAISED);
-}
-
-static void on_tab_content_changed(GtkStack *stack, GParamSpec *pspec,
-                                   PdfvWindow *self) {
-  (void)stack;
-  (void)pspec;
-  update_empty_state_chrome(self);
-}
-
 static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
                            PdfvWindow *self) {
   (void)view;
@@ -2583,8 +2555,6 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
 
   /* Start with empty state */
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
-  g_signal_connect(stack, "notify::visible-child-name",
-                   G_CALLBACK(on_tab_content_changed), self);
 
   g_object_set_data(G_OBJECT(stack), "document-view", view);
   g_object_set_data(G_OBJECT(stack), "scrolled-window", scrolled);
@@ -3001,7 +2971,6 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
 
   AdwTabPage *page = adw_tab_view_get_selected_page(tab_view);
   bind_window_title(self, page);
-  update_empty_state_chrome(self);
 
   if (!page) {
     self->current_view = NULL;
@@ -5695,8 +5664,11 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Main toolbar view - must be set AFTER tab_overview has a parent */
   self->toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
-  /* Ensure content doesn't scroll under the header bar */
-  adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_RAISED);
+  /* Keep the header and transparent tab bar on the same window background as
+   * Markdown. Flat styling changes only the surface/shadow; the bars remain
+   * allocated above the content and never overlap it. */
+  adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_FLAT);
+  adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, FALSE);
   adw_tab_overview_set_child(self->tab_overview,
                              GTK_WIDGET(self->toolbar_view));
 
