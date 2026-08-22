@@ -2,12 +2,7 @@ import { reportError } from "../bridge";
 
 interface MathJaxApi {
   startup?: { promise?: Promise<unknown> };
-  typesetPromise?: (elements?: Element[]) => Promise<unknown>;
-  tex2chtmlPromise?: (
-    latex: string,
-    options?: { display?: boolean },
-  ) => Promise<Element>;
-  typesetClear?: (elements?: Element[]) => void;
+  tex2svg?: (latex: string, options?: { display?: boolean }) => Element;
   texReset?: () => void;
 }
 
@@ -26,7 +21,7 @@ async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
     const failure = (window as MathJaxWindow).__phiMathJaxError;
     if (failure) throw new Error(`MathJax could not load: ${failure}`);
     const mathjax = api();
-    if (mathjax?.tex2chtmlPromise || mathjax?.typesetPromise) {
+    if (mathjax?.tex2svg) {
       if (mathjax.startup?.promise) await mathjax.startup.promise;
       return mathjax;
     }
@@ -67,15 +62,10 @@ export async function renderMath(
     target.classList.add("math-loading");
     target.textContent = latex;
     const mathjax = await waitForMathJax();
-    target.replaceChildren();
     const source = `${preamble ? `${preamble}\n` : ""}${latex}`;
-    if (mathjax.tex2chtmlPromise) {
-      const rendered = await mathjax.tex2chtmlPromise(source, { display });
-      target.replaceChildren(rendered);
-    } else {
-      target.textContent = display ? `$$${source}$$` : `$${source}$`;
-      await mathjax.typesetPromise!([target]);
-    }
+    if (!mathjax.tex2svg) throw new Error("MathJax SVG renderer is unavailable");
+    const rendered = mathjax.tex2svg(source, { display });
+    target.replaceChildren(rendered);
     target.classList.remove("math-loading");
     cache.set(key, target.innerHTML);
     if (cache.size > 256) cache.delete(cache.keys().next().value as string);

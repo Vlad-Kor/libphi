@@ -347,7 +347,7 @@ export function parseObsidian(text: string): ObsidianNode[] {
     }
   }
 
-  for (const match of text.matchAll(/^(\s*)([-+*])(?=[ \t]+)/gm)) {
+  for (const match of text.matchAll(/^([ \t]*)([-+*])(?=[ \t]+)/gm)) {
     if (inside(match.index, protectedRanges)) continue;
     const markerFrom = match.index + match[1].length;
     const to = lineEnd(text, markerFrom);
@@ -363,7 +363,7 @@ export function parseObsidian(text: string): ObsidianNode[] {
     });
   }
 
-  for (const match of text.matchAll(/^\s*[-*+]\s+\[([^\]])\]/gm)) {
+  for (const match of text.matchAll(/^[ \t]*[-*+][ \t]+\[([^\]])\]/gm)) {
     if (!inside(match.index, protectedRanges)) {
       const marker = match[0].lastIndexOf("[");
       nodes.push({

@@ -37,8 +37,8 @@ window.MathJax = {
       ]
     }
   },
-  chtml: {
-    fontURL: "app://editor/mathjax-font/chtml/woff2"
+  svg: {
+    fontCache: "local"
   },
   options: {
     enableMenu: false,

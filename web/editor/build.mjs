@@ -1,9 +1,12 @@
 import { build } from "esbuild";
-import { copyFile, cp, mkdir } from "node:fs/promises";
+import { copyFile, cp, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const outdir = resolve(process.argv[2] ?? "dist");
 await mkdir(outdir, { recursive: true });
+await rm(resolve(outdir, "mathjax"), { recursive: true, force: true });
+await rm(resolve(outdir, "mathjax-font"), { recursive: true, force: true });
+await rm(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true, force: true });
 await mkdir(resolve(outdir, "mathjax"), { recursive: true });
 await mkdir(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true });
 
@@ -23,17 +26,12 @@ await copyFile("src/index.html", resolve(outdir, "index.html"));
 await copyFile("src/styles/editor.css", resolve(outdir, "editor.css"));
 await copyFile("src/math/mathjax-config.js", resolve(outdir, "mathjax-config.js"));
 await copyFile("src/latex-suite/default-snippets.txt", resolve(outdir, "default-snippets.txt"));
-await copyFile("node_modules/mathjax/tex-chtml.js", resolve(outdir, "mathjax/tex-chtml.js"));
+await copyFile("node_modules/mathjax/tex-svg.js", resolve(outdir, "mathjax/tex-svg.js"));
 await cp("node_modules/mathjax/input/tex/extensions", resolve(outdir, "mathjax/input/tex/extensions"), { recursive: true });
 await cp("node_modules/mathjax/a11y", resolve(outdir, "mathjax/a11y"), { recursive: true });
 await cp("node_modules/mathjax/sre", resolve(outdir, "mathjax/sre"), { recursive: true });
-await cp("node_modules/@mathjax/mathjax-newcm-font/chtml", resolve(outdir, "mathjax-font/chtml"), { recursive: true });
+await cp("node_modules/@mathjax/mathjax-newcm-font/svg", resolve(outdir, "mathjax-font/svg"), { recursive: true });
 await copyFile(
-  "node_modules/@mathjax/mathjax-mhchem-font-extension/chtml.js",
-  resolve(outdir, "mathjax-mhchem-font-extension/chtml.js"),
-);
-await cp(
-  "node_modules/@mathjax/mathjax-mhchem-font-extension/chtml",
-  resolve(outdir, "mathjax-mhchem-font-extension/chtml"),
-  { recursive: true },
+  "node_modules/@mathjax/mathjax-mhchem-font-extension/svg.js",
+  resolve(outdir, "mathjax-mhchem-font-extension/svg.js"),
 );

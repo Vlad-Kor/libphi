@@ -13,4 +13,4 @@ declare module "markdown-it-task-lists" {
   export default plugin;
 }
 
-declare module "mathjax/tex-chtml.js";
+declare module "mathjax/tex-svg.js";

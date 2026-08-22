@@ -109,7 +109,7 @@ describe("CodeMirror document transactions", () => {
   it("creates Live Preview widgets for bullets and both math modes", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
-      typesetPromise: () => Promise.resolve(),
+      tex2svg: () => document.createElement("mjx-container"),
     };
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -127,10 +127,41 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
+  it("builds sorted previews for nested rich lists and keeps list images inline", () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: () => document.createElement("mjx-container"),
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = `# Speech Processing
+## **Tasks**
+- Automatic Speech Recognition
+\t- recognize: <span style=color:#ed4564>audio stream -&gt; text</span>
+* **Formants** use $F_1,F_2$
+- ![[Pasted image.png|400]]
+
+$$
+x = 0
+$$`;
+    expect(() => editor.openDocument({
+      documentId: "nested-rich-list",
+      path: "nested-rich-list.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    })).not.toThrow();
+    expect(parent.querySelectorAll(".list-bullet").length).toBeGreaterThanOrEqual(3);
+    expect(parent.querySelectorAll(".image-widget")).toHaveLength(1);
+    expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
+  });
+
   it("keeps a rendered math preview while editing and restores the replacement at its boundary", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
-      typesetPromise: () => Promise.resolve(),
+      tex2svg: () => document.createElement("mjx-container"),
     };
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -146,18 +177,18 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
-  it("passes delimiter-free display source to MathJax's direct renderer", async () => {
-    const calls: Array<{ source: string; display?: boolean }> = [];
+  it("converts display math directly without exposing its delimiters", async () => {
+    const calls: string[] = [];
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
-      tex2chtmlPromise: (source: string, options: { display?: boolean }) => {
-        calls.push({ source, display: options.display });
-        return Promise.resolve(document.createElement("mjx-container"));
+      tex2svg: (latex: string) => {
+        calls.push(latex);
+        return document.createElement("mjx-container");
       },
     };
     const target = document.createElement("div");
     await renderMath("theta_unique = 7", true, target);
-    expect(calls).toEqual([{ source: "theta_unique = 7", display: true }]);
+    expect(calls).toEqual(["theta_unique = 7"]);
     expect(target.querySelector("mjx-container")).not.toBeNull();
     expect(target.textContent).not.toContain("$$");
   });

@@ -1,4 +1,4 @@
-import "mathjax/tex-chtml.js";
+import "mathjax/tex-svg.js";
 import { reportError, sendNative } from "./bridge";
 import { PhiMarkdownEditor } from "./editor";
 import { ensureMathJaxReady } from "./math/mathjax";

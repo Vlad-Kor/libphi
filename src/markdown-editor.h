@@ -55,6 +55,7 @@ void pdfv_markdown_editor_focus(PdfvMarkdownEditor *self);
 
 gboolean pdfv_markdown_editor_get_dirty(PdfvMarkdownEditor *self);
 GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self);
+GFile *pdfv_markdown_editor_get_vault_root(PdfvMarkdownEditor *self);
 const gchar *pdfv_markdown_editor_get_relative_path(
     PdfvMarkdownEditor *self);
 GFile *pdfv_markdown_editor_resolve_new_note(PdfvMarkdownEditor *self,

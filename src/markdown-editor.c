@@ -800,8 +800,10 @@ static void monitor_external_loaded(GObject *source, GAsyncResult *result,
   gchar *etag = NULL;
   gsize length = 0;
   GError *error = NULL;
+  gboolean current_file = self->file &&
+      g_file_equal(G_FILE(source), self->file);
   if (g_file_load_contents_finish(G_FILE(source), result, &contents, &length,
-                                  &etag, &error) &&
+                                  &etag, &error) && current_file &&
       g_strcmp0(contents, self->persisted_text) != 0) {
     self->revision++;
     if (self->dirty) {
@@ -940,6 +942,8 @@ void pdfv_markdown_editor_open_file_async(
     GAsyncReadyCallback callback, gpointer user_data) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
   g_return_if_fail(G_IS_FILE(file));
+  if (self->content_stack)
+    gtk_stack_set_visible_child_name(self->content_stack, "loading");
   GTask *task = g_task_new(self, cancellable, callback, user_data);
   g_task_set_source_tag(task, pdfv_markdown_editor_open_file_async);
   g_file_load_contents_async(file, cancellable, open_file_loaded, task);
@@ -1144,9 +1148,20 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
   self->font_scale = font_scale;
   self->theme_set = TRUE;
   if (self->web_view) {
-    GdkRGBA background = dark
-        ? (GdkRGBA){.red = 0.122, .green = 0.133, .blue = 0.149, .alpha = 1.0}
-        : (GdkRGBA){.red = 0.969, .green = 0.973, .blue = 0.980, .alpha = 1.0};
+    GdkRGBA background;
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    gboolean found = gtk_style_context_lookup_color(
+        gtk_widget_get_style_context(GTK_WIDGET(self)),
+        "window_bg_color", &background);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    gdouble luminance = found
+        ? 0.2126 * background.red + 0.7152 * background.green +
+              0.0722 * background.blue
+        : (dark ? 0.0 : 1.0);
+    if (!found || (dark && luminance > 0.5) || (!dark && luminance < 0.5))
+      background = dark
+          ? (GdkRGBA){.red = 0.141, .green = 0.141, .blue = 0.141, .alpha = 1.0}
+          : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980, .alpha = 1.0};
     g_free(self->theme_background);
     self->theme_background = gdk_rgba_to_string(&background);
     webkit_web_view_set_background_color(self->web_view, &background);
@@ -1196,6 +1211,11 @@ gboolean pdfv_markdown_editor_get_dirty(PdfvMarkdownEditor *self) {
 GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self) {
   g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
   return self->file;
+}
+
+GFile *pdfv_markdown_editor_get_vault_root(PdfvMarkdownEditor *self) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
+  return pdfv_markdown_vault_adapter_get_root(self->vault);
 }
 
 const gchar *pdfv_markdown_editor_get_relative_path(

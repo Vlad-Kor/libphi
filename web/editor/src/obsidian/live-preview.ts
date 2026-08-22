@@ -1,4 +1,4 @@
-import { type EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { parseObsidian, selectionTouches, type ObsidianNode } from "./parser";
 import {
@@ -30,15 +30,27 @@ function active(node: ObsidianNode, state: EditorState): boolean {
   return state.selection.ranges.some((selection) => selectionTouches(node, selection));
 }
 
-function blockReplacement(node: ObsidianNode): Decoration | undefined {
+function imageIsInsideListItem(state: EditorState, node: ObsidianNode): boolean {
+  const line = state.doc.lineAt(node.from);
+  const prefix = state.sliceDoc(line.from, node.from);
+  return /^\s*[-+*]\s+(?:\[[^\]]\]\s+)?$/.test(prefix);
+}
+
+function blockReplacement(node: ObsidianNode, state: EditorState): Decoration | undefined {
   switch (node.kind) {
     case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from), block: true });
     case "math": return Decoration.replace({ widget: new MathWidget(node.text, false, node.from) });
     case "display-math": return Decoration.replace({ widget: new MathWidget(node.text, true, node.from), block: true });
     case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
-    case "embed": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to, true), block: true });
+    case "embed": return Decoration.replace({
+      widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to, true),
+      block: !imageIsInsideListItem(state, node),
+    });
     case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false) });
-    case "markdown-image": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, true, node.to), block: true });
+    case "markdown-image": return Decoration.replace({
+      widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, true, node.to),
+      block: !imageIsInsideListItem(state, node),
+    });
     case "footnote-reference": return Decoration.replace({ widget: new FootnoteWidget(String(node.meta?.id ?? node.text), node.from, false, Number(node.meta?.definition ?? node.from)) });
     case "inline-footnote": return Decoration.replace({ widget: new FootnoteWidget(node.text, node.from) });
     case "footnote-definition": return Decoration.replace({ widget: new FootnoteWidget(node.text, node.from, true, node.from, String(node.meta?.id ?? "")), block: true });
@@ -56,8 +68,12 @@ function blockReplacement(node: ObsidianNode): Decoration | undefined {
   }
 }
 
+interface DecorationSink {
+  add(from: number, to: number, decoration: Decoration): void;
+}
+
 function addDelimited(
-  builder: RangeSetBuilder<Decoration>,
+  builder: DecorationSink,
   node: ObsidianNode,
   mark: Decoration,
 ): void {
@@ -69,7 +85,12 @@ function addDelimited(
 
 function buildDecorations(state: EditorState): DecorationSet {
   const nodes = parseObsidian(state.doc.toString());
-  const builder = new RangeSetBuilder<Decoration>();
+  const ranges: Range<Decoration>[] = [];
+  const builder: DecorationSink = {
+    add(from, to, decoration) {
+      ranges.push(decoration.range(from, to));
+    },
+  };
   let coveredUntil = -1;
   for (const node of nodes) {
     if (node.from < coveredUntil) continue;
@@ -82,7 +103,7 @@ function buildDecorations(state: EditorState): DecorationSet {
       }));
     }
     if (!isActive) {
-      const replacement = blockReplacement(node);
+      const replacement = blockReplacement(node, state);
       if (replacement) {
         builder.add(node.from, node.to, replacement);
         coveredUntil = node.to;
@@ -115,7 +136,7 @@ function buildDecorations(state: EditorState): DecorationSet {
       case "block-id": builder.add(node.from, node.to, blockId); break;
     }
   }
-  return builder.finish();
+  return Decoration.set(ranges, true);
 }
 
 export const livePreview = StateField.define<DecorationSet>({

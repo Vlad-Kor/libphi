@@ -108,7 +108,8 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .internal-link:hover, a:hover { text-decoration: underline; }
 .math-widget { color: var(--editor-fg) !important; cursor: text; }
 .math-widget mjx-container, .math-widget mjx-container * { color: var(--editor-fg) !important; }
-.math-widget svg, .math-widget svg * { fill: currentColor; stroke: currentColor; }
+.math-widget mjx-container[jax="SVG"] svg { fill: currentColor; stroke: currentColor; }
+.math-widget mjx-container[jax="SVG"] [data-c] { stroke: none; }
 .math-loading { color: var(--editor-muted); opacity: .7; }
 .math-display { display: block; width: 100%; overflow-x: auto; padding: .55em 0; text-align: center; }
 .math-edit-preview { margin-inline-start: .55em; opacity: .92; }

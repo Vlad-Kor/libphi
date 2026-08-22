@@ -633,11 +633,17 @@ static void setup_markdown_editor_signals(PdfvWindow *self,
                    G_CALLBACK(on_markdown_manual_save), self);
 }
 
+static gboolean apply_style_after_update(gpointer user_data) {
+  apply_markdown_preferences(PDFV_WINDOW(user_data));
+  return G_SOURCE_REMOVE;
+}
+
 static void on_style_dark_changed(AdwStyleManager *manager, GParamSpec *pspec,
                                   PdfvWindow *self) {
   (void)manager;
   (void)pspec;
-  apply_markdown_preferences(self);
+  g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, apply_style_after_update,
+                  g_object_ref(self), g_object_unref);
 }
 
 /* Thumbnail rendering is serialized on one worker. Each document uses a
@@ -930,7 +936,7 @@ static GListModel *workspace_create_children(gpointer item,
 }
 
 static void workspace_set_pdf_icon(GtkImage *image) {
-  GIcon *icon = g_themed_icon_new("application-pdf-symbolic");
+  GIcon *icon = g_content_type_get_symbolic_icon("application/pdf");
   gtk_image_set_from_gicon(image, icon);
   g_object_unref(icon);
 }
@@ -942,8 +948,9 @@ static void workspace_set_markdown_icon(GtkImage *image) {
 }
 
 static void tab_set_document_icon(AdwTabPage *page, gboolean markdown) {
-  GIcon *icon = g_themed_icon_new(
-      markdown ? "document-edit-symbolic" : "application-pdf-symbolic");
+  GIcon *icon = markdown
+      ? g_themed_icon_new("document-edit-symbolic")
+      : g_content_type_get_symbolic_icon("application/pdf");
   adw_tab_page_set_icon(page, icon);
   g_object_unref(icon);
 }
@@ -2238,21 +2245,36 @@ static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file) {
 static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
                                        AdwTabPage *page) {
   GtkWidget *stack = adw_tab_page_get_child(page);
-  if (!prepare_tab_for_open(self, page))
+  GFile *root = markdown_vault_root_for_file(self, file);
+  PdfvMarkdownEditor *editor =
+      g_object_get_data(G_OBJECT(stack), "markdown-editor");
+  gboolean reuse = editor && !pdfv_markdown_editor_get_dirty(editor) &&
+      g_file_equal(pdfv_markdown_editor_get_vault_root(editor), root);
+  if (reuse) {
+    GCancellable *opening =
+        g_object_get_data(G_OBJECT(stack), "open-cancellable");
+    if (opening)
+      g_cancellable_cancel(opening);
+    g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+    g_object_set_data(G_OBJECT(stack), "document-file", NULL);
+  } else if (!prepare_tab_for_open(self, page)) {
+    g_object_unref(root);
     return;
+  }
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
   tab_set_document_icon(page, TRUE);
   gchar *basename = g_file_get_basename(file);
   adw_tab_page_set_title(page, basename);
   g_free(basename);
 
-  GFile *root = markdown_vault_root_for_file(self, file);
-  PdfvMarkdownEditor *editor = pdfv_markdown_editor_new(root);
+  if (!reuse) {
+    editor = pdfv_markdown_editor_new(root);
+    setup_markdown_editor_signals(self, editor);
+    gtk_stack_add_named(GTK_STACK(stack), GTK_WIDGET(editor), "markdown");
+    g_object_set_data(G_OBJECT(stack), "markdown-editor", editor);
+    g_object_set_data(G_OBJECT(editor), "markdown-tab-page", page);
+  }
   g_object_unref(root);
-  setup_markdown_editor_signals(self, editor);
-  gtk_stack_add_named(GTK_STACK(stack), GTK_WIDGET(editor), "markdown");
-  g_object_set_data(G_OBJECT(stack), "markdown-editor", editor);
-  g_object_set_data(G_OBJECT(editor), "markdown-tab-page", page);
   apply_preferences_to_editor(self, editor);
 
   MarkdownOpenRequest *request = g_new0(MarkdownOpenRequest, 1);
