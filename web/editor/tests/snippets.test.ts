@@ -21,15 +21,27 @@ describe("LaTeX Suite snippet format", () => {
   });
 
   it("matches LaTeX Suite conceal forms without changing the source", () => {
-    const source = String.raw`\dot{x}^{2} + \sqrt{ 1-\beta^{2} } + \frac{1}{2} + \mathbb{R} + \not\in`;
+    const source = String.raw`\dot{x}^{2} + \sqrt{ 1-\beta^{2} } + \frac{1}{2} + \mathbb{R} + \not\in + \text{hällo 世界}`;
     const replacements = concealLatex(source).flat();
 
     expect(replacements.map((replacement) => replacement.text)).toEqual([
-      "x\u0307", "2", "√", "β", "2", "½", "ℝ", "∉",
+      "x\u0307", "2", "√", "β", "2", "½", "ℝ", "∉", "hällo 世界",
     ]);
     expect(replacements.filter((replacement) => replacement.elementType === "sup"))
       .toHaveLength(2);
     expect(source).toContain(String.raw`\dot{x}^{2}`);
+  });
+
+  it("keeps nested mathbb and script concealments independent", () => {
+    const source = String.raw`{\displaystyle \Gamma : V\cup E\to{2}^{\mathbb{R}^{2}} }`;
+    const replacements = concealLatex(source).flat();
+
+    expect(replacements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: String.raw`\mathbb{R}`, text: "ℝ" }),
+      expect.objectContaining({ source: "^{2}", text: "2", elementType: "sup" }),
+    ]));
+    expect(replacements.some((replacement) =>
+      replacement.source === String.raw`^{\mathbb{R}^{2}}`)).toBe(false);
   });
 
   it("conceals general fractions, operators, scripts, and bra-ket notation", () => {

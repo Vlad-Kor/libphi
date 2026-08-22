@@ -204,7 +204,18 @@ export function concealLatex(source: string, offset = 0): LatexConcealSpec[] {
     if (source[at] === "^" || source[at] === "_") {
       const operand = scriptOperand(source, at + 1);
       if (operand) {
-        const visual = visualFragment(operand.content);
+        const visual = applyVisualReplacements(
+          operand.content, concealLatex(operand.content),
+        );
+        /* A sup/sub widget can only contain text.  If its operand contains a
+         * nested sup/sub widget, leave the outer script source visible and
+         * continue walking its contents.  Otherwise the nested source (for
+         * example `\\mathbb{R}^{2}`) would be shown literally inside the
+         * outer widget and its own concealments would never be reached. */
+        if (visual == null) {
+          at++;
+          continue;
+        }
         specs.push(sourceReplacement(
           source, offset, at, operand.end, visual, "cm-latex-conceal-script",
           source[at] === "^" ? "sup" : "sub",
@@ -324,7 +335,9 @@ export function concealLatex(source: string, offset = 0): LatexConcealSpec[] {
       if (argument) {
         const content = source.slice(argument.contentFrom, argument.contentTo);
         const allowed = command.name === "text"
-          ? !/[^A-Za-z0-9-.!?() ]/.test(content)
+          /* Keep nested LaTeX editable, but do not limit ordinary text to
+           * ASCII: accented text, non-Latin scripts, and emoji are all valid. */
+          ? !/[\\{}\r\n]/u.test(content)
           : command.name === "set" || /^[A-Za-z]+$/.test(content);
         if (allowed) {
           specs.push(sourceReplacement(

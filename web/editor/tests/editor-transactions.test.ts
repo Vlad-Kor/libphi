@@ -141,7 +141,7 @@ describe("CodeMirror document transactions", () => {
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
     views.push(editor.view);
-    const text = String.raw`Formula $\frac{a_1}{b^2} + \alpha + \dot{x}^{2}$`;
+    const text = String.raw`Formula $\frac{a_1}{b^2} + \alpha + \dot{x}^{2} + {\displaystyle \Gamma : V\cup E\to{2}^{\mathbb{R}^{2}} } + \text{hällo}$`;
     editor.openDocument({
       documentId: "latex-enhancements",
       path: "latex-enhancements.md",
@@ -162,8 +162,10 @@ describe("CodeMirror document transactions", () => {
     editor.updateSettings({ latexConceal: true });
     const concealed = [...parent.querySelectorAll<HTMLElement>(".cm-latex-conceal")];
     expect(concealed.map((element) => element.textContent)).toEqual(
-      expect.arrayContaining(["(", ")", "/", "1", "α", "x\u0307", "2"]),
+      expect.arrayContaining(["(", ")", "/", "1", "α", "x\u0307", "2", "ℝ", "hällo"]),
     );
+    expect(concealed.some((element) =>
+      element.title === String.raw`^{\mathbb{R}^{2}}`)).toBe(false);
 
     const alpha = text.indexOf(String.raw`\alpha`);
     editor.view.dispatch({ selection: { anchor: alpha + 2 } });
