@@ -624,12 +624,12 @@ static gint pdf_job_compare(gconstpointer a, gconstpointer b,
   return left->sequence < right->sequence ? -1 : left->sequence > right->sequence;
 }
 
-static gpointer pdf_pool_init(gpointer user_data) {
-  (void)user_data;
+static GThreadPool *pdf_pool_new(gint max_threads, const gchar *purpose) {
   GError *error = NULL;
-  GThreadPool *pool = g_thread_pool_new(pdf_job_worker, NULL, 1, TRUE, &error);
+  GThreadPool *pool = g_thread_pool_new(pdf_job_worker, NULL, max_threads,
+                                        TRUE, &error);
   if (!pool) {
-    g_warning("Could not create PDF worker: %s",
+    g_warning("Could not create PDF %s worker: %s", purpose,
               error ? error->message : "unknown error");
     g_clear_error(&error);
     return NULL;
@@ -638,9 +638,24 @@ static gpointer pdf_pool_init(gpointer user_data) {
   return pool;
 }
 
-static GThreadPool *pdf_get_pool(void) {
-  static GOnce once = G_ONCE_INIT;
-  return g_once(&once, pdf_pool_init, NULL);
+static gpointer pdf_index_pool_init(gpointer user_data) {
+  (void)user_data;
+  return pdf_pool_new(1, "index");
+}
+
+static gpointer pdf_preview_pool_init(gpointer user_data) {
+  (void)user_data;
+  /* One worker can remain inside a slow, no-cancellation MuPDF open while
+   * the second starts the user's latest selection immediately. */
+  return pdf_pool_new(2, "preview");
+}
+
+static GThreadPool *pdf_get_pool(PdfJobType type) {
+  static GOnce index_once = G_ONCE_INIT;
+  static GOnce preview_once = G_ONCE_INIT;
+  if (type == PDF_JOB_LOAD)
+    return g_once(&preview_once, pdf_preview_pool_init, NULL);
+  return g_once(&index_once, pdf_index_pool_init, NULL);
 }
 
 static guint64 next_job_sequence(void) {
@@ -661,7 +676,7 @@ static void pdf_job_free(PdfJob *job) {
 }
 
 static gboolean queue_pdf_job(PdfJob *job) {
-  GThreadPool *pool = pdf_get_pool();
+  GThreadPool *pool = pdf_get_pool(job->type);
   if (!pool)
     return FALSE;
   job->sequence = next_job_sequence();
@@ -690,6 +705,8 @@ static gboolean index_batch_complete(gpointer user_data) {
       g_ptr_array_set_size(document->pages, batch->n_pages);
       g_hash_table_insert(self->index, g_strdup(uri), document);
     }
+    if (document->pages->len < (guint)batch->n_pages)
+      g_ptr_array_set_size(document->pages, batch->n_pages);
     for (guint i = 0; i < batch->pages->len; i++) {
       guint page_number = batch->start_page + i;
       if (page_number < document->pages->len) {
@@ -903,9 +920,20 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
   self->cache_hit_count = 0;
   self->pdf_count = scan->pdf_files->len;
   self->document_count = scan->pdf_files->len + scan->markdown_files->len;
-  for (guint i = 0; i < scan->pdf_files->len; i++)
+  for (guint i = 0; i < scan->pdf_files->len; i++) {
+    /* Publish the filename immediately. Content pages are filled by index
+     * batches later, but filename search must not wait for PDF extraction. */
+    IndexedDocument *document = g_new0(IndexedDocument, 1);
+    document->file = g_object_ref(g_ptr_array_index(scan->pdf_files, i));
+    document->relative_path = g_strdup(
+        g_ptr_array_index(scan->pdf_paths, i));
+    document->pages = g_ptr_array_new_with_free_func(
+        (GDestroyNotify)indexed_page_unref);
+    gchar *uri = g_file_get_uri(document->file);
+    g_hash_table_insert(self->index, uri, document);
     queue_index_document(self, g_ptr_array_index(scan->pdf_files, i),
                          g_ptr_array_index(scan->pdf_paths, i));
+  }
   for (guint i = 0; i < scan->markdown_files->len; i++) {
     IndexedDocument *document = g_new0(IndexedDocument, 1);
     document->file = g_object_ref(g_ptr_array_index(scan->markdown_files, i));
@@ -937,6 +965,12 @@ typedef struct {
   GPtrArray *documents;
 } SearchTaskData;
 
+typedef struct {
+  PdfvWorkspaceResultGroup *group;
+  guint filename_score;
+  guint proximity;
+} RankedSearchGroup;
+
 static void search_document_free(SearchDocument *document) {
   g_clear_object(&document->file);
   g_free(document->relative_path);
@@ -948,6 +982,13 @@ static void search_task_data_free(SearchTaskData *data) {
   g_free(data->query);
   g_ptr_array_unref(data->documents);
   g_free(data);
+}
+
+static void ranked_search_group_free(RankedSearchGroup *ranked) {
+  if (!ranked)
+    return;
+  pdfv_workspace_result_group_free(ranked->group);
+  g_free(ranked);
 }
 
 static gint search_document_compare(gconstpointer a, gconstpointer b) {
@@ -999,6 +1040,131 @@ static guint search_path_proximity(const gchar *near_path,
   g_free(near_directory);
   g_free(candidate_directory);
   return proximity;
+}
+
+/* Case-fold, decompose accents, and ignore punctuation so queries such as
+ * "audio perception", "Audio-Perception", and "audioperception" compare
+ * naturally. This key is only used for filename ranking; content search keeps
+ * its exact Unicode substring semantics. */
+static gchar *search_filename_key(const gchar *value) {
+  gchar *folded = g_utf8_casefold(value ? value : "", -1);
+  gchar *normalized = g_utf8_normalize(folded, -1, G_NORMALIZE_ALL);
+  g_free(folded);
+  GString *key = g_string_sized_new(normalized ? strlen(normalized) : 0);
+  for (const gchar *at = normalized ? normalized : ""; *at;
+       at = g_utf8_next_char(at)) {
+    gunichar ch = g_utf8_get_char(at);
+    if (g_unichar_combining_class(ch) != 0 || !g_unichar_isalnum(ch))
+      continue;
+    gchar utf8[7] = {0};
+    gint length = g_unichar_to_utf8(ch, utf8);
+    g_string_append_len(key, utf8, length);
+  }
+  g_free(normalized);
+  return g_string_free(key, FALSE);
+}
+
+static guint fuzzy_subsequence_penalty(const gchar *needle,
+                                       const gchar *candidate) {
+  guint needle_length = g_utf8_strlen(needle, -1);
+  if (needle_length < 2)
+    return G_MAXUINT;
+
+  const gchar *wanted = needle;
+  guint index = 0;
+  guint first = G_MAXUINT;
+  guint last = 0;
+  for (const gchar *at = candidate; *at && *wanted;
+       at = g_utf8_next_char(at), index++) {
+    if (g_utf8_get_char(at) != g_utf8_get_char(wanted))
+      continue;
+    if (first == G_MAXUINT)
+      first = index;
+    last = index;
+    wanted = g_utf8_next_char(wanted);
+  }
+  if (*wanted)
+    return G_MAXUINT;
+
+  guint span = last - first + 1;
+  guint gaps = span - needle_length;
+  if (gaps > MAX(3u, needle_length * 2))
+    return G_MAXUINT;
+  guint candidate_length = g_utf8_strlen(candidate, -1);
+  guint trailing = candidate_length > last ? candidate_length - last - 1 : 0;
+  return gaps * 4 + first + MIN(trailing, 12u);
+}
+
+static guint search_filename_score(const gchar *query_key,
+                                   const gchar *relative_path) {
+  if (g_utf8_strlen(query_key, -1) < 2)
+    return G_MAXUINT;
+
+  gchar *basename = g_path_get_basename(relative_path);
+  gchar *stem = g_strdup(basename);
+  gchar *dot = strrchr(stem, '.');
+  if (dot && dot != stem)
+    *dot = '\0';
+  gchar *stem_key = search_filename_key(stem);
+  gchar *basename_key = search_filename_key(basename);
+  gchar *path_key = search_filename_key(relative_path);
+  guint score = G_MAXUINT;
+
+  if (g_str_equal(stem_key, query_key)) {
+    score = 0;
+  } else if (g_str_equal(basename_key, query_key)) {
+    score = 2;
+  } else if (g_str_has_prefix(stem_key, query_key)) {
+    score = 10 + MIN((guint)(g_utf8_strlen(stem_key, -1) -
+                             g_utf8_strlen(query_key, -1)), 16u);
+  } else {
+    const gchar *found = strstr(stem_key, query_key);
+    if (found)
+      score = 32 + MIN((guint)g_utf8_strlen(stem_key,
+                                            found - stem_key), 24u);
+    else {
+      guint penalty = fuzzy_subsequence_penalty(query_key, stem_key);
+      if (penalty != G_MAXUINT)
+        score = 72 + penalty;
+      else {
+        found = strstr(path_key, query_key);
+        if (found)
+          score = 144 + MIN((guint)g_utf8_strlen(path_key,
+                                                 found - path_key), 32u);
+        else {
+          penalty = fuzzy_subsequence_penalty(query_key, path_key);
+          if (penalty != G_MAXUINT)
+            score = 192 + penalty;
+        }
+      }
+    }
+  }
+
+  g_free(path_key);
+  g_free(basename_key);
+  g_free(stem_key);
+  g_free(stem);
+  g_free(basename);
+  return score;
+}
+
+static gint ranked_search_group_compare(gconstpointer a, gconstpointer b) {
+  const RankedSearchGroup *left = *(RankedSearchGroup *const *)a;
+  const RankedSearchGroup *right = *(RankedSearchGroup *const *)b;
+  gboolean left_filename = left->filename_score != G_MAXUINT;
+  gboolean right_filename = right->filename_score != G_MAXUINT;
+  if (left_filename != right_filename)
+    return left_filename ? -1 : 1;
+  if (left->filename_score < right->filename_score)
+    return -1;
+  if (left->filename_score > right->filename_score)
+    return 1;
+  if (left->proximity < right->proximity)
+    return -1;
+  if (left->proximity > right->proximity)
+    return 1;
+  return g_utf8_collate(left->group->relative_path,
+                        right->group->relative_path);
 }
 
 static void workspace_match_free(PdfvWorkspaceMatch *match) {
@@ -1053,19 +1219,38 @@ static void search_worker(GTask *task, gpointer source_object,
   (void)source_object;
   SearchTaskData *data = task_data;
   gchar *needle = g_utf8_casefold(data->query, -1);
+  gchar *filename_needle = search_filename_key(data->query);
   GPtrArray *groups = g_ptr_array_new_with_free_func(
       (GDestroyNotify)pdfv_workspace_result_group_free);
+  GPtrArray *ranked_groups = g_ptr_array_new_with_free_func(
+      (GDestroyNotify)ranked_search_group_free);
 
   for (guint d = 0; d < data->documents->len; d++) {
     if (cancellable && g_cancellable_is_cancelled(cancellable)) {
       g_free(needle);
+      g_free(filename_needle);
       g_ptr_array_unref(groups);
+      g_ptr_array_unref(ranked_groups);
       g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_CANCELLED,
                               "Workspace search was cancelled");
       return;
     }
     SearchDocument *document = g_ptr_array_index(data->documents, d);
     PdfvWorkspaceResultGroup *group = NULL;
+    guint filename_score = search_filename_score(filename_needle,
+                                                 document->relative_path);
+    if (filename_score != G_MAXUINT) {
+      group = g_new0(PdfvWorkspaceResultGroup, 1);
+      group->file = g_object_ref(document->file);
+      group->relative_path = g_strdup(document->relative_path);
+      group->matches = g_ptr_array_new_with_free_func(
+          (GDestroyNotify)workspace_match_free);
+      PdfvWorkspaceMatch *match = g_new0(PdfvWorkspaceMatch, 1);
+      match->page = 0;
+      match->filename_match = TRUE;
+      match->snippet = g_strdup("Filename match");
+      g_ptr_array_add(group->matches, match);
+    }
     for (guint p = 0; p < document->pages->len; p++) {
       IndexedPage *page = g_ptr_array_index(document->pages, p);
       if (!page)
@@ -1087,11 +1272,23 @@ static void search_worker(GTask *task, gpointer source_object,
       match->snippet = make_snippet(page->text, page->folded, found);
       g_ptr_array_add(group->matches, match);
     }
-    if (group)
-      g_ptr_array_add(groups, group);
+    if (group) {
+      RankedSearchGroup *ranked = g_new0(RankedSearchGroup, 1);
+      ranked->group = group;
+      ranked->filename_score = filename_score;
+      ranked->proximity = document->proximity;
+      g_ptr_array_add(ranked_groups, ranked);
+    }
   }
 
+  g_ptr_array_sort(ranked_groups, ranked_search_group_compare);
+  for (guint i = 0; i < ranked_groups->len; i++) {
+    RankedSearchGroup *ranked = g_ptr_array_index(ranked_groups, i);
+    g_ptr_array_add(groups, g_steal_pointer(&ranked->group));
+  }
+  g_ptr_array_unref(ranked_groups);
   g_free(needle);
+  g_free(filename_needle);
   g_task_return_pointer(task, groups, (GDestroyNotify)g_ptr_array_unref);
 }
 

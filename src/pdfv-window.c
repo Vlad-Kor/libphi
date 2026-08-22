@@ -88,6 +88,7 @@ struct _PdfvWindow {
   /* Floating workspace search */
   GtkWidget *content_overlay;
   GtkWidget *workspace_search_overlay;
+  GtkWidget *workspace_search_card;
   GtkSearchEntry *workspace_search_entry;
   GtkRevealer *workspace_results_revealer;
   GtkListBox *workspace_results_list;
@@ -190,6 +191,10 @@ static gboolean on_workspace_root_drop(GtkDropTarget *target,
                                        const GValue *value,
                                        gdouble x, gdouble y,
                                        PdfvWindow *self);
+static void on_workspace_search_surface_pressed(GtkGestureClick *gesture,
+                                                gint n_press, gdouble x,
+                                                gdouble y,
+                                                PdfvWindow *self);
 
 static void apply_preferences_to_editor(PdfvWindow *self,
                                         PdfvMarkdownEditor *editor) {
@@ -1815,9 +1820,25 @@ static void workspace_select_result(PdfvWindow *self, gint group, gint match,
     return;
   match = CLAMP(match, 0, (gint)selected->matches->len - 1);
   gboolean group_changed = group != self->workspace_result_group;
+  gint previous_match = self->workspace_result_match;
   self->workspace_result_group = group;
   self->workspace_result_match = match;
-  workspace_results_render(self);
+  /* Most arrow-key moves stay inside the four already-rendered result rows.
+   * Selecting that row directly avoids rebuilding the whole list on every
+   * key repeat and keeps preview loading entirely in the background. */
+  gboolean edge_changed = !group_changed &&
+      (previous_match == 0 || match == 0 ||
+       previous_match + 1 == (gint)selected->matches->len ||
+       match + 1 == (gint)selected->matches->len);
+  GtkListBoxRow *row = group_changed || edge_changed
+      ? NULL : workspace_find_result_row(self, group, match);
+  if (row) {
+    self->workspace_suppress_preview = TRUE;
+    gtk_list_box_select_row(self->workspace_results_list, row);
+    self->workspace_suppress_preview = FALSE;
+  } else {
+    workspace_results_render(self);
+  }
   if (group_changed)
     workspace_results_animate(self);
   gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
@@ -1999,9 +2020,11 @@ static void workspace_results_render(PdfvWindow *self) {
       PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, m);
       AdwActionRow *row = ADW_ACTION_ROW(adw_action_row_new());
       adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
-      gchar *title = file_is_markdown(group->file)
-                         ? g_strdup("Markdown match")
-                         : g_strdup_printf("Page %d", match->page + 1);
+      gchar *title = match->filename_match
+                         ? g_file_get_basename(group->file)
+                         : file_is_markdown(group->file)
+                               ? g_strdup("Markdown match")
+                               : g_strdup_printf("Page %d", match->page + 1);
       adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
       adw_action_row_set_subtitle(row, match->snippet);
       adw_action_row_set_subtitle_lines(row, 2);
@@ -2231,6 +2254,26 @@ static void on_workspace_search_stop(GtkSearchEntry *entry,
                                      PdfvWindow *self) {
   (void)entry;
   workspace_search_close(self, FALSE);
+}
+
+static void on_workspace_search_surface_pressed(GtkGestureClick *gesture,
+                                                gint n_press, gdouble x,
+                                                gdouble y,
+                                                PdfvWindow *self) {
+  (void)n_press;
+  if (!gtk_widget_get_visible(self->workspace_search_overlay) ||
+      !self->workspace_search_card)
+    return;
+  GtkWidget *picked = gtk_widget_pick(GTK_WIDGET(self), x, y,
+                                      GTK_PICK_DEFAULT);
+  for (GtkWidget *at = picked; at; at = gtk_widget_get_parent(at)) {
+    if (at == self->workspace_search_card)
+      return;
+    if (at == GTK_WIDGET(self))
+      break;
+  }
+  workspace_search_close(self, FALSE);
+  gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 }
 
 static void workspace_search_open(PdfvWindow *self) {
@@ -5788,6 +5831,15 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_overlay_set_child(GTK_OVERLAY(self->content_overlay),
                         GTK_WIDGET(self->tab_view));
   adw_toolbar_view_set_content(self->toolbar_view, self->content_overlay);
+  GtkGesture *workspace_search_surface = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(workspace_search_surface),
+                                GDK_BUTTON_PRIMARY);
+  gtk_event_controller_set_propagation_phase(
+      GTK_EVENT_CONTROLLER(workspace_search_surface), GTK_PHASE_CAPTURE);
+  g_signal_connect(workspace_search_surface, "pressed",
+                   G_CALLBACK(on_workspace_search_surface_pressed), self);
+  gtk_widget_add_controller(GTK_WIDGET(self),
+                            GTK_EVENT_CONTROLLER(workspace_search_surface));
 
   /* Floating zoom controls */
   self->zoom_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -5841,6 +5893,7 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   GtkWidget *workspace_search_card =
       gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  self->workspace_search_card = workspace_search_card;
   GtkCssProvider *workspace_search_css = gtk_css_provider_new();
   gtk_css_provider_load_from_string(
       workspace_search_css,
@@ -5885,7 +5938,7 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   self->workspace_search_entry = GTK_SEARCH_ENTRY(gtk_search_entry_new());
   gtk_search_entry_set_placeholder_text(
-      self->workspace_search_entry, "Search PDFs and Markdown in this workspace");
+      self->workspace_search_entry, "Search filenames and document contents");
   g_signal_connect(self->workspace_search_entry, "search-changed",
                    G_CALLBACK(on_workspace_search_changed), self);
   g_signal_connect(self->workspace_search_entry, "stop-search",

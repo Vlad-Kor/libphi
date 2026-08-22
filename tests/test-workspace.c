@@ -19,12 +19,18 @@ typedef struct {
   GFile *first;
   GFile *second;
   GFile *note;
+  GFile *filename_note;
   gboolean finished;
   guint timeout_id;
   guint expected_cache_hits;
 } TestState;
 
 static gchar *test_cache_home;
+
+static gboolean wait_for_index(gpointer user_data);
+static void fuzzy_filename_search_finished(GObject *source,
+                                           GAsyncResult *result,
+                                           gpointer user_data);
 
 static gboolean test_timeout(gpointer user_data) {
   TestState *state = user_data;
@@ -43,10 +49,14 @@ static void search_finished(GObject *source, GAsyncResult *result,
       PDFV_WORKSPACE(source), result, &error);
   g_assert_no_error(error);
   g_assert_nonnull(groups);
-  g_assert_cmpuint(groups->len, ==, 3);
-  PdfvWorkspaceResultGroup *nearest = g_ptr_array_index(groups, 0);
-  g_assert_true(g_file_equal(nearest->file, state->second));
-  for (guint i = 0; i < groups->len; i++) {
+  g_assert_cmpuint(groups->len, ==, 4);
+  PdfvWorkspaceResultGroup *filename = g_ptr_array_index(groups, 0);
+  g_assert_true(g_file_equal(filename->file, state->filename_note));
+  PdfvWorkspaceMatch *filename_match = g_ptr_array_index(filename->matches, 0);
+  g_assert_true(filename_match->filename_match);
+  PdfvWorkspaceResultGroup *nearest_content = g_ptr_array_index(groups, 1);
+  g_assert_true(g_file_equal(nearest_content->file, state->second));
+  for (guint i = 1; i < groups->len; i++) {
     PdfvWorkspaceResultGroup *group = g_ptr_array_index(groups, i);
     g_assert_cmpuint(group->matches->len, >, 0);
     PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, 0);
@@ -54,6 +64,26 @@ static void search_finished(GObject *source, GAsyncResult *result,
   }
   g_assert_cmpuint(pdfv_workspace_get_cache_hit_count(state->workspace), ==,
                    state->expected_cache_hits);
+  g_ptr_array_unref(groups);
+  pdfv_workspace_search_near_async(state->workspace, "prsntovw",
+                                   state->second, NULL,
+                                   fuzzy_filename_search_finished, state);
+}
+
+static void fuzzy_filename_search_finished(GObject *source,
+                                           GAsyncResult *result,
+                                           gpointer user_data) {
+  TestState *state = user_data;
+  GError *error = NULL;
+  GPtrArray *groups = pdfv_workspace_search_finish(
+      PDFV_WORKSPACE(source), result, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(groups);
+  g_assert_cmpuint(groups->len, ==, 1);
+  PdfvWorkspaceResultGroup *group = g_ptr_array_index(groups, 0);
+  g_assert_true(g_file_equal(group->file, state->filename_note));
+  PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, 0);
+  g_assert_true(match->filename_match);
   g_ptr_array_unref(groups);
   state->finished = TRUE;
   if (state->timeout_id) {
@@ -63,9 +93,27 @@ static void search_finished(GObject *source, GAsyncResult *result,
   g_main_loop_quit(state->loop);
 }
 
+static void initial_filename_search_finished(GObject *source,
+                                             GAsyncResult *result,
+                                             gpointer user_data) {
+  TestState *state = user_data;
+  GError *error = NULL;
+  GPtrArray *groups = pdfv_workspace_search_finish(
+      PDFV_WORKSPACE(source), result, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(groups);
+  g_assert_cmpuint(groups->len, ==, 1);
+  PdfvWorkspaceResultGroup *group = g_ptr_array_index(groups, 0);
+  g_assert_true(g_file_equal(group->file, state->second));
+  PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, 0);
+  g_assert_true(match->filename_match);
+  g_ptr_array_unref(groups);
+  g_timeout_add(10, wait_for_index, state);
+}
+
 static gboolean wait_for_index(gpointer user_data) {
   TestState *state = user_data;
-  if (pdfv_workspace_get_indexed_count(state->workspace) < 3)
+  if (pdfv_workspace_get_indexed_count(state->workspace) < 4)
     return G_SOURCE_CONTINUE;
   pdfv_workspace_search_near_async(state->workspace, "präsentiert",
                                    state->second, NULL, search_finished,
@@ -81,10 +129,10 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
                                            &error));
   g_assert_no_error(error);
   g_assert_cmpuint(pdfv_workspace_get_pdf_count(state->workspace), ==, 2);
-  g_assert_cmpuint(pdfv_workspace_get_document_count(state->workspace), ==, 3);
+  g_assert_cmpuint(pdfv_workspace_get_document_count(state->workspace), ==, 4);
 
   GListModel *roots = pdfv_workspace_get_items(state->workspace);
-  g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 3);
+  g_assert_cmpuint(g_list_model_get_n_items(roots), ==, 4);
   guint folder_count = 0;
   for (guint i = 0; i < g_list_model_get_n_items(roots); i++) {
     PdfvWorkspaceItem *item = g_list_model_get_item(roots, i);
@@ -100,7 +148,11 @@ static void workspace_loaded(GObject *source, GAsyncResult *result,
     g_object_unref(item);
   }
   g_assert_cmpuint(folder_count, ==, 2);
-  g_timeout_add(10, wait_for_index, state);
+  /* PDF filenames are searchable as soon as the scan completes, before
+   * background text extraction has necessarily produced its first page. */
+  pdfv_workspace_search_near_async(state->workspace, "scnd",
+                                   state->second, NULL,
+                                   initial_filename_search_finished, state);
 }
 
 static void load_search_and_wait(TestState *state, guint expected_cache_hits) {
@@ -185,6 +237,13 @@ static void test_workspace_search(void) {
       &error));
   g_assert_no_error(error);
   g_free(note_path);
+  state.filename_note = g_file_get_child(
+      state.root, "Präsentiert Overview.md");
+  gchar *filename_note_path = g_file_get_path(state.filename_note);
+  g_assert_true(g_file_set_contents(filename_note_path, "# Filename only\n",
+                                    -1, &error));
+  g_assert_no_error(error);
+  g_free(filename_note_path);
   GFile *fixture =
       g_file_new_for_path(TEST_DATA_DIR "/separate-diacritic.pdf");
   g_assert_true(g_file_copy(fixture, state.first, G_FILE_COPY_NONE, NULL, NULL,
@@ -244,6 +303,8 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.note, NULL, &error));
   g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.filename_note, NULL, &error));
+  g_assert_no_error(error);
   g_assert_true(g_file_delete(state.trashed_note, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.trash, NULL, &error));
@@ -259,6 +320,7 @@ static void test_workspace_search(void) {
   g_object_unref(state.second);
   g_object_unref(state.first);
   g_object_unref(state.note);
+  g_object_unref(state.filename_note);
   g_object_unref(state.trashed_note);
   g_object_unref(state.trash);
   g_object_unref(state.nested);

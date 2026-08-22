@@ -49,6 +49,7 @@ guint pdfv_workspace_get_cache_hit_count(PdfvWorkspace *self);
 typedef struct {
   gint page;
   gchar *snippet;
+  gboolean filename_match;
 } PdfvWorkspaceMatch;
 
 typedef struct {
@@ -72,8 +73,9 @@ GPtrArray *pdfv_workspace_search_finish(PdfvWorkspace *self,
                                         GAsyncResult *result,
                                         GError **error);
 
-/* Document creation, layout preparation, and indexing all use the same
- * exclusive worker. Preview loads have priority over background indexing. */
+/* Preview loads run independently from the single background-index worker.
+ * A small preview pool lets a newer request overtake an old PDF open that
+ * cannot be interrupted inside MuPDF; cancelled completions are discarded. */
 void pdfv_workspace_load_document_async(GFile *file, gint target_page,
                                         GCancellable *cancellable,
                                         GAsyncReadyCallback callback,
