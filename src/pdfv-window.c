@@ -680,9 +680,18 @@ static void on_markdown_create_link(PdfvMarkdownEditor *editor,
   g_object_unref(root);
 }
 
+static void on_markdown_document_presented(PdfvMarkdownEditor *editor,
+                                           PdfvWindow *self) {
+  (void)editor;
+  if (gtk_widget_get_visible(self->workspace_search_overlay))
+    gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
+}
+
 static void setup_markdown_editor_signals(PdfvWindow *self,
                                           PdfvMarkdownEditor *editor) {
   g_signal_connect(editor, "ready", G_CALLBACK(on_markdown_ready), self);
+  g_signal_connect(editor, "document-presented",
+                   G_CALLBACK(on_markdown_document_presented), self);
   g_signal_connect(editor, "open-file", G_CALLBACK(on_markdown_open_file),
                    self);
   g_signal_connect(editor, "open-external-uri",
@@ -1737,8 +1746,15 @@ static void workspace_preview_selected(PdfvWindow *self) {
     return;
   /* Markdown results open on activation. Creating editable WebViews while the
    * user only arrows through search results would be wasteful and surprising. */
-  if (file_is_markdown(group->file))
+  if (file_is_markdown(group->file)) {
+    /* A timer scheduled for the previous PDF consults the current selection
+     * when it fires. Cancel it here or it would accidentally turn this
+     * Markdown result into a preview and let its WebView steal key focus. */
+    workspace_preview_cancel_delay(self);
+    if (self->workspace_preview_cancellable)
+      workspace_preview_cancel_load(self);
     return;
+  }
 
   self->workspace_preview_page = match->page;
   gboolean target_changed =
@@ -2835,8 +2851,13 @@ static void on_markdown_opened(GObject *source, GAsyncResult *result,
       update_zoom_info(self);
       update_sidebar_button(self);
       update_markdown_actions(self);
-      pdfv_markdown_editor_focus(request->editor);
-      if (request->fragment)
+      gboolean searching = gtk_widget_get_visible(
+          self->workspace_search_overlay);
+      if (searching)
+        gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
+      else
+        pdfv_markdown_editor_focus(request->editor);
+      if (!searching && request->fragment)
         pdfv_markdown_editor_reveal_fragment(request->editor,
                                              request->fragment);
     }

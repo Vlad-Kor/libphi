@@ -76,6 +76,7 @@ struct _PdfvMarkdownEditor {
 
 enum {
   SIGNAL_READY,
+  SIGNAL_DOCUMENT_PRESENTED,
   SIGNAL_DIRTY_CHANGED,
   SIGNAL_OPEN_FILE,
   SIGNAL_CREATE_LINK,
@@ -744,8 +745,11 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     if (payload && json_object_get_boolean_member_with_default(
                        payload, "conflict", FALSE))
       g_signal_emit(self, editor_signals[SIGNAL_CONFLICT], 0);
-    else if (self->content_stack)
-      gtk_stack_set_visible_child_name(self->content_stack, "editor");
+    else {
+      if (self->content_stack)
+        gtk_stack_set_visible_child_name(self->content_stack, "editor");
+      g_signal_emit(self, editor_signals[SIGNAL_DOCUMENT_PRESENTED], 0);
+    }
   } else if (g_str_has_prefix(type, "completion/")) {
     handle_completion(self, type, id, payload);
   } else if (g_str_has_prefix(type, "link/")) {
@@ -1360,6 +1364,9 @@ static void pdfv_markdown_editor_class_init(PdfvMarkdownEditorClass *klass) {
   editor_signals[SIGNAL_READY] = g_signal_new(
       "ready", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL,
       NULL, G_TYPE_NONE, 0);
+  editor_signals[SIGNAL_DOCUMENT_PRESENTED] = g_signal_new(
+      "document-presented", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0,
+      NULL, NULL, NULL, G_TYPE_NONE, 0);
   editor_signals[SIGNAL_DIRTY_CHANGED] = g_signal_new(
       "dirty-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL,
       NULL, NULL, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
