@@ -474,7 +474,7 @@ static void on_markdown_dirty_changed(PdfvMarkdownEditor *editor,
 static void show_autosave_toast(PdfvWindow *self) {
   if (!self->toast_overlay)
     return;
-  AdwToast *toast = adw_toast_new("Saved — Phi autosaves your documents");
+  AdwToast *toast = adw_toast_new("Phi autosaves your documents!");
   adw_toast_set_timeout(toast, 3);
   adw_toast_overlay_add_toast(self->toast_overlay, toast);
 }
