@@ -233,6 +233,35 @@ void pdfv_settings_set_workspace_tabs(
   g_free(group);
 }
 
+gchar **pdfv_settings_dup_workspace_expanded_folders(
+    PdfvSettings *self, GFile *workspace, gsize *length) {
+  g_return_val_if_fail(self != NULL, NULL);
+  if (length)
+    *length = 0;
+  if (!workspace)
+    return NULL;
+  gchar *group = workspace_group(workspace);
+  gchar **folders = g_key_file_get_string_list(
+      self->file, group, "expanded-folders", length, NULL);
+  g_free(group);
+  return folders;
+}
+
+void pdfv_settings_set_workspace_expanded_folders(
+    PdfvSettings *self, GFile *workspace,
+    const gchar *const *relative_paths, gsize length) {
+  g_return_if_fail(self != NULL);
+  g_return_if_fail(G_IS_FILE(workspace));
+  gchar *group = workspace_group(workspace);
+  if (relative_paths && length > 0) {
+    g_key_file_set_string_list(self->file, group, "expanded-folders",
+                               relative_paths, length);
+  } else {
+    g_key_file_remove_key(self->file, group, "expanded-folders", NULL);
+  }
+  g_free(group);
+}
+
 void pdfv_settings_copy(PdfvSettings *destination,
                         PdfvSettings *source) {
   g_return_if_fail(destination != NULL);

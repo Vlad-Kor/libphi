@@ -76,7 +76,7 @@ meson compile -C _build-release
 
 The generated bundle is installed under `share/phi/editor/` and works fully offline. LaTeX snippets are configured at runtime in **Settings**, not read from files in `doc/` during the build.
 
-Open either a PDF or Markdown file directly, or use **Open Folder…** to browse both formats in the native workspace sidebar. When a previously used workspace is opened again, Phi restores its open PDF/Markdown tabs and the active tab. This session is kept in Phi's user configuration, not in the workspace. When a note is inside an Obsidian vault, Phi discovers the nearest parent containing `.obsidian/` and uses that directory for wikilinks and attachment lookup.
+Open either a PDF or Markdown file directly, or use **Open Folder…** to browse both formats in the native workspace sidebar. When a previously used workspace is opened again, Phi restores its open PDF/Markdown tabs, the active tab, and which workspace folders were expanded. This session is kept in Phi's user configuration, not in the workspace. When a note is inside an Obsidian vault, Phi discovers the nearest parent containing `.obsidian/` and uses that directory for wikilinks and attachment lookup.
 
 Pasted images are saved beside the current note by default. **Settings → Pasted images** can select a fixed folder for the current workspace; this per-workspace choice is stored in Phi’s user configuration, not in the workspace. Rendered images remain visible when clicked and provide hover controls for editing their source or dragging their width. In the workspace tree, primary click reuses a browse tab while middle click opens a persistent tab.
 

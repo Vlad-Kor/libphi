@@ -42,6 +42,11 @@ void pdfv_settings_set_workspace_tabs(
     PdfvSettings *self, GFile *workspace,
     const gchar *const *relative_paths, gsize length,
     const gchar *active_relative_path);
+gchar **pdfv_settings_dup_workspace_expanded_folders(
+    PdfvSettings *self, GFile *workspace, gsize *length);
+void pdfv_settings_set_workspace_expanded_folders(
+    PdfvSettings *self, GFile *workspace,
+    const gchar *const *relative_paths, gsize length);
 void pdfv_settings_copy(PdfvSettings *destination,
                         PdfvSettings *source);
 

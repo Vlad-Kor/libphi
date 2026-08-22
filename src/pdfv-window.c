@@ -68,6 +68,7 @@ struct _PdfvWindow {
   gboolean workspace_search_running;
   gboolean workspace_index_dirty;
   gboolean workspace_suppress_preview;
+  GHashTable *workspace_expanded_paths; /* Relative folder paths */
   GHashTable *workspace_document_cache; /* URI -> PhiDocument */
   GQueue workspace_document_cache_order; /* URI strings, oldest first */
 
@@ -996,6 +997,90 @@ static GListModel *workspace_create_children(gpointer item,
   return g_object_ref(pdfv_workspace_item_get_children(workspace_item));
 }
 
+static gint workspace_path_compare(gconstpointer a, gconstpointer b) {
+  return g_strcmp0(*(const gchar *const *)a, *(const gchar *const *)b);
+}
+
+static void save_workspace_tree_session(PdfvWindow *self) {
+  if (!self->workspace || !self->workspace_expanded_paths)
+    return;
+  GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+  GHashTableIter iter;
+  gpointer key = NULL;
+  g_hash_table_iter_init(&iter, self->workspace_expanded_paths);
+  while (g_hash_table_iter_next(&iter, &key, NULL))
+    g_ptr_array_add(paths, g_strdup(key));
+  g_ptr_array_sort(paths, workspace_path_compare);
+  pdfv_settings_set_workspace_expanded_folders(
+      self->settings, pdfv_workspace_get_folder(self->workspace),
+      (const gchar *const *)paths->pdata, paths->len);
+  GError *error = NULL;
+  if (!pdfv_settings_save(self->settings, &error)) {
+    g_debug("Could not save workspace tree state: %s",
+            error ? error->message : "unknown error");
+  }
+  g_clear_error(&error);
+  g_ptr_array_unref(paths);
+}
+
+static void load_workspace_tree_session(PdfvWindow *self, GFile *folder) {
+  g_hash_table_remove_all(self->workspace_expanded_paths);
+  gsize count = 0;
+  gchar **paths = pdfv_settings_dup_workspace_expanded_folders(
+      self->settings, folder, &count);
+  for (gsize i = 0; paths && i < count; i++) {
+    if (paths[i] && *paths[i])
+      g_hash_table_add(self->workspace_expanded_paths, g_strdup(paths[i]));
+  }
+  g_strfreev(paths);
+}
+
+static void restore_workspace_tree_session(PdfvWindow *self) {
+  if (!self->workspace_tree)
+    return;
+  /* Expanding an ancestor inserts its children into the flattened model, so
+   * re-read the item count on every iteration to restore nested folders too. */
+  for (guint position = 0;
+       position < g_list_model_get_n_items(G_LIST_MODEL(self->workspace_tree));
+       position++) {
+    GtkTreeListRow *row = gtk_tree_list_model_get_row(
+        self->workspace_tree, position);
+    if (!row)
+      continue;
+    PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+    if (pdfv_workspace_item_is_folder(item) &&
+        g_hash_table_contains(
+            self->workspace_expanded_paths,
+            pdfv_workspace_item_get_relative_path(item)))
+      gtk_tree_list_row_set_expanded(row, TRUE);
+    g_object_unref(item);
+    g_object_unref(row);
+  }
+}
+
+static void on_workspace_row_expanded_changed(GtkTreeListRow *row,
+                                               GParamSpec *pspec,
+                                               PdfvWindow *self) {
+  (void)pspec;
+  if (!self->workspace)
+    return;
+  PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+  if (!pdfv_workspace_item_is_folder(item)) {
+    g_object_unref(item);
+    return;
+  }
+  const gchar *path = pdfv_workspace_item_get_relative_path(item);
+  if (gtk_tree_list_row_get_expanded(row)) {
+    g_hash_table_add(self->workspace_expanded_paths, g_strdup(path));
+    /* Child rows may have been recreated after their parent was collapsed. */
+    restore_workspace_tree_session(self);
+  } else {
+    g_hash_table_remove(self->workspace_expanded_paths, path);
+  }
+  g_object_unref(item);
+  save_workspace_tree_session(self);
+}
+
 static void workspace_set_pdf_icon(GtkImage *image) {
   GIcon *icon = g_content_type_get_symbolic_icon("application/pdf");
   gtk_image_set_from_gicon(image, icon);
@@ -1060,7 +1145,6 @@ static void workspace_factory_bind(GtkSignalListItemFactory *factory,
                                    GtkListItem *list_item,
                                    PdfvWindow *self) {
   (void)factory;
-  (void)self;
   GtkTreeListRow *row = GTK_TREE_LIST_ROW(gtk_list_item_get_item(list_item));
   GtkTreeExpander *expander =
       GTK_TREE_EXPANDER(gtk_list_item_get_child(list_item));
@@ -1084,6 +1168,13 @@ static void workspace_factory_bind(GtkSignalListItemFactory *factory,
                              ? NULL
                              : g_object_ref(pdfv_workspace_item_get_file(item)),
                          g_object_unref);
+  if (pdfv_workspace_item_is_folder(item)) {
+    gulong handler = g_signal_connect(
+        row, "notify::expanded",
+        G_CALLBACK(on_workspace_row_expanded_changed), self);
+    g_object_set_data(G_OBJECT(list_item), "workspace-expanded-handler",
+                      GSIZE_TO_POINTER(handler));
+  }
   g_object_unref(item);
 }
 
@@ -1094,6 +1185,12 @@ static void workspace_factory_unbind(GtkSignalListItemFactory *factory,
   (void)self;
   GtkTreeExpander *expander =
       GTK_TREE_EXPANDER(gtk_list_item_get_child(list_item));
+  GtkTreeListRow *row = gtk_tree_expander_get_list_row(expander);
+  gulong handler = GPOINTER_TO_SIZE(g_object_get_data(
+      G_OBJECT(list_item), "workspace-expanded-handler"));
+  if (row && handler && g_signal_handler_is_connected(row, handler))
+    g_signal_handler_disconnect(row, handler);
+  g_object_set_data(G_OBJECT(list_item), "workspace-expanded-handler", NULL);
   g_object_set_data(G_OBJECT(expander), "workspace-file", NULL);
   gtk_tree_expander_set_list_row(expander, NULL);
 }
@@ -2800,6 +2897,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   gtk_single_selection_set_model(self->workspace_selection, NULL);
   g_clear_object(&self->workspace_tree);
   g_clear_object(&self->workspace);
+  g_hash_table_remove_all(self->workspace_expanded_paths);
   g_clear_object(&self->workspace_scan_cancellable);
   g_clear_object(&self->workspace_search_cancellable);
   g_clear_object(&self->workspace_preview_cancellable);
@@ -2841,10 +2939,13 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
   if (workspace == self->workspace && loaded) {
     gtk_widget_set_visible(self->workspace_loading_spinner, FALSE);
     gtk_stack_set_visible_child_name(self->workspace_content_stack, "files");
+    load_workspace_tree_session(self,
+                                pdfv_workspace_get_folder(workspace));
     g_clear_object(&self->workspace_tree);
     self->workspace_tree = gtk_tree_list_model_new(
         g_object_ref(pdfv_workspace_get_items(workspace)), FALSE, FALSE,
         workspace_create_children, self, NULL);
+    restore_workspace_tree_session(self);
     gtk_single_selection_set_model(
         self->workspace_selection, G_LIST_MODEL(self->workspace_tree));
     adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
@@ -3769,6 +3870,7 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
   workspace_document_cache_clear(self);
   g_clear_pointer(&self->workspace_document_cache, g_hash_table_unref);
+  g_clear_pointer(&self->workspace_expanded_paths, g_hash_table_unref);
   g_clear_object(&self->file_menu_section);
   g_clear_object(&self->workspace_menu_section);
   g_clear_object(&self->zoom_menu_section);
@@ -3789,6 +3891,8 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->settings = pdfv_settings_new();
+  self->workspace_expanded_paths =
+      g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
   self->workspace_document_cache =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
 

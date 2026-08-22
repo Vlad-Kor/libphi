@@ -21,8 +21,11 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_workspace_attachment_policy(
       settings, workspace_b, FALSE, NULL);
   const gchar *tabs[] = {"AI/Introduction.md", "papers/vision.pdf"};
+  const gchar *expanded[] = {"AI", "AI/Zusammenfassung"};
   pdfv_settings_set_workspace_tabs(settings, workspace_a, tabs,
                                    G_N_ELEMENTS(tabs), tabs[0]);
+  pdfv_settings_set_workspace_expanded_folders(
+      settings, workspace_a, expanded, G_N_ELEMENTS(expanded));
   pdfv_settings_set_markdown_font_scale(settings, 1.25);
   pdfv_settings_set_readable_line_width(settings, FALSE);
   GError *error = NULL;
@@ -46,12 +49,22 @@ static void test_workspace_attachment_policy(void) {
       settings, workspace_a, &tab_count);
   gchar *active_tab = pdfv_settings_dup_workspace_active_tab(
       settings, workspace_a);
+  gsize expanded_count = 0;
+  gchar **restored_expanded =
+      pdfv_settings_dup_workspace_expanded_folders(
+          settings, workspace_a, &expanded_count);
   g_assert_cmpuint(tab_count, ==, G_N_ELEMENTS(tabs));
   g_assert_cmpstr(restored_tabs[0], ==, tabs[0]);
   g_assert_cmpstr(restored_tabs[1], ==, tabs[1]);
   g_assert_cmpstr(active_tab, ==, tabs[0]);
+  g_assert_cmpuint(expanded_count, ==, G_N_ELEMENTS(expanded));
+  g_assert_cmpstr(restored_expanded[0], ==, expanded[0]);
+  g_assert_cmpstr(restored_expanded[1], ==, expanded[1]);
   g_assert_null(pdfv_settings_dup_workspace_open_tabs(
       settings, workspace_b, NULL));
+  g_assert_null(pdfv_settings_dup_workspace_expanded_folders(
+      settings, workspace_b, NULL));
+  g_strfreev(restored_expanded);
   g_strfreev(restored_tabs);
   g_free(active_tab);
   g_free(restored);
