@@ -36,6 +36,7 @@ export interface EditorSettings {
   sourceMode?: boolean;
   lineWrapping?: boolean;
   latexConceal?: boolean;
+  readableLineWidth?: boolean;
   allowRemoteImages?: boolean;
   executableSnippets?: boolean;
   snippets?: string;

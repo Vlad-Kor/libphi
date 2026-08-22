@@ -80,6 +80,8 @@ Open either a PDF or Markdown file directly, or use **Open Folder…** to browse
 
 Pasted images are saved beside the current note by default. **Settings → Pasted images** can select a fixed folder for the current workspace; this per-workspace choice is stored in Phi’s user configuration, not in the workspace. Rendered images remain visible when clicked and provide hover controls for editing their source or dragging their width. In the workspace tree, primary click reuses a browse tab while middle click opens a persistent tab.
 
+Markdown notes use a centered readable line width by default. This can be disabled under **Settings → Appearance → Readable line width** when a full-width editor is preferred.
+
 Markdown is autosaved after edits and flushed again before a tab or window is allowed to close. `Ctrl+S` remains available as an immediate flush and shows a reminder that autosave is active. Workspace search (`Ctrl+Shift+F`) indexes both PDFs and Markdown notes.
 
 The installed desktop file advertises `application/pdf`, `text/markdown`, and `text/x-markdown`, so GNOME Files can offer Phi for `.pdf` and `.md` files. After a manual system-wide install, refresh desktop associations if the new MIME choices have not appeared yet:

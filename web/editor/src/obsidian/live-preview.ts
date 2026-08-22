@@ -1,5 +1,5 @@
 import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 import { parseObsidian, selectionTouches, type ObsidianNode } from "./parser";
 import {
   CalloutWidget,
@@ -43,12 +43,26 @@ function blockReplacement(node: ObsidianNode, state: EditorState): Decoration | 
     case "display-math": return Decoration.replace({ widget: new MathWidget(node.text, true, node.from), block: true });
     case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
     case "embed": return Decoration.replace({
-      widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to, true),
+      widget: new LinkWidget(
+        String(node.meta?.target ?? node.text),
+        String(node.meta?.alias ?? node.text),
+        node.from,
+        node.to,
+        true,
+        !imageIsInsideListItem(state, node),
+      ),
       block: !imageIsInsideListItem(state, node),
     });
     case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false) });
     case "markdown-image": return Decoration.replace({
-      widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, true, node.to),
+      widget: new MarkdownLinkWidget(
+        String(node.meta?.target ?? ""),
+        String(node.meta?.alias ?? ""),
+        node.from,
+        true,
+        node.to,
+        !imageIsInsideListItem(state, node),
+      ),
       block: !imageIsInsideListItem(state, node),
     });
     case "footnote-reference": return Decoration.replace({ widget: new FootnoteWidget(String(node.meta?.id ?? node.text), node.from, false, Number(node.meta?.definition ?? node.from)) });
@@ -95,13 +109,6 @@ function buildDecorations(state: EditorState): DecorationSet {
   for (const node of nodes) {
     if (node.from < coveredUntil) continue;
     const isActive = active(node, state);
-    if (isActive && (node.kind === "math" || node.kind === "display-math")) {
-      builder.add(node.to, node.to, Decoration.widget({
-        widget: new MathWidget(node.text, node.kind === "display-math", node.from, undefined, true),
-        side: 1,
-        block: node.kind === "display-math",
-      }));
-    }
     if (!isActive) {
       const replacement = blockReplacement(node, state);
       if (replacement) {
@@ -139,6 +146,38 @@ function buildDecorations(state: EditorState): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
+function buildMathTooltips(state: EditorState): readonly Tooltip[] {
+  const nodes = parseObsidian(state.doc.toString()).filter(
+    (node) => node.kind === "math" || node.kind === "display-math",
+  );
+  const seen = new Set<number>();
+  const tooltips: Tooltip[] = [];
+  for (const selection of state.selection.ranges) {
+    const node = nodes.find((candidate) => selectionTouches(candidate, selection));
+    if (!node || seen.has(node.from)) continue;
+    seen.add(node.from);
+    tooltips.push({
+      pos: node.from,
+      end: node.to,
+      above: true,
+      strictSide: true,
+      create(view) {
+        const dom = document.createElement("div");
+        dom.className = "math-preview-bubble";
+        dom.append(new MathWidget(
+          node.text,
+          node.kind === "display-math",
+          node.from,
+          undefined,
+          true,
+        ).toDOM(view));
+        return { dom };
+      },
+    });
+  }
+  return tooltips;
+}
+
 export const livePreview = StateField.define<DecorationSet>({
   create: buildDecorations,
   update(value, transaction) {
@@ -147,5 +186,8 @@ export const livePreview = StateField.define<DecorationSet>({
       return buildDecorations(transaction.state);
     return value;
   },
-  provide: (field) => EditorView.decorations.from(field),
+  provide: (field) => [
+    EditorView.decorations.from(field),
+    showTooltip.computeN([field], (state) => buildMathTooltips(state)),
+  ],
 });

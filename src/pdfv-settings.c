@@ -11,6 +11,7 @@
 
 struct _PdfvSettings {
   gdouble markdown_font_scale;
+  gboolean readable_line_width;
   gboolean allow_remote_images;
   gchar *latex_snippets;
   GKeyFile *file;
@@ -35,6 +36,7 @@ static gchar *settings_filename(void) {
 PdfvSettings *pdfv_settings_new(void) {
   PdfvSettings *self = g_new0(PdfvSettings, 1);
   self->markdown_font_scale = 1.0;
+  self->readable_line_width = TRUE;
   self->latex_snippets = g_strdup("");
   self->file = g_key_file_new();
 
@@ -46,6 +48,11 @@ PdfvSettings *pdfv_settings_new(void) {
                                           "font-scale", &error);
     if (!error)
       self->markdown_font_scale = CLAMP(scale, 0.6875, 2.0);
+    g_clear_error(&error);
+    gboolean readable = g_key_file_get_boolean(
+        self->file, SETTINGS_GROUP, "readable-line-width", &error);
+    if (!error)
+      self->readable_line_width = readable;
     g_clear_error(&error);
     self->allow_remote_images = g_key_file_get_boolean(
         self->file, SETTINGS_GROUP, "allow-remote-images", &error);
@@ -73,6 +80,8 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
   g_return_val_if_fail(self != NULL, FALSE);
   g_key_file_set_double(self->file, SETTINGS_GROUP, "font-scale",
                         self->markdown_font_scale);
+  g_key_file_set_boolean(self->file, SETTINGS_GROUP, "readable-line-width",
+                         self->readable_line_width);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "allow-remote-images",
                          self->allow_remote_images);
   g_key_file_set_string(self->file, SETTINGS_GROUP, "latex-snippets",
@@ -102,6 +111,17 @@ void pdfv_settings_set_markdown_font_scale(PdfvSettings *self,
                                            gdouble scale) {
   g_return_if_fail(self != NULL);
   self->markdown_font_scale = CLAMP(scale, 0.6875, 2.0);
+}
+
+gboolean pdfv_settings_get_readable_line_width(PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, TRUE);
+  return self->readable_line_width;
+}
+
+void pdfv_settings_set_readable_line_width(PdfvSettings *self,
+                                           gboolean enabled) {
+  g_return_if_fail(self != NULL);
+  self->readable_line_width = enabled;
 }
 
 gboolean pdfv_settings_get_allow_remote_images(PdfvSettings *self) {
@@ -170,6 +190,7 @@ void pdfv_settings_copy(PdfvSettings *destination,
   g_return_if_fail(destination != NULL);
   g_return_if_fail(source != NULL);
   destination->markdown_font_scale = source->markdown_font_scale;
+  destination->readable_line_width = source->readable_line_width;
   destination->allow_remote_images = source->allow_remote_images;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   gsize length = 0;

@@ -101,9 +101,11 @@ function interactiveImage(
   image: HTMLImageElement,
   from: number,
   to: number,
+  block: boolean,
 ): HTMLElement {
-  const container = document.createElement("span");
-  container.className = "image-widget";
+  const container = document.createElement(block ? "div" : "span");
+  container.className = `image-widget image-widget-${block ? "block" : "inline"}`;
+  image.addEventListener("load", () => view.requestMeasure());
   const source = document.createElement("button");
   source.type = "button";
   source.className = "image-source-button";
@@ -171,12 +173,13 @@ export class LinkWidget extends WidgetType {
     readonly from: number,
     readonly to: number,
     readonly embed = false,
+    readonly block = true,
   ) { super(); }
 
   eq(other: LinkWidget): boolean {
     return other.target === this.target && other.label === this.label &&
       other.from === this.from && other.to === this.to &&
-      other.embed === this.embed;
+      other.embed === this.embed && other.block === this.block;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -226,7 +229,7 @@ export class LinkWidget extends WidgetType {
           reportError(error, "image");
           image.replaceWith(imageError(error));
         });
-      return interactiveImage(view, image, this.from, this.to);
+      return interactiveImage(view, image, this.from, this.to, this.block);
     }
     if (["mp3", "ogg", "wav", "flac", "m4a"].includes(extension ?? "")) {
       const audio = document.createElement("audio");
@@ -287,12 +290,13 @@ export class MarkdownLinkWidget extends WidgetType {
     readonly from: number,
     readonly image: boolean,
     readonly to = from,
+    readonly block = true,
   ) { super(); }
 
   eq(other: MarkdownLinkWidget): boolean {
     return other.target === this.target && other.label === this.label &&
       other.from === this.from && other.image === this.image &&
-      other.to === this.to;
+      other.to === this.to && other.block === this.block;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -335,7 +339,7 @@ export class MarkdownLinkWidget extends WidgetType {
           image.replaceWith(imageError(error));
         });
       }
-      return interactiveImage(view, image, this.from, this.to);
+      return interactiveImage(view, image, this.from, this.to, this.block);
     }
 
     const link = document.createElement("a");

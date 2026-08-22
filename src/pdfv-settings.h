@@ -18,6 +18,9 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error);
 gdouble pdfv_settings_get_markdown_font_scale(PdfvSettings *self);
 void pdfv_settings_set_markdown_font_scale(PdfvSettings *self,
                                            gdouble scale);
+gboolean pdfv_settings_get_readable_line_width(PdfvSettings *self);
+void pdfv_settings_set_readable_line_width(PdfvSettings *self,
+                                           gboolean enabled);
 gboolean pdfv_settings_get_allow_remote_images(PdfvSettings *self);
 void pdfv_settings_set_allow_remote_images(PdfvSettings *self,
                                            gboolean allowed);

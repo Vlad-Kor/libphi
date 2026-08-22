@@ -60,6 +60,7 @@ struct _PdfvMarkdownEditor {
   gboolean theme_set;
   gboolean settings_set;
   gboolean allow_remote_images;
+  gboolean readable_line_width;
   gdouble font_scale;
   gchar *snippets;
   gchar *theme_background;
@@ -165,6 +166,8 @@ static void send_settings(PdfvMarkdownEditor *self) {
   JsonObject *payload = json_object_new_owned();
   json_object_set_boolean_member(payload, "allowRemoteImages",
                                  self->allow_remote_images);
+  json_object_set_boolean_member(payload, "readableLineWidth",
+                                 self->readable_line_width);
   json_object_set_string_member(payload, "snippets",
                                 self->snippets ? self->snippets : "");
   pdfv_markdown_editor_bridge_send(self->bridge, "settings/update", NULL,
@@ -942,7 +945,7 @@ void pdfv_markdown_editor_open_file_async(
     GAsyncReadyCallback callback, gpointer user_data) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
   g_return_if_fail(G_IS_FILE(file));
-  if (self->content_stack)
+  if (self->content_stack && !self->ready)
     gtk_stack_set_visible_child_name(self->content_stack, "loading");
   GTask *task = g_task_new(self, cancellable, callback, user_data);
   g_task_set_source_tag(task, pdfv_markdown_editor_open_file_async);
@@ -1173,6 +1176,14 @@ void pdfv_markdown_editor_set_remote_images_allowed(
     PdfvMarkdownEditor *self, gboolean allowed) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
   self->allow_remote_images = allowed;
+  self->settings_set = TRUE;
+  send_settings(self);
+}
+
+void pdfv_markdown_editor_set_readable_line_width(
+    PdfvMarkdownEditor *self, gboolean enabled) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  self->readable_line_width = enabled;
   self->settings_set = TRUE;
   send_settings(self);
 }

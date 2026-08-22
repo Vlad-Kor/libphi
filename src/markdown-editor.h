@@ -47,6 +47,8 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
                                     gboolean dark, gdouble font_scale);
 void pdfv_markdown_editor_set_remote_images_allowed(
     PdfvMarkdownEditor *self, gboolean allowed);
+void pdfv_markdown_editor_set_readable_line_width(
+    PdfvMarkdownEditor *self, gboolean enabled);
 void pdfv_markdown_editor_set_snippets(PdfvMarkdownEditor *self,
                                        const gchar *snippets);
 void pdfv_markdown_editor_set_attachment_folder(

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { history, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { EditorView, runScopeHandlers, showTooltip, type Tooltip } from "@codemirror/view";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runEditingCommand } from "../src/commands";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
@@ -154,11 +154,34 @@ $$`;
       lineEnding: "LF",
     })).not.toThrow();
     expect(parent.querySelectorAll(".list-bullet").length).toBeGreaterThanOrEqual(3);
-    expect(parent.querySelectorAll(".image-widget")).toHaveLength(1);
+    const image = parent.querySelector<HTMLElement>(".image-widget");
+    expect(image).not.toBeNull();
+    expect(image?.classList.contains("image-widget-inline")).toBe(true);
+    expect(image?.tagName).toBe("SPAN");
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
-  it("keeps a rendered math preview while editing and restores the replacement at its boundary", () => {
+  it("uses measured block geometry for standalone images below headings", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const measure = vi.spyOn(editor.view, "requestMeasure");
+    editor.openDocument({
+      documentId: "image-hitbox",
+      path: "01 Introduction.md",
+      text: "###### 2012 +\n![[Pasted image 20260724164322.png]]",
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    const widget = parent.querySelector<HTMLElement>(".image-widget-block");
+    expect(widget?.tagName).toBe("DIV");
+    widget?.querySelector("img")?.dispatchEvent(new Event("load"));
+    expect(measure).toHaveBeenCalled();
+  });
+
+  it("shows the active math preview in a floating bubble above the source", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
       tex2svg: () => document.createElement("mjx-container"),
@@ -171,10 +194,30 @@ $$`;
     editor.openDocument({ documentId: "math", path: "math.md", text, revision: 1, lineEnding: "LF" });
 
     editor.view.dispatch({ selection: { anchor: 5 } });
-    expect(parent.querySelectorAll(".math-edit-preview")).toHaveLength(1);
+    const tooltips = editor.view.state.facet(showTooltip)
+      .filter((tooltip): tooltip is Tooltip => tooltip != null);
+    expect(tooltips).toHaveLength(1);
+    expect(tooltips[0].above).toBe(true);
+    expect(tooltips[0].strictSide).toBe(true);
+    const tooltipView = tooltips[0].create(editor.view);
+    expect(tooltipView.dom.classList.contains("math-preview-bubble")).toBe(true);
+    expect(tooltipView.dom.querySelector(".math-edit-preview")).not.toBeNull();
+    tooltipView.destroy?.();
     editor.view.dispatch({ selection: { anchor: text.length } });
-    expect(parent.querySelectorAll(".math-edit-preview")).toHaveLength(0);
+    expect(editor.view.state.facet(showTooltip).filter(Boolean)).toHaveLength(0);
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
+  });
+
+  it("can disable and restore the readable editor width", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    expect(document.body.classList.contains("full-width-editor")).toBe(false);
+    editor.updateSettings({ readableLineWidth: false });
+    expect(document.body.classList.contains("full-width-editor")).toBe(true);
+    editor.updateSettings({ readableLineWidth: true });
+    expect(document.body.classList.contains("full-width-editor")).toBe(false);
   });
 
   it("converts display math directly without exposing its delimiters", async () => {

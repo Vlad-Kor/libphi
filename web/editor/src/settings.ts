@@ -4,6 +4,7 @@ export const defaultSettings: Required<EditorSettings> = {
   sourceMode: false,
   lineWrapping: true,
   latexConceal: false,
+  readableLineWidth: true,
   allowRemoteImages: false,
   executableSnippets: false,
   snippets: "",
@@ -13,6 +14,7 @@ let runtimeSettings: Required<EditorSettings> = { ...defaultSettings };
 
 export function updateRuntimeSettings(settings: Required<EditorSettings>): void {
   runtimeSettings = { ...settings };
+  document.body.classList.toggle("full-width-editor", !settings.readableLineWidth);
 }
 
 export function remoteImagesAllowed(): boolean {

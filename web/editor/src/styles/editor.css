@@ -30,7 +30,8 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .cm-scroller { font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; line-height: 1.62; overflow: auto; }
 .cm-content {
   box-sizing: border-box;
-  width: min(100%, 960px);
+  width: min(100%, 860px);
+  max-width: 860px;
   min-height: 100%;
   margin: 0 auto;
   padding: 32px 40px 45vh !important;
@@ -38,6 +39,7 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   caret-color: var(--editor-fg) !important;
   font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif !important;
 }
+.full-width-editor .cm-content { width: 100%; max-width: none; margin-inline: 0; }
 .cm-line { font-family: inherit; }
 .cm-gutters { display: none; }
 .cm-activeLine, .cm-activeLineGutter { background: transparent !important; }
@@ -112,8 +114,19 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .math-widget mjx-container[jax="SVG"] [data-c] { stroke: none; }
 .math-loading { color: var(--editor-muted); opacity: .7; }
 .math-display { display: block; width: 100%; overflow-x: auto; padding: .55em 0; text-align: center; }
-.math-edit-preview { margin-inline-start: .55em; opacity: .92; }
-.math-display.math-edit-preview { margin: .35em 0 .6em; border-left: 2px solid var(--editor-border); }
+.math-preview-bubble {
+  box-sizing: border-box;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: .5em .7em;
+  overflow-x: auto;
+  border: 1px solid var(--editor-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--editor-bg) 94%, var(--editor-fg));
+  color: var(--editor-fg);
+  box-shadow: 0 4px 18px color-mix(in srgb, black 28%, transparent);
+}
+.math-preview-bubble .math-edit-preview { margin: 0; opacity: 1; }
+.math-preview-bubble .math-display { width: auto; padding: 0; }
 .list-bullet { display: inline-block; min-width: .85em; color: var(--editor-fg); font-weight: 700; }
 .task-checkbox { margin: 0 .4em 0 0; transform: translateY(3px); }
 .footnote-reference { border: 0; background: transparent; color: var(--editor-link); font-size: .72em; vertical-align: super; cursor: pointer; padding: 0 .12em; }
@@ -138,7 +151,9 @@ pre code { padding: 0; background: transparent; }
 .callout-content > :last-child { margin-bottom: .2em; }
 .note-embed { display: block; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
 .embed-title { border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
-.image-widget { position: relative; display: inline-block; max-width: 100%; margin: .35em 0; line-height: 0; vertical-align: top; }
+.image-widget { position: relative; max-width: 100%; margin: .35em 0; line-height: 0; vertical-align: top; }
+.image-widget-block { display: block; width: fit-content; }
+.image-widget-inline { display: inline-block; }
 .image-embed { display: block; max-width: 100%; height: auto; border-radius: 6px; }
 .image-source-button {
   position: absolute;

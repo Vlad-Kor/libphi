@@ -148,6 +148,8 @@ static void apply_preferences_to_editor(PdfvWindow *self,
       pdfv_settings_get_markdown_font_scale(self->settings));
   pdfv_markdown_editor_set_remote_images_allowed(
       editor, pdfv_settings_get_allow_remote_images(self->settings));
+  pdfv_markdown_editor_set_readable_line_width(
+      editor, pdfv_settings_get_readable_line_width(self->settings));
   pdfv_markdown_editor_set_snippets(
       editor, pdfv_settings_get_latex_snippets(self->settings));
   GFile *workspace_root = self->workspace
@@ -2261,7 +2263,8 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
     g_object_unref(root);
     return;
   }
-  gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
+  if (!reuse)
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
   tab_set_document_icon(page, TRUE);
   gchar *basename = g_file_get_basename(file);
   adw_tab_page_set_title(page, basename);
@@ -2810,6 +2813,15 @@ static void on_preferences_font_changed(AdwSpinRow *row,
   schedule_preferences_update(self, 80);
 }
 
+static void on_preferences_line_width_changed(AdwSwitchRow *row,
+                                              GParamSpec *pspec,
+                                              PdfvWindow *self) {
+  (void)pspec;
+  pdfv_settings_set_readable_line_width(
+      self->settings, adw_switch_row_get_active(row));
+  schedule_preferences_update(self, 80);
+}
+
 static void on_preferences_remote_changed(AdwSwitchRow *row,
                                           GParamSpec *pspec,
                                           PdfvWindow *self) {
@@ -3032,6 +3044,19 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   adw_preferences_group_add(appearance, GTK_WIDGET(font));
   g_signal_connect_object(font, "notify::value",
                           G_CALLBACK(on_preferences_font_changed), self, 0);
+
+  AdwSwitchRow *line_width = ADW_SWITCH_ROW(adw_switch_row_new());
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(line_width),
+                                "Readable line width");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(line_width),
+      "Center notes at a comfortable maximum width");
+  adw_switch_row_set_active(
+      line_width, pdfv_settings_get_readable_line_width(self->settings));
+  adw_preferences_group_add(appearance, GTK_WIDGET(line_width));
+  g_signal_connect_object(line_width, "notify::active",
+                          G_CALLBACK(on_preferences_line_width_changed),
+                          self, 0);
 
   AdwSwitchRow *remote = ADW_SWITCH_ROW(adw_switch_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(remote),
