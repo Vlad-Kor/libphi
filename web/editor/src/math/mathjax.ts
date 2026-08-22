@@ -14,8 +14,29 @@ interface MathJaxWindow extends Window {
 const cache = new Map<string, string>();
 let preamble = "";
 let preambleRevision = 0;
+let mathJaxScript: Promise<void> | undefined;
+
+function startMathJax(): Promise<void> {
+  if (api()?.tex2svg) return Promise.resolve();
+  if (mathJaxScript) return mathJaxScript;
+  mathJaxScript = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "app://editor/mathjax/tex-svg.js";
+    script.async = true;
+    script.dataset.phiRenderer = "mathjax";
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener("error", () => {
+      const message = "MathJax runtime could not be loaded";
+      (window as MathJaxWindow).__phiMathJaxError = message;
+      reject(new Error(message));
+    }, { once: true });
+    document.head.append(script);
+  });
+  return mathJaxScript;
+}
 
 async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
+  void startMathJax().catch(() => undefined);
   const started = performance.now();
   while (performance.now() - started < timeout) {
     const failure = (window as MathJaxWindow).__phiMathJaxError;

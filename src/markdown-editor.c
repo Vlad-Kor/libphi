@@ -1388,6 +1388,8 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
       WEBKIT_TYPE_WEB_VIEW, "web-context",
       pdfv_markdown_resource_scheme_get_context(self->resources),
       "user-content-manager", self->content_manager, NULL));
+  pdfv_markdown_resource_scheme_bind_web_view(self->resources,
+                                               self->web_view);
   gtk_widget_set_hexpand(GTK_WIDGET(self->web_view), TRUE);
   gtk_widget_set_vexpand(GTK_WIDGET(self->web_view), TRUE);
   gtk_stack_add_named(self->content_stack, GTK_WIDGET(self->web_view),

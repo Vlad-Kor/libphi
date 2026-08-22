@@ -1,13 +1,52 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { parseDocument } from "yaml";
-import mermaid from "mermaid";
 import { requestNative, reportError, sendNative } from "../bridge";
 import { getMathRevision, renderMath } from "../math/mathjax";
 import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../obsidian/markdown";
 import { remoteImagesAllowed } from "../settings";
 
-let mermaidInitialized = false;
 let mermaidSequence = 0;
+interface MermaidApi {
+  initialize(config: Record<string, unknown>): void;
+  render(id: string, source: string): Promise<{ svg: string }>;
+}
+
+interface MermaidWindow extends Window {
+  phiMermaid?: MermaidApi;
+}
+
+let mermaidReady: Promise<MermaidApi> | undefined;
+
+function ensureMermaidReady(): Promise<MermaidApi> {
+  const existing = (window as MermaidWindow).phiMermaid;
+  if (existing) return Promise.resolve(existing);
+  if (!mermaidReady) {
+    mermaidReady = new Promise<MermaidApi>((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "app://editor/mermaid.js";
+      script.async = true;
+      script.dataset.phiRenderer = "mermaid";
+      script.addEventListener("load", () => {
+        const mermaid = (window as MermaidWindow).phiMermaid;
+        if (!mermaid) {
+          reject(new Error("Mermaid runtime did not initialize"));
+          return;
+        }
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "base",
+          suppressErrorRendering: true,
+        });
+        resolve(mermaid);
+      }, { once: true });
+      script.addEventListener("error", () =>
+        reject(new Error("Mermaid runtime could not be loaded")), { once: true });
+      document.head.append(script);
+    });
+  }
+  return mermaidReady;
+}
 
 function reveal(view: EditorView, position: number): void {
   view.dispatch({ selection: { anchor: Math.min(position + 1, view.state.doc.length) }, scrollIntoView: true });
@@ -513,12 +552,9 @@ export class MermaidWidget extends WidgetType {
     container.className = "mermaid-widget";
     container.tabIndex = 0;
     container.addEventListener("dblclick", () => reveal(view, this.from));
-    if (!mermaidInitialized) {
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base", suppressErrorRendering: true });
-      mermaidInitialized = true;
-    }
     const id = `phi-mermaid-${++mermaidSequence}`;
-    mermaid.render(id, this.source)
+    ensureMermaidReady()
+      .then((mermaid) => mermaid.render(id, this.source))
       .then(({ svg }) => { container.innerHTML = sanitizeHtml(svg); })
       .catch((error) => {
         container.className = "mermaid-widget render-error";

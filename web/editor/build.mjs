@@ -7,6 +7,7 @@ await mkdir(outdir, { recursive: true });
 await rm(resolve(outdir, "mathjax"), { recursive: true, force: true });
 await rm(resolve(outdir, "mathjax-font"), { recursive: true, force: true });
 await rm(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true, force: true });
+await rm(resolve(outdir, "chunks"), { recursive: true, force: true });
 await mkdir(resolve(outdir, "mathjax"), { recursive: true });
 await mkdir(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true });
 
@@ -20,6 +21,17 @@ await build({
   sourcemap: false,
   legalComments: "none",
   loader: { ".txt": "text" },
+});
+
+await build({
+  entryPoints: ["src/mermaid-runtime.ts"],
+  bundle: true,
+  format: "iife",
+  target: ["safari17"],
+  outfile: resolve(outdir, "mermaid.js"),
+  minify: true,
+  sourcemap: false,
+  legalComments: "none",
 });
 
 await copyFile("src/index.html", resolve(outdir, "index.html"));
