@@ -34,6 +34,14 @@ gchar *pdfv_settings_dup_workspace_attachment_folder_uri(
 void pdfv_settings_set_workspace_attachment_policy(
     PdfvSettings *self, GFile *workspace, gboolean fixed,
     const gchar *folder_uri);
+gchar **pdfv_settings_dup_workspace_open_tabs(
+    PdfvSettings *self, GFile *workspace, gsize *length);
+gchar *pdfv_settings_dup_workspace_active_tab(
+    PdfvSettings *self, GFile *workspace);
+void pdfv_settings_set_workspace_tabs(
+    PdfvSettings *self, GFile *workspace,
+    const gchar *const *relative_paths, gsize length,
+    const gchar *active_relative_path);
 void pdfv_settings_copy(PdfvSettings *destination,
                         PdfvSettings *source);
 

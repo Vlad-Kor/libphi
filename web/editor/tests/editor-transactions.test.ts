@@ -14,6 +14,8 @@ afterEach(() => {
   for (const view of views.splice(0)) view.destroy();
   document.body.replaceChildren();
   document.body.className = "";
+  delete document.documentElement.dataset.theme;
+  document.documentElement.removeAttribute("style");
   delete (window as unknown as { MathJax?: unknown }).MathJax;
 });
 
@@ -161,7 +163,7 @@ $$`;
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
-  it("uses measured block geometry for standalone images below headings", () => {
+  it("keeps standalone images in line geometry and remeasures after loading", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
@@ -176,7 +178,7 @@ $$`;
     });
 
     const widget = parent.querySelector<HTMLElement>(".image-widget-block");
-    expect(widget?.tagName).toBe("DIV");
+    expect(widget?.tagName).toBe("SPAN");
     widget?.querySelector("img")?.dispatchEvent(new Event("load"));
     expect(measure).toHaveBeenCalled();
   });
@@ -218,6 +220,18 @@ $$`;
     expect(document.body.classList.contains("full-width-editor")).toBe(true);
     editor.updateSettings({ readableLineWidth: true });
     expect(document.body.classList.contains("full-width-editor")).toBe(false);
+  });
+
+  it("marks CodeMirror dark so floating previews use its dark tooltip theme", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.updateTheme({ dark: true });
+    expect(editor.view.state.facet(EditorView.darkTheme)).toBe(true);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    editor.updateTheme({ dark: false });
+    expect(editor.view.state.facet(EditorView.darkTheme)).toBe(false);
   });
 
   it("converts display math directly without exposing its delimiters", async () => {

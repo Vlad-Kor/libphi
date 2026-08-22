@@ -185,6 +185,54 @@ void pdfv_settings_set_workspace_attachment_policy(
   g_free(group);
 }
 
+gchar **pdfv_settings_dup_workspace_open_tabs(
+    PdfvSettings *self, GFile *workspace, gsize *length) {
+  g_return_val_if_fail(self != NULL, NULL);
+  if (length)
+    *length = 0;
+  if (!workspace)
+    return NULL;
+  gchar *group = workspace_group(workspace);
+  gchar **tabs = g_key_file_get_string_list(
+      self->file, group, "open-tabs", length, NULL);
+  g_free(group);
+  return tabs;
+}
+
+gchar *pdfv_settings_dup_workspace_active_tab(
+    PdfvSettings *self, GFile *workspace) {
+  g_return_val_if_fail(self != NULL, NULL);
+  if (!workspace)
+    return NULL;
+  gchar *group = workspace_group(workspace);
+  gchar *active = g_key_file_get_string(
+      self->file, group, "active-tab", NULL);
+  g_free(group);
+  return active;
+}
+
+void pdfv_settings_set_workspace_tabs(
+    PdfvSettings *self, GFile *workspace,
+    const gchar *const *relative_paths, gsize length,
+    const gchar *active_relative_path) {
+  g_return_if_fail(self != NULL);
+  g_return_if_fail(G_IS_FILE(workspace));
+  gchar *group = workspace_group(workspace);
+  if (relative_paths && length > 0) {
+    g_key_file_set_string_list(self->file, group, "open-tabs",
+                               relative_paths, length);
+  } else {
+    g_key_file_remove_key(self->file, group, "open-tabs", NULL);
+  }
+  if (active_relative_path && *active_relative_path) {
+    g_key_file_set_string(self->file, group, "active-tab",
+                          active_relative_path);
+  } else {
+    g_key_file_remove_key(self->file, group, "active-tab", NULL);
+  }
+  g_free(group);
+}
+
 void pdfv_settings_copy(PdfvSettings *destination,
                         PdfvSettings *source) {
   g_return_if_fail(destination != NULL);

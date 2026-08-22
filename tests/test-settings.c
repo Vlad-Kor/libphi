@@ -20,6 +20,9 @@ static void test_workspace_attachment_policy(void) {
       settings, workspace_a, TRUE, folder_uri);
   pdfv_settings_set_workspace_attachment_policy(
       settings, workspace_b, FALSE, NULL);
+  const gchar *tabs[] = {"AI/Introduction.md", "papers/vision.pdf"};
+  pdfv_settings_set_workspace_tabs(settings, workspace_a, tabs,
+                                   G_N_ELEMENTS(tabs), tabs[0]);
   pdfv_settings_set_markdown_font_scale(settings, 1.25);
   pdfv_settings_set_readable_line_width(settings, FALSE);
   GError *error = NULL;
@@ -38,6 +41,19 @@ static void test_workspace_attachment_policy(void) {
   g_assert_cmpfloat(pdfv_settings_get_markdown_font_scale(settings), ==,
                     1.25);
   g_assert_false(pdfv_settings_get_readable_line_width(settings));
+  gsize tab_count = 0;
+  gchar **restored_tabs = pdfv_settings_dup_workspace_open_tabs(
+      settings, workspace_a, &tab_count);
+  gchar *active_tab = pdfv_settings_dup_workspace_active_tab(
+      settings, workspace_a);
+  g_assert_cmpuint(tab_count, ==, G_N_ELEMENTS(tabs));
+  g_assert_cmpstr(restored_tabs[0], ==, tabs[0]);
+  g_assert_cmpstr(restored_tabs[1], ==, tabs[1]);
+  g_assert_cmpstr(active_tab, ==, tabs[0]);
+  g_assert_null(pdfv_settings_dup_workspace_open_tabs(
+      settings, workspace_b, NULL));
+  g_strfreev(restored_tabs);
+  g_free(active_tab);
   g_free(restored);
   pdfv_settings_free(settings);
 

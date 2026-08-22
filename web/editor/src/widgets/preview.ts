@@ -103,7 +103,7 @@ function interactiveImage(
   to: number,
   block: boolean,
 ): HTMLElement {
-  const container = document.createElement(block ? "div" : "span");
+  const container = document.createElement("span");
   container.className = `image-widget image-widget-${block ? "block" : "inline"}`;
   image.addEventListener("load", () => view.requestMeasure());
   const source = document.createElement("button");

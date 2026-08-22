@@ -18,6 +18,7 @@ import type { DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEdito
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
+const themeCompartment = new Compartment();
 const obsidianHighlightStyle = HighlightStyle.define([
   { tag: tags.strong, fontWeight: "750", textDecoration: "none" },
   { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], textDecoration: "none" },
@@ -35,6 +36,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private settings: Required<EditorSettings> = { ...defaultSettings };
   private snapshotTimer = 0;
   private documentClasses: string[] = [];
+  private darkTheme = document.documentElement.dataset.theme === "dark";
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -76,6 +78,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         ...latexSuite,
         previewCompartment.of(this.settings.sourceMode ? [] : livePreview),
         wrappingCompartment.of(this.settings.lineWrapping ? EditorView.lineWrapping : []),
+        themeCompartment.of(EditorView.theme({}, { dark: this.darkTheme })),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) this.documentChanged();
           queueMicrotask(() => this.enhanceSearchPanel());
@@ -244,7 +247,16 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     document.body.classList.toggle("source-mode", this.settings.sourceMode);
   }
 
-  updateTheme(theme: EditorTheme): void { applyTheme(theme); }
+  updateTheme(theme: EditorTheme): void {
+    applyTheme(theme);
+    if (this.darkTheme === theme.dark) return;
+    this.darkTheme = theme.dark;
+    this.view.dispatch({
+      effects: themeCompartment.reconfigure(
+        EditorView.theme({}, { dark: this.darkTheme }),
+      ),
+    });
+  }
 
   runCommand(command: string): void {
     if (command === "editor.toggleSourceMode") {

@@ -36,35 +36,48 @@ function imageIsInsideListItem(state: EditorState, node: ObsidianNode): boolean 
   return /^\s*[-+*]\s+(?:\[[^\]]\]\s+)?$/.test(prefix);
 }
 
+function targetIsImage(target: string): boolean {
+  return /\.(?:png|jpe?g|gif|webp|svg|avif)(?:$|[?#])/i.test(
+    target.split("|")[0],
+  );
+}
+
 function blockReplacement(node: ObsidianNode, state: EditorState): Decoration | undefined {
   switch (node.kind) {
     case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from), block: true });
     case "math": return Decoration.replace({ widget: new MathWidget(node.text, false, node.from) });
     case "display-math": return Decoration.replace({ widget: new MathWidget(node.text, true, node.from), block: true });
     case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
-    case "embed": return Decoration.replace({
-      widget: new LinkWidget(
-        String(node.meta?.target ?? node.text),
-        String(node.meta?.alias ?? node.text),
-        node.from,
-        node.to,
-        true,
-        !imageIsInsideListItem(state, node),
-      ),
-      block: !imageIsInsideListItem(state, node),
-    });
+    case "embed": {
+      const target = String(node.meta?.target ?? node.text);
+      const standalone = !imageIsInsideListItem(state, node);
+      return Decoration.replace({
+        widget: new LinkWidget(
+          target,
+          String(node.meta?.alias ?? node.text),
+          node.from,
+          node.to,
+          true,
+          standalone,
+        ),
+        block: standalone && !targetIsImage(target),
+      });
+    }
     case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false) });
-    case "markdown-image": return Decoration.replace({
-      widget: new MarkdownLinkWidget(
-        String(node.meta?.target ?? ""),
-        String(node.meta?.alias ?? ""),
-        node.from,
-        true,
-        node.to,
-        !imageIsInsideListItem(state, node),
-      ),
-      block: !imageIsInsideListItem(state, node),
-    });
+    case "markdown-image": {
+      const standalone = !imageIsInsideListItem(state, node);
+      return Decoration.replace({
+        widget: new MarkdownLinkWidget(
+          String(node.meta?.target ?? ""),
+          String(node.meta?.alias ?? ""),
+          node.from,
+          true,
+          node.to,
+          standalone,
+        ),
+        block: false,
+      });
+    }
     case "footnote-reference": return Decoration.replace({ widget: new FootnoteWidget(String(node.meta?.id ?? node.text), node.from, false, Number(node.meta?.definition ?? node.from)) });
     case "inline-footnote": return Decoration.replace({ widget: new FootnoteWidget(node.text, node.from) });
     case "footnote-definition": return Decoration.replace({ widget: new FootnoteWidget(node.text, node.from, true, node.from, String(node.meta?.id ?? "")), block: true });
@@ -112,8 +125,14 @@ function buildDecorations(state: EditorState): DecorationSet {
     if (!isActive) {
       const replacement = blockReplacement(node, state);
       if (replacement) {
-        builder.add(node.from, node.to, replacement);
-        coveredUntil = node.to;
+        let to = node.to;
+        if (replacement.spec.block) {
+          const lastLine = state.doc.lineAt(node.to);
+          if (node.to === lastLine.to && node.to < state.doc.length)
+            to++;
+        }
+        builder.add(node.from, to, replacement);
+        coveredUntil = to;
         continue;
       }
     }

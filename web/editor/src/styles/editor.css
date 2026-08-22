@@ -32,14 +32,20 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   box-sizing: border-box;
   width: min(100%, 860px);
   max-width: 860px;
+  flex-grow: 0 !important;
   min-height: 100%;
-  margin: 0 auto;
+  margin: 0 auto !important;
   padding: 32px 40px 45vh !important;
   color: var(--editor-fg);
   caret-color: var(--editor-fg) !important;
   font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif !important;
 }
-.full-width-editor .cm-content { width: 100%; max-width: none; margin-inline: 0; }
+.full-width-editor .cm-content {
+  width: 100%;
+  max-width: none;
+  flex-grow: 1 !important;
+  margin-inline: 0 !important;
+}
 .cm-line { font-family: inherit; }
 .cm-gutters { display: none; }
 .cm-activeLine, .cm-activeLineGutter { background: transparent !important; }
@@ -114,19 +120,19 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .math-widget mjx-container[jax="SVG"] [data-c] { stroke: none; }
 .math-loading { color: var(--editor-muted); opacity: .7; }
 .math-display { display: block; width: 100%; overflow-x: auto; padding: .55em 0; text-align: center; }
-.math-preview-bubble {
+.cm-editor .cm-tooltip.math-preview-bubble {
   box-sizing: border-box;
   max-width: min(720px, calc(100vw - 32px));
   padding: .5em .7em;
   overflow-x: auto;
-  border: 1px solid var(--editor-border);
+  border: 1px solid var(--editor-border) !important;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--editor-bg) 94%, var(--editor-fg));
-  color: var(--editor-fg);
+  background: color-mix(in srgb, var(--editor-bg) 94%, var(--editor-fg)) !important;
+  color: var(--editor-fg) !important;
   box-shadow: 0 4px 18px color-mix(in srgb, black 28%, transparent);
 }
-.math-preview-bubble .math-edit-preview { margin: 0; opacity: 1; }
-.math-preview-bubble .math-display { width: auto; padding: 0; }
+.cm-tooltip.math-preview-bubble .math-edit-preview { margin: 0; opacity: 1; }
+.cm-tooltip.math-preview-bubble .math-display { width: auto; padding: 0; }
 .list-bullet { display: inline-block; min-width: .85em; color: var(--editor-fg); font-weight: 700; }
 .task-checkbox { margin: 0 .4em 0 0; transform: translateY(3px); }
 .footnote-reference { border: 0; background: transparent; color: var(--editor-link); font-size: .72em; vertical-align: super; cursor: pointer; padding: 0 .12em; }

@@ -128,8 +128,8 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                                    guint generation);
 static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
                                            gboolean fit_width);
-static void workspace_open_file(PdfvWindow *self, GFile *file,
-                                gboolean persistent);
+static AdwTabPage *workspace_open_file(PdfvWindow *self, GFile *file,
+                                       gboolean persistent);
 static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
                                        AdwTabPage *page);
 static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file);
@@ -963,6 +963,16 @@ static gboolean file_is_markdown(GFile *file) {
   gboolean markdown = dot && g_ascii_strcasecmp(dot, ".md") == 0;
   g_free(basename);
   return markdown;
+}
+
+static gboolean file_is_supported_document(GFile *file) {
+  if (file_is_markdown(file))
+    return TRUE;
+  gchar *basename = g_file_get_basename(file);
+  const gchar *dot = strrchr(basename, '.');
+  gboolean pdf = dot && g_ascii_strcasecmp(dot, ".pdf") == 0;
+  g_free(basename);
+  return pdf;
 }
 
 static void workspace_factory_setup(GtkSignalListItemFactory *factory,
@@ -2091,6 +2101,7 @@ static gboolean finish_document_load_idle(gpointer user_data) {
         self->workspace_preview_cancellable == request->cancellable)
       g_clear_object(&self->workspace_preview_cancellable);
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+    g_object_set_data(G_OBJECT(stack), "document-file", NULL);
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
     AdwDialog *dialog = adw_alert_dialog_new("Error Opening File",
                                              error->message);
@@ -2127,6 +2138,8 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
   GtkWidget *stack = adw_tab_page_get_child(page);
   if (!prepare_tab_for_open(self, page))
     return;
+  g_object_set_data_full(G_OBJECT(stack), "document-file",
+                         g_object_ref(file), g_object_unref);
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
   tab_set_document_icon(page, FALSE);
   gchar *basename = g_file_get_basename(file);
@@ -2211,6 +2224,7 @@ static void on_markdown_opened(GObject *source, GAsyncResult *result,
   } else if (error && current_request &&
              !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
+    g_object_set_data(G_OBJECT(stack), "document-file", NULL);
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
     on_markdown_error(request->editor, error->message, self);
   }
@@ -2263,6 +2277,8 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
     g_object_unref(root);
     return;
   }
+  g_object_set_data_full(G_OBJECT(stack), "document-file",
+                         g_object_ref(file), g_object_unref);
   if (!reuse)
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
   tab_set_document_icon(page, TRUE);
@@ -2553,7 +2569,114 @@ static GFile *get_remembered_workspace(void) {
   return folder;
 }
 
+static gchar *workspace_page_relative_path(PdfvWindow *self,
+                                           AdwTabPage *page,
+                                           GFile *folder) {
+  if (!page || page == self->workspace_preview_tab)
+    return NULL;
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  if (!GTK_IS_STACK(stack))
+    return NULL;
+  GFile *file = g_object_get_data(G_OBJECT(stack), "document-file");
+  if (!file || !file_is_supported_document(file))
+    return NULL;
+  gchar *relative = g_file_get_relative_path(folder, file);
+  if (!relative || !*relative) {
+    g_free(relative);
+    return NULL;
+  }
+  return relative;
+}
+
+static void save_workspace_tab_session(PdfvWindow *self) {
+  if (!self->workspace)
+    return;
+  GFile *folder = pdfv_workspace_get_folder(self->workspace);
+  GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+  AdwTabPage *selected = adw_tab_view_get_selected_page(self->tab_view);
+  gchar *active = NULL;
+  guint pages = adw_tab_view_get_n_pages(self->tab_view);
+  for (guint i = 0; i < pages; i++) {
+    AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
+    gchar *relative = workspace_page_relative_path(self, page, folder);
+    if (!relative)
+      continue;
+    if (page == selected)
+      active = g_strdup(relative);
+    g_ptr_array_add(paths, relative);
+  }
+  pdfv_settings_set_workspace_tabs(
+      self->settings, folder, (const gchar *const *)paths->pdata,
+      paths->len, active);
+  GError *error = NULL;
+  if (!pdfv_settings_save(self->settings, &error)) {
+    g_debug("Could not save workspace tabs: %s",
+            error ? error->message : "unknown error");
+  }
+  g_clear_error(&error);
+  g_free(active);
+  g_ptr_array_unref(paths);
+}
+
+static AdwTabPage *find_open_document_page(PdfvWindow *self, GFile *file) {
+  guint pages = adw_tab_view_get_n_pages(self->tab_view);
+  for (guint i = 0; i < pages; i++) {
+    AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
+    GtkWidget *stack = adw_tab_page_get_child(page);
+    GFile *open_file = GTK_IS_STACK(stack)
+        ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
+    if (open_file && g_file_equal(open_file, file))
+      return page;
+  }
+  return NULL;
+}
+
+static void restore_workspace_tab_session(PdfvWindow *self, GFile *folder) {
+  gsize count = 0;
+  gchar **paths = pdfv_settings_dup_workspace_open_tabs(
+      self->settings, folder, &count);
+  if (!paths || count == 0) {
+    g_strfreev(paths);
+    return;
+  }
+  gchar *active = pdfv_settings_dup_workspace_active_tab(
+      self->settings, folder);
+  GHashTable *seen = g_hash_table_new_full(
+      g_str_hash, g_str_equal, g_free, NULL);
+  AdwTabPage *active_page = NULL;
+  for (gsize i = 0; i < count; i++) {
+    if (!paths[i] || !*paths[i] || g_hash_table_contains(seen, paths[i]))
+      continue;
+    GFile *file = g_file_resolve_relative_path(folder, paths[i]);
+    gchar *relative = g_file_get_relative_path(folder, file);
+    gboolean valid = relative && *relative &&
+        g_strcmp0(relative, paths[i]) == 0 &&
+        file_is_supported_document(file) &&
+        g_file_query_file_type(file, G_FILE_QUERY_INFO_NONE, NULL) ==
+            G_FILE_TYPE_REGULAR;
+    if (valid) {
+      g_hash_table_add(seen, g_strdup(relative));
+      AdwTabPage *page = find_open_document_page(self, file);
+      if (!page)
+        page = workspace_open_file(self, file, TRUE);
+      if (page && g_strcmp0(relative, active) == 0)
+        active_page = page;
+    }
+    g_free(relative);
+    g_object_unref(file);
+  }
+  /* Restored pages are pinned. The next primary workspace click gets a new,
+   * replaceable browse tab instead of replacing a restored document. */
+  self->workspace_browse_tab = NULL;
+  if (active_page)
+    adw_tab_view_set_selected_page(self->tab_view, active_page);
+  g_hash_table_unref(seen);
+  g_free(active);
+  g_strfreev(paths);
+}
+
 static void close_workspace(PdfvWindow *self, gboolean forget) {
+  save_workspace_tab_session(self);
   workspace_search_close(self, FALSE);
   if (self->workspace_scan_cancellable)
     g_cancellable_cancel(self->workspace_scan_cancellable);
@@ -2674,6 +2797,7 @@ static void open_workspace_folder(PdfvWindow *self, GFile *folder) {
   adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
   pdfv_workspace_load_async(self->workspace, self->workspace_scan_cancellable,
                             on_workspace_loaded, g_object_ref(self));
+  restore_workspace_tab_session(self, folder);
 }
 
 static void on_folder_dialog_selected(GObject *source, GAsyncResult *result,
@@ -3469,6 +3593,8 @@ static void on_sidebar_show_changed(AdwOverlaySplitView *split_view,
 
 static gboolean on_window_close_request(GtkWindow *window, PdfvWindow *self) {
   (void)window;
+  if (!self->closing_window)
+    save_workspace_tab_session(self);
   workspace_preview_cancel_delay(self);
   if (self->workspace_scan_cancellable)
     g_cancellable_cancel(self->workspace_scan_cancellable);
@@ -4088,15 +4214,15 @@ void pdfv_window_restore_last_workspace(PdfvWindow *self) {
   g_object_unref(folder);
 }
 
-static void workspace_open_file(PdfvWindow *self, GFile *file,
-                                gboolean persistent) {
+static AdwTabPage *workspace_open_file(PdfvWindow *self, GFile *file,
+                                       gboolean persistent) {
   AdwTabPage *page = NULL;
   if (!persistent && self->workspace_browse_tab &&
       adw_tab_view_get_page_position(self->tab_view,
                                      self->workspace_browse_tab) >= 0)
     page = self->workspace_browse_tab;
 
-  if (!page && !persistent) {
+  if (!page) {
     AdwTabPage *selected = adw_tab_view_get_selected_page(self->tab_view);
     if (selected) {
       GtkWidget *child = adw_tab_page_get_child(selected);
@@ -4117,6 +4243,7 @@ static void workspace_open_file(PdfvWindow *self, GFile *file,
     open_markdown_in_tab_async(self, file, page);
   else
     open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0);
+  return page;
 }
 
 static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
