@@ -14,6 +14,13 @@ describe("Obsidian parser precedence", () => {
     expect(nodes.map((node) => node.kind)).toEqual(["html"]);
   });
 
+  it("treats an iframe as one raw HTML block", () => {
+    const source = '<iframe src="https://example.com">$not-math$ [[not-a-link]]</iframe>';
+    const nodes = parseObsidian(source);
+    expect(nodes.map((node) => node.kind)).toEqual(["html"]);
+    expect(nodes[0].text).toBe(source);
+  });
+
   it("recognizes Obsidian extensions without changing their ranges", () => {
     const source = "==mark== %%secret%% [[Note#Heading|Alias]] ![[image.png|300]] ^block-id";
     const nodes = parseObsidian(source);

@@ -1,16 +1,20 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../src/obsidian/markdown";
+import { defaultSettings, updateRuntimeSettings } from "../src/settings";
+
+afterEach(() => updateRuntimeSettings(defaultSettings));
 
 describe("rendering security", () => {
   it("removes executable HTML while preserving useful formatting", () => {
-    const value = sanitizeHtml('<span class="foo" style="color:red" onclick="alert(1)">ok</span><script>alert(2)</script><img src="x" onerror="alert(3)"><a href="javascript:alert(4)">bad</a>');
+    const value = sanitizeHtml('<span class="foo" style="color:red" onclick="alert(1)">ok</span><script>alert(2)</script><img src="x" onerror="alert(3)"><a href="javascript:alert(4)">bad</a><iframe src="https://example.com"></iframe>');
     expect(value).toContain("class=\"foo\"");
     expect(value).toContain("style=\"color:red\"");
     expect(value).not.toContain("onclick");
     expect(value).not.toContain("onerror");
     expect(value).not.toContain("script");
     expect(value).not.toContain("javascript:");
+    expect(value).not.toContain("iframe");
   });
 
   it("keeps Markdown literal inside raw HTML", () => {
@@ -43,6 +47,54 @@ describe("rendering security", () => {
     expect(image?.getAttribute("height")).toBe("100");
     expect(image?.getAttribute("align")).toBe("right");
     expect(image?.dataset.remoteSrc).toContain("button.png");
+  });
+
+  it("sandboxes HTTPS iframes and preserves only their dimensions", () => {
+    updateRuntimeSettings({ ...defaultSettings, allowRemoteImages: true });
+    const value = renderMarkdown(
+      '<iframe src="https://example.com/tool" srcdoc="<script>x</script>" ' +
+      'sandbox="allow-top-navigation" onload="x()" ' +
+      'style="height:400px;width:100%;position:fixed"></iframe>',
+    );
+    const template = document.createElement("template");
+    template.innerHTML = value;
+    const frame = template.content.querySelector("iframe");
+    expect(frame?.src).toBe("https://example.com/tool");
+    expect(frame?.getAttribute("sandbox"))
+      .toBe("allow-forms allow-popups allow-same-origin allow-scripts");
+    expect(frame?.getAttribute("loading")).toBe("lazy");
+    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(frame?.style.height).toBe("400px");
+    expect(frame?.style.width).toBe("100%");
+    expect(frame?.style.position).toBe("");
+    expect(value).not.toContain("srcdoc");
+    expect(value).not.toContain("onload");
+  });
+
+  it("shows a click-to-load placeholder for remote iframes", () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderMarkdown(
+      '<iframe src="[https://example.com/tool](https://example.com/tool)" ' +
+      'style="height:400px;width:100%"></iframe>',
+    );
+    wireRenderedContent(root);
+    const frame = root.querySelector("iframe");
+    expect(frame?.hasAttribute("src")).toBe(false);
+    expect(frame?.dataset.remoteSrc).toBe("https://example.com/tool");
+    const load = root.querySelector<HTMLButtonElement>(".iframe-embed-load");
+    expect(load).not.toBeNull();
+    load?.click();
+    expect(frame?.src).toBe("https://example.com/tool");
+    expect(root.querySelector(".iframe-embed-placeholder")).toBeNull();
+  });
+
+  it("rejects non-HTTPS iframe sources", () => {
+    const value = renderMarkdown(
+      '<iframe src="javascript:alert(1)"></iframe>' +
+      '<iframe src="http://example.com"></iframe>',
+    );
+    expect(value).not.toContain("<iframe");
+    expect(value.match(/Embedded page blocked/g)).toHaveLength(2);
   });
 
   it("syntax-highlights known fenced-code languages", () => {

@@ -428,6 +428,42 @@ pre code { padding: 0; background: transparent; }
 .mermaid-widget { display: block; max-width: 100%; overflow: auto; padding: .6em; }
 .mermaid-widget svg { max-width: 100%; height: auto; }
 .raw-html-widget { display: inline; }
+.raw-html-widget:has(.iframe-embed), .iframe-embed-error { display: block; }
+.iframe-embed {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-height: 10rem;
+  max-height: 80vh;
+  margin: .55em 0;
+  border: 1px solid var(--editor-border);
+  border-radius: 8px;
+  background: var(--editor-code-bg);
+}
+.iframe-embed-placeholder {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.iframe-embed-placeholder > .iframe-embed {
+  visibility: hidden;
+  pointer-events: none;
+}
+.iframe-embed-load {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  translate: -50% -50%;
+  padding: .5em .85em;
+  border: 1px solid var(--editor-border);
+  border-radius: 999px;
+  color: var(--editor-fg);
+  background: var(--editor-toolbar-bg);
+  box-shadow: 0 2px 7px color-mix(in srgb, black 22%, transparent);
+  font: inherit;
+  cursor: pointer;
+}
+.iframe-embed-load:hover { background: var(--editor-entry-bg); }
 mark { background: color-mix(in srgb, #f9f06b 62%, transparent); color: inherit; }
 kbd { border: 1px solid var(--editor-border); border-bottom-width: 2px; border-radius: 4px; padding: .08em .35em; background: var(--editor-code-bg); font-family: ui-monospace, monospace; }
 blockquote { border-left: 3px solid var(--editor-border); color: var(--editor-muted); margin-left: 0; padding-left: 1em; }

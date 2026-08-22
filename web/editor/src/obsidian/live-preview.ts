@@ -16,6 +16,7 @@ import {
   TagWidget,
   TaskWidget,
 } from "../widgets/preview";
+import { rawHtmlIsBlock } from "./markdown";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
 const emphasis = Decoration.mark({ class: "cm-live-emphasis" });
@@ -96,7 +97,7 @@ function blockReplacement(node: ObsidianNode, state: EditorState): Decoration | 
     case "table": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "table-widget"), block: true });
     case "mermaid": return Decoration.replace({ widget: new MermaidWidget(node.text, node.from), block: true });
     case "code-block": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "code-block-widget"), block: true });
-    case "html": return Decoration.replace({ widget: new RawHtmlWidget(node.text, node.from), block: node.text.includes("\n") });
+    case "html": return Decoration.replace({ widget: new RawHtmlWidget(node.text, node.from), block: rawHtmlIsBlock(node.text) });
     default: return undefined;
   }
 }

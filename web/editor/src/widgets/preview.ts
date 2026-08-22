@@ -2,7 +2,14 @@ import { EditorView, WidgetType } from "@codemirror/view";
 import { parseDocument } from "yaml";
 import { requestNative, reportError, sendNative } from "../bridge";
 import { getMathRevision, renderMath, wireMathScroll } from "../math/mathjax";
-import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../obsidian/markdown";
+import {
+  rawHtmlIsBlock,
+  renderMarkdown,
+  renderMarkdownInline,
+  renderRawHtml,
+  sanitizeHtml,
+  wireRenderedContent,
+} from "../obsidian/markdown";
 import { remoteImagesAllowed } from "../settings";
 
 let mermaidSequence = 0;
@@ -658,12 +665,20 @@ export class PropertiesWidget extends WidgetType {
 }
 
 export class RawHtmlWidget extends WidgetType {
-  constructor(readonly source: string, readonly from: number) { super(); }
-  eq(other: RawHtmlWidget): boolean { return other.source === this.source; }
+  constructor(
+    readonly source: string,
+    readonly from: number,
+    readonly remoteAllowed = remoteImagesAllowed(),
+  ) { super(); }
+  eq(other: RawHtmlWidget): boolean {
+    return other.source === this.source &&
+      other.remoteAllowed === this.remoteAllowed;
+  }
   toDOM(view: EditorView): HTMLElement {
-    const container = document.createElement(this.source.includes("\n") ? "div" : "span");
+    const container = document.createElement(rawHtmlIsBlock(this.source) ? "div" : "span");
     container.className = "raw-html-widget";
-    container.innerHTML = sanitizeHtml(this.source);
+    container.innerHTML = renderRawHtml(this.source);
+    wireRenderedContent(container);
     container.addEventListener("dblclick", () => reveal(view, this.from));
     return container;
   }

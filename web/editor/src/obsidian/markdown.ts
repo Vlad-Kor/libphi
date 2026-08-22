@@ -38,7 +38,7 @@ const md = new MarkdownIt({
   },
 }).use(footnote).use(taskLists, { enabled: true, label: true });
 
-const protectedHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td)(\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
+const protectedHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td|iframe)(\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
 
 function escapeAttribute(value: string): string {
   return escapeHtml(value);
@@ -66,15 +66,24 @@ function prepare(source: string): { source: string; html: string[] } {
   return { source: value, html };
 }
 
-export function sanitizeHtml(html: string): string {
+function sanitize(html: string, allowFrames: boolean): string {
   return DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true, svg: true, svgFilters: true },
-    ADD_TAGS: ["phi-raw-html"],
-    ADD_ATTR: ["data-index", "data-wikilink", "data-callout", "target"],
+    ADD_TAGS: allowFrames ? ["phi-raw-html", "iframe"] : ["phi-raw-html"],
+    ADD_ATTR: [
+      "data-index", "data-wikilink", "data-callout", "target", "sandbox",
+      "loading", "referrerpolicy", "allowfullscreen", "frameborder",
+    ],
     ALLOW_DATA_ATTR: true,
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
+    FORBID_TAGS: [
+      "script", "object", "embed", "form", ...(allowFrames ? [] : ["iframe"]),
+    ],
     FORBID_ATTR: ["srcdoc"],
   });
+}
+
+export function sanitizeHtml(html: string): string {
+  return sanitize(html, false);
 }
 
 export function renderMarkdown(source: string): string {
@@ -85,7 +94,7 @@ export function renderMarkdown(source: string): string {
     (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
       .replace(/^<([a-z][\w-]*)(?=\s|>)/i, '<$1 data-phi-raw-html=""'),
   );
-  return applyRemoteImagePolicy(sanitizeHtml(rendered));
+  return applyRemoteContentPolicy(sanitize(rendered, true));
 }
 
 export function renderMarkdownInline(source: string): string {
@@ -96,19 +105,80 @@ export function renderMarkdownInline(source: string): string {
     (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
       .replace(/^<([a-z][\w-]*)(?=\s|>)/i, '<$1 data-phi-raw-html=""'),
   );
-  return applyRemoteImagePolicy(sanitizeHtml(rendered));
+  return applyRemoteContentPolicy(sanitize(rendered, true));
 }
 
-function applyRemoteImagePolicy(sanitized: string): string {
-  if (remoteImagesAllowed()) return sanitized;
+function safeFrameDimension(value: string): string {
+  const trimmed = value.trim();
+  return /^(?:\d+(?:\.\d+)?(?:px|em|rem|vh|vw|%)|auto)$/i.test(trimmed)
+    ? trimmed
+    : "";
+}
+
+function frameSource(value: string): string {
+  let candidate = value.trim();
+  const markdownLink = /^\[[^\]]*\]\((https:\/\/[\s\S]+)\)$/.exec(candidate);
+  if (markdownLink) candidate = markdownLink[1].trim();
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function secureIframes(root: ParentNode): void {
+  root.querySelectorAll<HTMLIFrameElement>("iframe").forEach((frame) => {
+    const source = frameSource(frame.getAttribute("src") ?? "");
+    if (!source) {
+      const error = document.createElement("span");
+      error.className = "render-error iframe-embed-error";
+      error.textContent = "Embedded page blocked: only HTTPS URLs are supported";
+      frame.replaceWith(error);
+      return;
+    }
+
+    const width = safeFrameDimension(frame.style.width);
+    const height = safeFrameDimension(frame.style.height);
+    frame.removeAttribute("style");
+    if (width) frame.style.width = width;
+    if (height) frame.style.height = height;
+    frame.classList.add("iframe-embed");
+    frame.setAttribute("sandbox", "allow-forms allow-popups allow-same-origin allow-scripts");
+    frame.setAttribute("loading", "lazy");
+    frame.setAttribute("referrerpolicy", "no-referrer");
+    frame.removeAttribute("allow");
+    frame.removeAttribute("name");
+    if (!frame.title) frame.title = new URL(source).hostname;
+    if (remoteImagesAllowed()) frame.src = source;
+    else {
+      frame.dataset.remoteSrc = source;
+      frame.removeAttribute("src");
+    }
+  });
+}
+
+function applyRemoteContentPolicy(sanitized: string): string {
   const template = document.createElement("template");
   template.innerHTML = sanitized;
-  template.content.querySelectorAll<HTMLImageElement>('img[src^="http://"], img[src^="https://"]').forEach((image) => {
-    image.dataset.remoteSrc = image.src;
-    image.removeAttribute("src");
-    image.classList.add("remote-image-blocked");
-  });
+  secureIframes(template.content);
+  if (!remoteImagesAllowed()) {
+    template.content.querySelectorAll<HTMLImageElement>('img[src^="http://"], img[src^="https://"]').forEach((image) => {
+      image.dataset.remoteSrc = image.src;
+      image.removeAttribute("src");
+      image.classList.add("remote-image-blocked");
+    });
+  }
   return template.innerHTML;
+}
+
+export function renderRawHtml(source: string): string {
+  return applyRemoteContentPolicy(sanitize(source, true));
+}
+
+export function rawHtmlIsBlock(source: string): boolean {
+  return source.includes("\n") || /^\s*<iframe\b/i.test(source);
 }
 
 export function wireRenderedLinks(root: HTMLElement): void {
@@ -219,9 +289,32 @@ function wireRemoteImages(root: HTMLElement): void {
   });
 }
 
+function wireRemoteIframes(root: HTMLElement): void {
+  root.querySelectorAll<HTMLIFrameElement>("iframe[data-remote-src]").forEach((frame) => {
+    const wrapper = document.createElement("span");
+    wrapper.className = "iframe-embed-placeholder";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "iframe-embed-load";
+    button.textContent = "Load embedded page";
+    button.title = "Remote embedded content is disabled by default";
+    frame.replaceWith(wrapper);
+    wrapper.append(frame, button);
+    button.addEventListener("pointerdown", (event) => event.stopPropagation());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      frame.src = frame.dataset.remoteSrc ?? "";
+      delete frame.dataset.remoteSrc;
+      wrapper.replaceWith(frame);
+    }, { once: true });
+  });
+}
+
 export function wireRenderedContent(root: HTMLElement): void {
   wireRenderedCallouts(root);
   wireRenderedLinks(root);
   wireRenderedMath(root);
   wireRemoteImages(root);
+  wireRemoteIframes(root);
 }

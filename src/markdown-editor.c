@@ -805,6 +805,12 @@ static gboolean on_decide_policy(WebKitWebView *view,
   if ((uri && g_str_has_prefix(uri, "app://editor/")) ||
       g_strcmp0(uri, "about:blank") == 0)
     return FALSE;
+  /* HTTPS documents loaded by a sandboxed iframe are programmatic
+   * navigations. Let WebKit keep those inside the editor; user-initiated
+   * links are still routed to the system browser below. */
+  if (uri && g_str_has_prefix(uri, "https://") &&
+      !webkit_navigation_action_is_user_gesture(action))
+    return FALSE;
   webkit_policy_decision_ignore(decision);
   if (uri && *uri)
     g_signal_emit(self, editor_signals[SIGNAL_OPEN_EXTERNAL_URI], 0, uri);

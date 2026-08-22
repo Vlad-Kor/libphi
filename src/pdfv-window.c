@@ -4830,10 +4830,10 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
 
   AdwSwitchRow *remote = ADW_SWITCH_ROW(adw_switch_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(remote),
-                                "Allow remote images");
+                                "Allow remote content");
   adw_action_row_set_subtitle(
       ADW_ACTION_ROW(remote),
-      "Local and vault images are always available");
+      "Load remote images and embedded web pages automatically");
   adw_switch_row_set_active(
       remote, pdfv_settings_get_allow_remote_images(self->settings));
   adw_preferences_group_add(appearance, GTK_WIDGET(remote));

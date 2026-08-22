@@ -153,7 +153,7 @@ export function parseObsidian(text: string): ObsidianNode[] {
   const nodes: ObsidianNode[] = [];
   const codeRanges = collectCodeRanges(text);
   const htmlRanges: Range[] = [];
-  const rawHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
+  const rawHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td|iframe)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
   for (const match of text.matchAll(rawHtml)) {
     if (!inside(match.index, codeRanges)) {
       htmlRanges.push({ from: match.index, to: match.index + match[0].length });
