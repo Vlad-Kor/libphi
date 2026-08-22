@@ -5623,6 +5623,7 @@ static void pdfv_window_init(PdfvWindow *self) {
    *             └─ AdwToolbarView (child)
    *                  ├─ AdwHeaderBar (top-bar)
    *                  ├─ AdwTabBar (top-bar)
+   *                  ├─ GtkSearchBar (top-bar)
    *                  └─ GtkOverlay (content)
    *                       ├─ AdwTabView (child)
    *                       └─ ZoomControls (overlay)
@@ -5664,9 +5665,8 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Main toolbar view - must be set AFTER tab_overview has a parent */
   self->toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
-  /* Keep the header and transparent tab bar on the same window background as
-   * Markdown. Flat styling changes only the surface/shadow; the bars remain
-   * allocated above the content and never overlap it. */
+  /* Flat bars share the window background with empty tabs and Markdown. The
+   * tab view below is clipped to keep scrolling pages inside it. */
   adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_FLAT);
   adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, FALSE);
   adw_tab_overview_set_child(self->tab_overview,
@@ -5955,6 +5955,7 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   /* Tab view */
   self->tab_view = ADW_TAB_VIEW(adw_tab_view_new());
+  gtk_widget_set_overflow(GTK_WIDGET(self->tab_view), GTK_OVERFLOW_HIDDEN);
   GMenu *tab_menu = g_menu_new();
   GMenu *tab_open_menu = g_menu_new();
   g_menu_append(tab_open_menu, "Open in New Tab",
