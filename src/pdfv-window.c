@@ -21,7 +21,7 @@
 #include <string.h>
 
 #define WORKSPACE_VISIBLE_MATCHES 4
-#define WORKSPACE_PREVIEW_DELAY_MS 90
+#define WORKSPACE_PREVIEW_DELAY_MS 220
 
 struct _PdfvWindow {
   AdwApplicationWindow parent_instance;
@@ -91,12 +91,14 @@ struct _PdfvWindow {
   GtkWidget *workspace_search_card;
   GtkSearchEntry *workspace_search_entry;
   GtkRevealer *workspace_results_revealer;
+  GtkScrolledWindow *workspace_results_scroll;
   GtkListBox *workspace_results_list;
-  AdwAnimation *workspace_results_animation;
   GtkLabel *workspace_search_status;
   GPtrArray *workspace_results;
+  GPtrArray *workspace_result_headers; /* Unowned GtkListBoxRow pointers */
   gint workspace_result_group;
   gint workspace_result_match;
+  guint workspace_result_scroll_id;
   guint workspace_group_select_id;
   gint workspace_pending_group;
 
@@ -1503,6 +1505,33 @@ static PdfvWorkspaceMatch *workspace_selected_match(PdfvWindow *self) {
 
 static GtkListBoxRow *workspace_find_result_row(PdfvWindow *self, gint group,
                                                 gint match) {
+  if (self->workspace_result_headers && group >= 0 &&
+      group < (gint)self->workspace_result_headers->len) {
+    GtkListBoxRow *header =
+        g_ptr_array_index(self->workspace_result_headers, group);
+    if (header && match < 0)
+      return header;
+    for (GtkWidget *child = header
+             ? gtk_widget_get_next_sibling(GTK_WIDGET(header))
+             : NULL;
+         child; child = gtk_widget_get_next_sibling(child)) {
+      if (!GTK_IS_LIST_BOX_ROW(child))
+        continue;
+      gint child_group = GPOINTER_TO_INT(
+                             g_object_get_data(G_OBJECT(child),
+                                               "result-group")) -
+                         1;
+      gint child_match = GPOINTER_TO_INT(
+                             g_object_get_data(G_OBJECT(child),
+                                               "result-match")) -
+                         1;
+      if (child_group != group || child_match < 0)
+        break;
+      if (child_match == match)
+        return GTK_LIST_BOX_ROW(child);
+    }
+    return NULL;
+  }
   for (GtkWidget *child = gtk_widget_get_first_child(
            GTK_WIDGET(self->workspace_results_list));
        child; child = gtk_widget_get_next_sibling(child)) {
@@ -1721,18 +1750,10 @@ static void workspace_preview_selected(PdfvWindow *self) {
   }
 
   workspace_preview_cancel_delay(self);
-  if (workspace_preview_show_loaded(self, group->file, match->page))
-    return;
-
-  if (target_changed &&
-      adw_tab_view_get_selected_page(self->tab_view) ==
-          self->workspace_preview_tab &&
-      self->workspace_return_tab &&
-      adw_tab_view_get_page_position(self->tab_view,
-                                     self->workspace_return_tab) >= 0)
-    adw_tab_view_set_selected_page(self->tab_view,
-                                   self->workspace_return_tab);
-
+  /* Selection must stay a cheap UI-only operation. Even an already-loaded
+   * PDF can spend a long time building a newly visible page's render node on
+   * the GTK thread. Defer every page jump until navigation has been quiet for
+   * a moment so key repeats can replace stale previews before they render. */
   if (self->workspace_preview_tab) {
     GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
     GCancellable *opening =
@@ -1756,6 +1777,9 @@ static void workspace_preview_flush(PdfvWindow *self) {
 }
 
 static void workspace_results_render(PdfvWindow *self);
+static void workspace_results_update_selection(PdfvWindow *self,
+                                               gint previous_group,
+                                               gint previous_match);
 static void workspace_select_result(PdfvWindow *self, gint group, gint match,
                                     gboolean preview);
 
@@ -1791,19 +1815,6 @@ static void on_workspace_result_selected(GtkListBox *box, GtkListBoxRow *row,
   workspace_preview_selected(self);
 }
 
-static void workspace_results_animate(PdfvWindow *self) {
-  g_clear_object(&self->workspace_results_animation);
-  gtk_widget_set_opacity(GTK_WIDGET(self->workspace_results_list), 0.82);
-  AdwAnimationTarget *target = adw_property_animation_target_new(
-      G_OBJECT(self->workspace_results_list), "opacity");
-  self->workspace_results_animation = adw_timed_animation_new(
-      GTK_WIDGET(self->workspace_results_list), 0.82, 1.0, 130, target);
-  adw_timed_animation_set_easing(
-      ADW_TIMED_ANIMATION(self->workspace_results_animation),
-      ADW_EASE_OUT_CUBIC);
-  adw_animation_play(self->workspace_results_animation);
-}
-
 static void workspace_select_result(PdfvWindow *self, gint group, gint match,
                                     gboolean preview) {
   if (self->workspace_group_select_id) {
@@ -1819,28 +1830,11 @@ static void workspace_select_result(PdfvWindow *self, gint group, gint match,
   if (selected->matches->len == 0)
     return;
   match = CLAMP(match, 0, (gint)selected->matches->len - 1);
-  gboolean group_changed = group != self->workspace_result_group;
+  gint previous_group = self->workspace_result_group;
   gint previous_match = self->workspace_result_match;
   self->workspace_result_group = group;
   self->workspace_result_match = match;
-  /* Most arrow-key moves stay inside the four already-rendered result rows.
-   * Selecting that row directly avoids rebuilding the whole list on every
-   * key repeat and keeps preview loading entirely in the background. */
-  gboolean edge_changed = !group_changed &&
-      (previous_match == 0 || match == 0 ||
-       previous_match + 1 == (gint)selected->matches->len ||
-       match + 1 == (gint)selected->matches->len);
-  GtkListBoxRow *row = group_changed || edge_changed
-      ? NULL : workspace_find_result_row(self, group, match);
-  if (row) {
-    self->workspace_suppress_preview = TRUE;
-    gtk_list_box_select_row(self->workspace_results_list, row);
-    self->workspace_suppress_preview = FALSE;
-  } else {
-    workspace_results_render(self);
-  }
-  if (group_changed)
-    workspace_results_animate(self);
+  workspace_results_update_selection(self, previous_group, previous_match);
   gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
   if (preview)
     workspace_preview_selected(self);
@@ -1872,13 +1866,16 @@ static void workspace_results_clear(PdfvWindow *self) {
   workspace_preview_cancel_delay(self);
   workspace_preview_cancel_load(self);
   g_clear_object(&self->workspace_preview_file);
+  if (self->workspace_result_scroll_id) {
+    g_source_remove(self->workspace_result_scroll_id);
+    self->workspace_result_scroll_id = 0;
+  }
   if (self->workspace_group_select_id) {
     g_source_remove(self->workspace_group_select_id);
     self->workspace_group_select_id = 0;
   }
   self->workspace_pending_group = -1;
-  g_clear_object(&self->workspace_results_animation);
-  gtk_widget_set_opacity(GTK_WIDGET(self->workspace_results_list), 1.0);
+  g_ptr_array_set_size(self->workspace_result_headers, 0);
   gtk_list_box_remove_all(self->workspace_results_list);
   gtk_revealer_set_reveal_child(self->workspace_results_revealer, FALSE);
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
@@ -1959,9 +1956,9 @@ static GtkWidget *workspace_group_header(PdfvWindow *self, gint group_index,
   g_free(count_text);
   gtk_widget_add_css_class(count, "dim-label");
   gtk_box_append(GTK_BOX(box), count);
+  g_object_set_data(G_OBJECT(row), "result-count-label", count);
 
-  if (active && (self->workspace_results->len > 1 ||
-                 group->matches->len > 1)) {
+  if (self->workspace_results->len > 1 || group->matches->len > 1) {
     GtkWidget *previous =
         gtk_button_new_from_icon_name("go-up-symbolic");
     gtk_widget_add_css_class(previous, "flat");
@@ -1970,9 +1967,11 @@ static GtkWidget *workspace_group_header(PdfvWindow *self, gint group_index,
     gtk_widget_set_sensitive(
         previous,
         self->workspace_result_group > 0 || self->workspace_result_match > 0);
+    gtk_widget_set_visible(previous, active);
     g_signal_connect(previous, "clicked",
                      G_CALLBACK(workspace_result_previous), self);
     gtk_box_append(GTK_BOX(box), previous);
+    g_object_set_data(G_OBJECT(row), "result-previous-button", previous);
     GtkWidget *next = gtk_button_new_from_icon_name("go-down-symbolic");
     gtk_widget_add_css_class(next, "flat");
     gtk_widget_add_css_class(next, "circular");
@@ -1982,14 +1981,198 @@ static GtkWidget *workspace_group_header(PdfvWindow *self, gint group_index,
         self->workspace_result_group + 1 <
                 (gint)self->workspace_results->len ||
             self->workspace_result_match + 1 < (gint)group->matches->len);
+    gtk_widget_set_visible(next, active);
     g_signal_connect(next, "clicked", G_CALLBACK(workspace_result_next), self);
     gtk_box_append(GTK_BOX(box), next);
+    g_object_set_data(G_OBJECT(row), "result-next-button", next);
   }
   gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
   return row;
 }
 
+static GtkWidget *workspace_match_row(PdfvWindow *self, gint group_index,
+                                      guint match_index) {
+  PdfvWorkspaceResultGroup *group =
+      g_ptr_array_index(self->workspace_results, group_index);
+  PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, match_index);
+  AdwActionRow *row = ADW_ACTION_ROW(adw_action_row_new());
+  adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
+  gchar *title = match->filename_match
+                     ? g_file_get_basename(group->file)
+                     : file_is_markdown(group->file)
+                           ? g_strdup("Markdown match")
+                           : g_strdup_printf("Page %d", match->page + 1);
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+  adw_action_row_set_subtitle(row, match->snippet);
+  adw_action_row_set_subtitle_lines(row, 2);
+  g_free(title);
+  g_object_set_data(G_OBJECT(row), "result-group",
+                    GINT_TO_POINTER(group_index + 1));
+  g_object_set_data(G_OBJECT(row), "result-match",
+                    GINT_TO_POINTER((gint)match_index + 1));
+  return GTK_WIDGET(row);
+}
+
+static void workspace_update_group_header(PdfvWindow *self,
+                                          gint group_index,
+                                          guint visible_start,
+                                          guint visible_end) {
+  if (group_index < 0 ||
+      group_index >= (gint)self->workspace_results->len)
+    return;
+  GtkListBoxRow *row = workspace_find_result_row(self, group_index, -1);
+  if (!row)
+    return;
+  PdfvWorkspaceResultGroup *group =
+      g_ptr_array_index(self->workspace_results, group_index);
+  gboolean active = group_index == self->workspace_result_group;
+  GtkLabel *count = g_object_get_data(G_OBJECT(row), "result-count-label");
+  GtkWidget *previous =
+      g_object_get_data(G_OBJECT(row), "result-previous-button");
+  GtkWidget *next = g_object_get_data(G_OBJECT(row), "result-next-button");
+  gchar *count_text = active &&
+                              group->matches->len > WORKSPACE_VISIBLE_MATCHES
+                          ? g_strdup_printf("%u–%u of %u", visible_start + 1,
+                                            visible_end, group->matches->len)
+                          : g_strdup_printf("%u match%s", group->matches->len,
+                                            group->matches->len == 1
+                                                ? ""
+                                                : "es");
+  gtk_label_set_text(count, count_text);
+  g_free(count_text);
+  if (previous) {
+    gtk_widget_set_visible(previous, active);
+    gtk_widget_set_sensitive(previous, active &&
+        (self->workspace_result_group > 0 ||
+         self->workspace_result_match > 0));
+  }
+  if (next) {
+    gtk_widget_set_visible(next, active);
+    gtk_widget_set_sensitive(next, active &&
+        (self->workspace_result_group + 1 <
+             (gint)self->workspace_results->len ||
+         self->workspace_result_match + 1 < (gint)group->matches->len));
+  }
+}
+
+static void workspace_remove_group_matches(PdfvWindow *self,
+                                           gint group_index) {
+  GtkListBoxRow *header = workspace_find_result_row(self, group_index, -1);
+  for (GtkWidget *child = header
+           ? gtk_widget_get_next_sibling(GTK_WIDGET(header))
+           : NULL;
+       child;) {
+    GtkWidget *next = gtk_widget_get_next_sibling(child);
+    if (!GTK_IS_LIST_BOX_ROW(child)) {
+      child = next;
+      continue;
+    }
+    gint child_group = GPOINTER_TO_INT(
+                           g_object_get_data(G_OBJECT(child),
+                                             "result-group")) -
+                       1;
+    gint child_match = GPOINTER_TO_INT(
+                           g_object_get_data(G_OBJECT(child),
+                                             "result-match")) -
+                       1;
+    if (child_group != group_index || child_match < 0)
+      break;
+    gtk_list_box_remove(self->workspace_results_list, child);
+    child = next;
+  }
+}
+
+static void workspace_insert_group_matches(PdfvWindow *self,
+                                           gint group_index,
+                                           guint visible_start,
+                                           guint visible_end) {
+  GtkListBoxRow *header = workspace_find_result_row(self, group_index, -1);
+  if (!header)
+    return;
+  gint position = gtk_list_box_row_get_index(header) + 1;
+  for (guint match = visible_start; match < visible_end; match++)
+    gtk_list_box_insert(self->workspace_results_list,
+                        workspace_match_row(self, group_index, match),
+                        position++);
+}
+
+static void workspace_scroll_result_into_view(PdfvWindow *self,
+                                              GtkListBoxRow *row) {
+  if (!self->workspace_results_scroll || !row)
+    return;
+  graphene_rect_t bounds;
+  if (!gtk_widget_compute_bounds(GTK_WIDGET(row),
+                                 GTK_WIDGET(self->workspace_results_list),
+                                 &bounds))
+    return;
+  GtkAdjustment *adjustment = gtk_scrolled_window_get_vadjustment(
+      self->workspace_results_scroll);
+  gdouble value = gtk_adjustment_get_value(adjustment);
+  gdouble page_size = gtk_adjustment_get_page_size(adjustment);
+  gdouble top = bounds.origin.y;
+  gdouble bottom = bounds.origin.y + bounds.size.height;
+  if (top < value)
+    gtk_adjustment_set_value(adjustment, top);
+  else if (bottom > value + page_size)
+    gtk_adjustment_set_value(adjustment, bottom - page_size);
+}
+
+static gboolean workspace_scroll_selected_idle(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  self->workspace_result_scroll_id = 0;
+  GtkListBoxRow *row = workspace_find_result_row(
+      self, self->workspace_result_group, self->workspace_result_match);
+  workspace_scroll_result_into_view(self, row);
+  return G_SOURCE_REMOVE;
+}
+
+static void workspace_schedule_result_scroll(PdfvWindow *self) {
+  if (self->workspace_result_scroll_id)
+    g_source_remove(self->workspace_result_scroll_id);
+  self->workspace_result_scroll_id = g_idle_add_full(
+      G_PRIORITY_HIGH_IDLE, workspace_scroll_selected_idle,
+      g_object_ref(self), g_object_unref);
+}
+
+static void workspace_results_update_selection(PdfvWindow *self,
+                                               gint previous_group,
+                                               gint previous_match) {
+  gint group = self->workspace_result_group;
+  gint match = self->workspace_result_match;
+  guint start = (match / WORKSPACE_VISIBLE_MATCHES) *
+                WORKSPACE_VISIBLE_MATCHES;
+  PdfvWorkspaceResultGroup *selected =
+      g_ptr_array_index(self->workspace_results, group);
+  guint end = MIN(start + WORKSPACE_VISIBLE_MATCHES,
+                  selected->matches->len);
+  gboolean group_changed = previous_group != group;
+  gboolean window_changed = group_changed || previous_match < 0 ||
+      previous_match / WORKSPACE_VISIBLE_MATCHES !=
+          match / WORKSPACE_VISIBLE_MATCHES;
+
+  if (!workspace_find_result_row(self, group, -1)) {
+    workspace_results_render(self);
+  } else {
+    if (window_changed) {
+      if (previous_group >= 0)
+        workspace_remove_group_matches(self, previous_group);
+      workspace_insert_group_matches(self, group, start, end);
+    }
+    if (group_changed && previous_group >= 0)
+      workspace_update_group_header(self, previous_group, 0, 0);
+    workspace_update_group_header(self, group, start, end);
+  }
+
+  GtkListBoxRow *row = workspace_find_result_row(self, group, match);
+  self->workspace_suppress_preview = TRUE;
+  gtk_list_box_select_row(self->workspace_results_list, row);
+  self->workspace_suppress_preview = FALSE;
+  workspace_scroll_result_into_view(self, row);
+  workspace_schedule_result_scroll(self);
+}
+
 static void workspace_results_render(PdfvWindow *self) {
+  g_ptr_array_set_size(self->workspace_result_headers, 0);
   gtk_list_box_remove_all(self->workspace_results_list);
   if (!self->workspace_results || self->workspace_results->len == 0)
     return;
@@ -2000,6 +2183,8 @@ static void workspace_results_render(PdfvWindow *self) {
   PdfvWorkspaceResultGroup *selected = workspace_selected_group(self);
   self->workspace_result_match =
       CLAMP(self->workspace_result_match, 0, (gint)selected->matches->len - 1);
+  g_ptr_array_set_size(self->workspace_result_headers,
+                       self->workspace_results->len);
 
   for (guint g = 0; g < self->workspace_results->len; g++) {
     PdfvWorkspaceResultGroup *group =
@@ -2011,30 +2196,15 @@ static void workspace_results_render(PdfvWindow *self) {
               WORKSPACE_VISIBLE_MATCHES;
       end = MIN(start + WORKSPACE_VISIBLE_MATCHES, group->matches->len);
     }
-    gtk_list_box_append(self->workspace_results_list,
-                        workspace_group_header(self, g, start, end));
+    GtkWidget *header = workspace_group_header(self, g, start, end);
+    gtk_list_box_append(self->workspace_results_list, header);
+    g_ptr_array_index(self->workspace_result_headers, g) = header;
     if ((gint)g != self->workspace_result_group)
       continue;
 
-    for (guint m = start; m < end; m++) {
-      PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, m);
-      AdwActionRow *row = ADW_ACTION_ROW(adw_action_row_new());
-      adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
-      gchar *title = match->filename_match
-                         ? g_file_get_basename(group->file)
-                         : file_is_markdown(group->file)
-                               ? g_strdup("Markdown match")
-                               : g_strdup_printf("Page %d", match->page + 1);
-      adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
-      adw_action_row_set_subtitle(row, match->snippet);
-      adw_action_row_set_subtitle_lines(row, 2);
-      g_free(title);
-      g_object_set_data(G_OBJECT(row), "result-group",
-                        GINT_TO_POINTER((gint)g + 1));
-      g_object_set_data(G_OBJECT(row), "result-match",
-                        GINT_TO_POINTER((gint)m + 1));
-      gtk_list_box_append(self->workspace_results_list, GTK_WIDGET(row));
-    }
+    for (guint m = start; m < end; m++)
+      gtk_list_box_append(self->workspace_results_list,
+                          workspace_match_row(self, g, m));
   }
 
   GtkListBoxRow *row = workspace_find_result_row(
@@ -2091,8 +2261,7 @@ static void workspace_results_show(PdfvWindow *self, GPtrArray *groups) {
     workspace_results_render(self);
     gtk_revealer_set_reveal_child(self->workspace_results_revealer, TRUE);
   } else {
-    g_clear_object(&self->workspace_results_animation);
-    gtk_widget_set_opacity(GTK_WIDGET(self->workspace_results_list), 1.0);
+    g_ptr_array_set_size(self->workspace_result_headers, 0);
     gtk_list_box_remove_all(self->workspace_results_list);
     gtk_revealer_set_reveal_child(self->workspace_results_revealer, FALSE);
   }
@@ -5375,6 +5544,10 @@ static void pdfv_window_dispose(GObject *object) {
     g_source_remove(self->workspace_group_select_id);
     self->workspace_group_select_id = 0;
   }
+  if (self->workspace_result_scroll_id) {
+    g_source_remove(self->workspace_result_scroll_id);
+    self->workspace_result_scroll_id = 0;
+  }
   if (self->workspace_scan_cancellable)
     g_cancellable_cancel(self->workspace_scan_cancellable);
   if (self->workspace_search_cancellable)
@@ -5400,8 +5573,8 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->tab_context_page);
   g_clear_object(&self->tab_context_file);
   g_clear_object(&self->workspace_return_tab);
-  g_clear_object(&self->workspace_results_animation);
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
+  g_clear_pointer(&self->workspace_result_headers, g_ptr_array_unref);
   workspace_document_cache_clear(self);
   g_clear_pointer(&self->workspace_document_cache, g_hash_table_unref);
   g_clear_pointer(&self->workspace_expanded_paths, g_hash_table_unref);
@@ -5425,6 +5598,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->settings = pdfv_settings_new();
+  self->workspace_result_headers = g_ptr_array_new();
   self->workspace_expanded_paths =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
   self->workspace_document_cache =
@@ -5968,13 +6142,14 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_revealer_set_transition_type(self->workspace_results_revealer,
                                    GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
   gtk_revealer_set_transition_duration(self->workspace_results_revealer, 180);
-  GtkWidget *result_scroll = gtk_scrolled_window_new();
-  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(result_scroll),
+  self->workspace_results_scroll =
+      GTK_SCROLLED_WINDOW(gtk_scrolled_window_new());
+  gtk_scrolled_window_set_policy(self->workspace_results_scroll,
                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(result_scroll),
+  gtk_scrolled_window_set_max_content_height(self->workspace_results_scroll,
                                              430);
   gtk_scrolled_window_set_propagate_natural_height(
-      GTK_SCROLLED_WINDOW(result_scroll), TRUE);
+      self->workspace_results_scroll, TRUE);
   self->workspace_results_list = GTK_LIST_BOX(gtk_list_box_new());
   gtk_list_box_set_selection_mode(self->workspace_results_list,
                                   GTK_SELECTION_SINGLE);
@@ -5991,9 +6166,10 @@ static void pdfv_window_init(PdfvWindow *self) {
                    G_CALLBACK(on_workspace_result_selected), self);
   g_signal_connect(self->workspace_results_list, "row-activated",
                    G_CALLBACK(workspace_result_row_activated), self);
-  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(result_scroll),
+  gtk_scrolled_window_set_child(self->workspace_results_scroll,
                                 GTK_WIDGET(self->workspace_results_list));
-  gtk_revealer_set_child(self->workspace_results_revealer, result_scroll);
+  gtk_revealer_set_child(self->workspace_results_revealer,
+                         GTK_WIDGET(self->workspace_results_scroll));
   gtk_box_append(GTK_BOX(workspace_search_card),
                  GTK_WIDGET(self->workspace_results_revealer));
   gtk_widget_set_visible(self->workspace_search_overlay, FALSE);
