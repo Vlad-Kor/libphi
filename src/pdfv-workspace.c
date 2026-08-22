@@ -458,7 +458,8 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
                           : g_strdup(name);
 
     if (type == G_FILE_TYPE_DIRECTORY &&
-        !g_str_equal(name, ".obsidian") && !g_str_equal(name, ".git")) {
+        !g_str_equal(name, ".obsidian") && !g_str_equal(name, ".git") &&
+        !g_str_equal(name, ".trash")) {
       GError *child_error = NULL;
       guint nested_pdf_count = 0;
       GPtrArray *nested = scan_folder(child_file, relative, result, cancellable,
@@ -883,18 +884,25 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
   if (!scan)
     return FALSE;
 
-  g_list_store_remove_all(self->items);
+  /* Publish each scan as a new snapshot. Existing GtkTreeListModels may still
+   * be flattening the previous store while the window swaps its sidebar
+   * model, so mutating that store in place can re-enter GTK row disposal. */
+  GListStore *items = g_list_store_new(PDFV_TYPE_WORKSPACE_ITEM);
+  for (guint i = 0; i < scan->roots->len; i++) {
+    PdfvWorkspaceItem *item =
+        workspace_item_from_scan(g_ptr_array_index(scan->roots, i));
+    g_list_store_append(items, item);
+    g_object_unref(item);
+  }
+  GListStore *previous_items = self->items;
+  self->items = items;
+  g_object_unref(previous_items);
+
   g_hash_table_remove_all(self->index);
   self->indexed_count = 0;
   self->cache_hit_count = 0;
   self->pdf_count = scan->pdf_files->len;
   self->document_count = scan->pdf_files->len + scan->markdown_files->len;
-  for (guint i = 0; i < scan->roots->len; i++) {
-    PdfvWorkspaceItem *item =
-        workspace_item_from_scan(g_ptr_array_index(scan->roots, i));
-    g_list_store_append(self->items, item);
-    g_object_unref(item);
-  }
   for (guint i = 0; i < scan->pdf_files->len; i++)
     queue_index_document(self, g_ptr_array_index(scan->pdf_files, i),
                          g_ptr_array_index(scan->pdf_paths, i));

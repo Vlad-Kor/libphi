@@ -61,7 +61,9 @@ struct _PdfvWindow {
   GtkSingleSelection *workspace_selection;
   GtkTreeListModel *workspace_tree;
   GtkWidget *workspace_tools;
+  gboolean workspace_syncing_selection;
   GFile *workspace_pending_selection;
+  gchar *workspace_pending_toast;
   GFile *workspace_context_file;
   gboolean workspace_context_is_folder;
 
@@ -163,11 +165,17 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
                                 gpointer user_data);
 static void reload_workspace(PdfvWindow *self, GFile *select_file);
 static void save_workspace_tab_session(PdfvWindow *self);
+static GFile *workspace_active_file(PdfvWindow *self);
 static void show_workspace_creation_dialog(PdfvWindow *self,
                                            gboolean folder,
                                            gboolean use_context);
 static void begin_workspace_move(PdfvWindow *self, GFile *source,
                                  GFile *destination_folder);
+static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder);
+static void workspace_sync_selection_to_active(PdfvWindow *self);
+static void on_workspace_selection_changed(GtkSelectionModel *selection,
+                                           guint position, guint n_items,
+                                           PdfvWindow *self);
 static void on_workspace_context_pressed(GtkGestureClick *gesture,
                                          gint n_press, gdouble x, gdouble y,
                                          PdfvWindow *self);
@@ -1154,6 +1162,14 @@ static gboolean file_is_supported_document(GFile *file) {
   return pdf;
 }
 
+static const gchar *workspace_trash_name(void) {
+#ifdef G_OS_WIN32
+  return "Recycle Bin";
+#else
+  return "Trash";
+#endif
+}
+
 static void workspace_factory_setup(GtkSignalListItemFactory *factory,
                                     GtkListItem *list_item,
                                     PdfvWindow *self) {
@@ -1224,14 +1240,12 @@ static void workspace_factory_bind(GtkSignalListItemFactory *factory,
                          g_object_ref(item), g_object_unref);
   g_object_set_data(G_OBJECT(expander), "workspace-is-folder",
                     GINT_TO_POINTER(pdfv_workspace_item_is_folder(item)));
-  guint position = gtk_list_item_get_position(list_item);
-  g_object_set_data(G_OBJECT(expander), "workspace-position",
-                    position == GTK_INVALID_LIST_POSITION
-                        ? NULL : GUINT_TO_POINTER(position + 1));
   if (pdfv_workspace_item_is_folder(item)) {
     gulong handler = g_signal_connect(
         row, "notify::expanded",
         G_CALLBACK(on_workspace_row_expanded_changed), self);
+    g_object_set_data_full(G_OBJECT(list_item), "workspace-expanded-row",
+                           g_object_ref(row), g_object_unref);
     g_object_set_data(G_OBJECT(list_item), "workspace-expanded-handler",
                       GSIZE_TO_POINTER(handler));
   }
@@ -1245,16 +1259,26 @@ static void workspace_factory_unbind(GtkSignalListItemFactory *factory,
   (void)self;
   GtkTreeExpander *expander =
       GTK_TREE_EXPANDER(gtk_list_item_get_child(list_item));
-  GtkTreeListRow *row = gtk_tree_expander_get_list_row(expander);
+  GtkWidget *context_menu = g_object_get_data(
+      G_OBJECT(expander), "workspace-context-menu");
+  if (context_menu) {
+    g_object_set_data(G_OBJECT(expander), "workspace-context-menu", NULL);
+    gtk_popover_popdown(GTK_POPOVER(context_menu));
+    if (gtk_widget_get_parent(context_menu) == GTK_WIDGET(expander))
+      gtk_widget_unparent(context_menu);
+  }
+  GtkTreeListRow *expanded_row = g_object_get_data(
+      G_OBJECT(list_item), "workspace-expanded-row");
   gulong handler = GPOINTER_TO_SIZE(g_object_get_data(
       G_OBJECT(list_item), "workspace-expanded-handler"));
-  if (row && handler && g_signal_handler_is_connected(row, handler))
-    g_signal_handler_disconnect(row, handler);
+  if (expanded_row && handler &&
+      g_signal_handler_is_connected(expanded_row, handler))
+    g_signal_handler_disconnect(expanded_row, handler);
   g_object_set_data(G_OBJECT(list_item), "workspace-expanded-handler", NULL);
+  g_object_set_data(G_OBJECT(list_item), "workspace-expanded-row", NULL);
   g_object_set_data(G_OBJECT(expander), "workspace-file", NULL);
   g_object_set_data(G_OBJECT(expander), "workspace-item", NULL);
   g_object_set_data(G_OBJECT(expander), "workspace-is-folder", NULL);
-  g_object_set_data(G_OBJECT(expander), "workspace-position", NULL);
   gtk_tree_expander_set_list_row(expander, NULL);
 }
 
@@ -1270,6 +1294,7 @@ static void on_workspace_item_activated(GtkListView *list, guint position,
   PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
   if (pdfv_workspace_item_is_folder(item)) {
     gtk_tree_list_row_set_expanded(row, !gtk_tree_list_row_get_expanded(row));
+    workspace_sync_selection_to_active(self);
   } else {
     workspace_open_file(self, pdfv_workspace_item_get_file(item), FALSE);
   }
@@ -1326,7 +1351,43 @@ static GMenu *workspace_context_menu(gboolean folder) {
                 "win.workspace-context-open-folder");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(files));
   g_object_unref(files);
+  if (folder) {
+    GMenu *danger = g_menu_new();
+    gchar *label = g_strdup_printf("Move Folder to %s…",
+                                   workspace_trash_name());
+    GMenuItem *trash = g_menu_item_new(
+        label, "win.workspace-context-trash-folder");
+    g_free(label);
+    GIcon *icon = g_themed_icon_new("user-trash-symbolic");
+    g_menu_item_set_icon(trash, icon);
+    g_object_unref(icon);
+    g_menu_append_item(danger, trash);
+    g_object_unref(trash);
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(danger));
+    g_object_unref(danger);
+  }
   return menu;
+}
+
+static gboolean workspace_context_menu_unparent(gpointer user_data) {
+  GtkWidget *popover = GTK_WIDGET(user_data);
+  GtkWidget *parent = gtk_widget_get_parent(popover);
+  if (parent) {
+    if (g_object_get_data(G_OBJECT(parent), "workspace-context-menu") ==
+        popover)
+      g_object_set_data(G_OBJECT(parent), "workspace-context-menu", NULL);
+    gtk_widget_unparent(popover);
+  }
+  return G_SOURCE_REMOVE;
+}
+
+static void on_workspace_context_menu_closed(GtkPopover *popover,
+                                             PdfvWindow *self) {
+  (void)self;
+  /* GtkPopover emits ::closed before GtkPopoverMenu finishes activating its
+   * menu item. Keep the window action scope inherited for one idle turn. */
+  g_idle_add_full(G_PRIORITY_LOW, workspace_context_menu_unparent,
+                  g_object_ref(popover), g_object_unref);
 }
 
 static void on_workspace_context_pressed(GtkGestureClick *gesture,
@@ -1340,11 +1401,6 @@ static void on_workspace_context_pressed(GtkGestureClick *gesture,
     return;
   gboolean folder = GPOINTER_TO_INT(
       g_object_get_data(G_OBJECT(row_widget), "workspace-is-folder"));
-  guint encoded_position = GPOINTER_TO_UINT(
-      g_object_get_data(G_OBJECT(row_widget), "workspace-position"));
-  if (encoded_position)
-    gtk_single_selection_set_selected(self->workspace_selection,
-                                      encoded_position - 1);
   g_set_object(&self->workspace_context_file, file);
   self->workspace_context_is_folder = folder;
 
@@ -1353,10 +1409,11 @@ static void on_workspace_context_pressed(GtkGestureClick *gesture,
   g_object_unref(menu);
   gtk_widget_set_parent(popover, row_widget);
   gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+  g_object_set_data(G_OBJECT(row_widget), "workspace-context-menu", popover);
   GdkRectangle rectangle = {(gint)x, (gint)y, 1, 1};
   gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rectangle);
-  g_signal_connect_swapped(popover, "closed",
-                           G_CALLBACK(gtk_widget_unparent), popover);
+  g_signal_connect(popover, "closed",
+                   G_CALLBACK(on_workspace_context_menu_closed), self);
   gtk_popover_popup(GTK_POPOVER(popover));
   gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 }
@@ -1372,11 +1429,6 @@ static GdkContentProvider *on_workspace_drag_prepare(
       G_OBJECT(row_widget), "workspace-item");
   if (!file || !item || !self->workspace)
     return NULL;
-  guint encoded_position = GPOINTER_TO_UINT(
-      g_object_get_data(G_OBJECT(row_widget), "workspace-position"));
-  if (encoded_position)
-    gtk_single_selection_set_selected(self->workspace_selection,
-                                      encoded_position - 1);
   return gdk_content_provider_new_typed(PDFV_TYPE_WORKSPACE_ITEM, item);
 }
 
@@ -2492,6 +2544,8 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
     return;
   g_object_set_data_full(G_OBJECT(stack), "document-file",
                          g_object_ref(file), g_object_unref);
+  if (adw_tab_view_get_selected_page(self->tab_view) == page)
+    workspace_sync_selection_to_active(self);
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
   tab_set_document_icon(page, FALSE);
   gchar *basename = g_file_get_basename(file);
@@ -2637,6 +2691,8 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
   }
   g_object_set_data_full(G_OBJECT(stack), "document-file",
                          g_object_ref(file), g_object_unref);
+  if (adw_tab_view_get_selected_page(self->tab_view) == page)
+    workspace_sync_selection_to_active(self);
   if (!reuse)
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
   tab_set_document_icon(page, TRUE);
@@ -2722,6 +2778,7 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
     update_markdown_actions(self);
     if (!self->workspace)
       adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+    workspace_sync_selection_to_active(self);
     return;
   }
 
@@ -2752,6 +2809,7 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
     gtk_label_set_text(self->search_status, "");
     apply_preferences_to_editor(self, self->current_editor);
   }
+  workspace_sync_selection_to_active(self);
 }
 
 typedef struct {
@@ -2850,6 +2908,22 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
   PdfvDocumentView *view = g_object_get_data(G_OBJECT(stack), "document-view");
   PdfvMarkdownEditor *editor =
       g_object_get_data(G_OBJECT(stack), "markdown-editor");
+  if (g_object_get_data(G_OBJECT(page), "workspace-trash-force-close")) {
+    if (editor) {
+      g_signal_handlers_disconnect_by_data(editor, self);
+      if (editor == self->current_editor)
+        self->current_editor = NULL;
+    }
+    if (view) {
+      g_signal_handlers_disconnect_by_data(view, self);
+      if (view == self->current_view)
+        self->current_view = NULL;
+    }
+    adw_tab_view_close_page_finish(tab_view, page, TRUE);
+    if (adw_tab_view_get_n_pages(tab_view) == 0)
+      pdfv_window_new_tab(self);
+    return GDK_EVENT_STOP;
+  }
   if (editor) {
     if (g_object_get_data(G_OBJECT(page), "markdown-close-pending"))
       return GDK_EVENT_STOP;
@@ -3087,7 +3161,8 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
 
   workspace_results_clear(self);
   gtk_editable_set_text(GTK_EDITABLE(self->workspace_search_entry), "");
-  gtk_single_selection_set_model(self->workspace_selection, NULL);
+  gtk_list_view_set_model(self->workspace_list, NULL);
+  self->workspace_selection = NULL;
   g_clear_object(&self->workspace_tree);
   g_clear_object(&self->workspace);
   g_hash_table_remove_all(self->workspace_expanded_paths);
@@ -3096,6 +3171,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
   g_clear_object(&self->workspace_pending_selection);
+  g_clear_pointer(&self->workspace_pending_toast, g_free);
   g_clear_object(&self->workspace_context_file);
   self->workspace_browse_tab = NULL;
   workspace_document_cache_clear(self);
@@ -3160,9 +3236,8 @@ static void workspace_select_pending_file(PdfvWindow *self) {
     g_object_unref(row);
     if (!match)
       continue;
-    gtk_single_selection_set_selected(self->workspace_selection, position);
     gtk_list_view_scroll_to(self->workspace_list, position,
-                            GTK_LIST_SCROLL_FOCUS, NULL);
+                            GTK_LIST_SCROLL_NONE, NULL);
     break;
   }
   g_clear_object(&self->workspace_pending_selection);
@@ -3179,6 +3254,7 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     g_object_unref(self);
     return;
   }
+
   GError *error = NULL;
   gboolean loaded = pdfv_workspace_load_finish(workspace, result, &error);
   if (loaded) {
@@ -3189,14 +3265,30 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     if (self->workspace_pending_selection)
       workspace_expand_parents_for(self,
                                    self->workspace_pending_selection);
-    g_clear_object(&self->workspace_tree);
+    GtkTreeListModel *previous_tree = self->workspace_tree;
     self->workspace_tree = gtk_tree_list_model_new(
         g_object_ref(pdfv_workspace_get_items(workspace)), FALSE, FALSE,
         workspace_create_children, self, NULL);
     restore_workspace_tree_session(self);
-    gtk_single_selection_set_model(
-        self->workspace_selection, G_LIST_MODEL(self->workspace_tree));
+    GtkSingleSelection *selection = gtk_single_selection_new(NULL);
+    gtk_single_selection_set_autoselect(selection, FALSE);
+    gtk_single_selection_set_can_unselect(selection, TRUE);
+    gtk_single_selection_set_model(selection,
+                                   G_LIST_MODEL(self->workspace_tree));
+    self->workspace_selection = selection;
+    g_signal_connect(selection, "selection-changed",
+                     G_CALLBACK(on_workspace_selection_changed), self);
+    gtk_list_view_set_model(self->workspace_list,
+                            GTK_SELECTION_MODEL(selection));
+    g_object_unref(selection);
+    g_clear_object(&previous_tree);
     workspace_select_pending_file(self);
+    workspace_sync_selection_to_active(self);
+    if (self->workspace_pending_toast) {
+      adw_toast_overlay_add_toast(
+          self->toast_overlay, adw_toast_new(self->workspace_pending_toast));
+      g_clear_pointer(&self->workspace_pending_toast, g_free);
+    }
     if (self->workspace_tools)
       gtk_widget_set_sensitive(self->workspace_tools, TRUE);
     adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
@@ -3218,6 +3310,7 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     adw_dialog_present(dialog, GTK_WIDGET(self));
     if (self->workspace_tools)
       gtk_widget_set_sensitive(self->workspace_tools, FALSE);
+    g_clear_pointer(&self->workspace_pending_toast, g_free);
   }
   g_clear_error(&error);
   g_object_unref(self);
@@ -3269,6 +3362,56 @@ static GFile *workspace_active_file(PdfvWindow *self) {
   return file ? g_object_ref(file) : NULL;
 }
 
+static void workspace_sync_selection_to_active(PdfvWindow *self) {
+  if (self->workspace_syncing_selection || !self->workspace_selection ||
+      !self->workspace_tree)
+    return;
+  self->workspace_syncing_selection = TRUE;
+  GFile *active = workspace_active_file(self);
+  GFile *root = self->workspace
+      ? pdfv_workspace_get_folder(self->workspace) : NULL;
+  if (!active || !root ||
+      !pdfv_workspace_file_is_within(root, active)) {
+    gtk_selection_model_unselect_all(
+        GTK_SELECTION_MODEL(self->workspace_selection));
+    g_clear_object(&active);
+    self->workspace_syncing_selection = FALSE;
+    return;
+  }
+
+  guint count = g_list_model_get_n_items(G_LIST_MODEL(self->workspace_tree));
+  for (guint position = 0; position < count; position++) {
+    GtkTreeListRow *row = gtk_tree_list_model_get_row(
+        self->workspace_tree, position);
+    if (!row)
+      continue;
+    PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
+    gboolean match = !pdfv_workspace_item_is_folder(item) &&
+        g_file_equal(pdfv_workspace_item_get_file(item), active);
+    g_object_unref(item);
+    g_object_unref(row);
+    if (!match)
+      continue;
+    gtk_single_selection_set_selected(self->workspace_selection, position);
+    g_object_unref(active);
+    self->workspace_syncing_selection = FALSE;
+    return;
+  }
+  gtk_selection_model_unselect_all(
+      GTK_SELECTION_MODEL(self->workspace_selection));
+  g_object_unref(active);
+  self->workspace_syncing_selection = FALSE;
+}
+
+static void on_workspace_selection_changed(GtkSelectionModel *selection,
+                                           guint position, guint n_items,
+                                           PdfvWindow *self) {
+  (void)selection;
+  (void)position;
+  (void)n_items;
+  workspace_sync_selection_to_active(self);
+}
+
 static GFile *workspace_creation_folder(PdfvWindow *self,
                                         gboolean use_context) {
   if (!self->workspace)
@@ -3278,16 +3421,6 @@ static GFile *workspace_creation_folder(PdfvWindow *self,
   if (use_context && self->workspace_context_file) {
     selected = g_object_ref(self->workspace_context_file);
     selected_is_folder = self->workspace_context_is_folder;
-  } else {
-    GtkTreeListRow *row = gtk_single_selection_get_selected_item(
-        self->workspace_selection);
-    if (row) {
-      PdfvWorkspaceItem *item = gtk_tree_list_row_get_item(row);
-      selected = g_object_ref(pdfv_workspace_item_get_file(item));
-      selected_is_folder = pdfv_workspace_item_is_folder(item);
-      g_object_unref(item);
-      g_object_unref(row);
-    }
   }
   GFile *active = workspace_active_file(self);
   GFile *folder = pdfv_workspace_creation_parent(
@@ -3390,6 +3523,7 @@ static void show_workspace_creation_dialog(PdfvWindow *self,
   request->folder = folder;
   adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
                           on_workspace_creation_chosen, request);
+  gtk_widget_grab_focus(GTK_WIDGET(entry));
   g_free(description);
   g_free(parent_name);
 }
@@ -3445,6 +3579,7 @@ typedef struct {
   GPtrArray *tabs;
   guint save_index;
   gboolean source_is_folder;
+  gboolean trash;
 } WorkspaceMoveRequest;
 
 static void workspace_move_request_free(WorkspaceMoveRequest *request) {
@@ -3460,8 +3595,52 @@ static void workspace_move_request_free(WorkspaceMoveRequest *request) {
 
 static void workspace_move_failed(WorkspaceMoveRequest *request,
                                   const GError *error) {
-  show_file_operation_error(request->initiator, "Could Not Move Item", error);
+  show_file_operation_error(
+      request->initiator,
+      request->trash ? "Could Not Remove Folder"
+                     : "Could Not Move Item",
+      error);
   workspace_move_request_free(request);
+}
+
+static void collect_workspace_move_tabs(WorkspaceMoveRequest *request) {
+  GtkApplication *application = gtk_window_get_application(
+      GTK_WINDOW(request->initiator));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    guint pages = adw_tab_view_get_n_pages(window->tab_view);
+    for (guint i = 0; i < pages; i++) {
+      AdwTabPage *page = adw_tab_view_get_nth_page(window->tab_view, i);
+      GtkWidget *stack = adw_tab_page_get_child(page);
+      GFile *open_file = GTK_IS_STACK(stack)
+          ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
+      if (!open_file || !file_is_at_or_below(
+                            request->source, open_file,
+                            request->source_is_folder))
+        continue;
+      GFile *new_file = request->trash ? NULL : file_after_move(
+          request->source, request->expected_destination, open_file,
+          request->source_is_folder);
+      if (!request->trash && !new_file)
+        continue;
+      MovedTab *tab = g_new0(MovedTab, 1);
+      tab->window = g_object_ref(window);
+      tab->page = g_object_ref(page);
+      tab->new_file = new_file;
+      tab->editor = g_object_get_data(G_OBJECT(stack), "markdown-editor");
+      if (tab->editor)
+        g_object_ref(tab->editor);
+      PdfvDocumentView *view = g_object_get_data(
+          G_OBJECT(stack), "document-view");
+      tab->page_number = view && pdfv_document_view_get_document(view)
+          ? pdfv_document_view_get_current_page(view) : 0;
+      g_ptr_array_add(request->tabs, tab);
+    }
+  }
 }
 
 static void remap_workspace_after_move(PdfvWindow *self, GFile *source,
@@ -3522,6 +3701,100 @@ static void remap_workspace_after_move(PdfvWindow *self, GFile *source,
   g_free(new_path);
 }
 
+static void remove_workspace_state_after_trash(PdfvWindow *self,
+                                               GFile *folder) {
+  if (!self->workspace)
+    return;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  gchar *relative = g_file_get_relative_path(root, folder);
+  if (!relative || !*relative) {
+    g_free(relative);
+    return;
+  }
+
+  GPtrArray *remove = g_ptr_array_new_with_free_func(g_free);
+  GHashTableIter iter;
+  gpointer key = NULL;
+  g_hash_table_iter_init(&iter, self->workspace_expanded_paths);
+  gsize length = strlen(relative);
+  while (g_hash_table_iter_next(&iter, &key, NULL)) {
+    const gchar *path = key;
+    if (g_strcmp0(path, relative) == 0 ||
+        (g_str_has_prefix(path, relative) &&
+         path[length] == G_DIR_SEPARATOR))
+      g_ptr_array_add(remove, g_strdup(path));
+  }
+  for (guint i = 0; i < remove->len; i++)
+    g_hash_table_remove(self->workspace_expanded_paths,
+                        g_ptr_array_index(remove, i));
+  g_ptr_array_unref(remove);
+
+  if (self->workspace_context_file && file_is_at_or_below(
+          folder, self->workspace_context_file, TRUE)) {
+    g_clear_object(&self->workspace_context_file);
+    self->workspace_context_is_folder = FALSE;
+  }
+  if (self->workspace_pending_selection && file_is_at_or_below(
+          folder, self->workspace_pending_selection, TRUE))
+    g_clear_object(&self->workspace_pending_selection);
+
+  if (pdfv_settings_get_workspace_attachment_fixed(self->settings, root)) {
+    gchar *uri = pdfv_settings_dup_workspace_attachment_folder_uri(
+        self->settings, root);
+    GFile *attachments = uri && *uri ? g_file_new_for_uri(uri) : NULL;
+    if (attachments && file_is_at_or_below(folder, attachments, TRUE))
+      pdfv_settings_set_workspace_attachment_policy(
+          self->settings, root, FALSE, NULL);
+    g_clear_object(&attachments);
+    g_free(uri);
+  }
+  save_workspace_tree_session(self);
+  apply_markdown_preferences(self);
+  g_free(relative);
+}
+
+static void workspace_trash_execute(WorkspaceMoveRequest *request) {
+  GError *error = NULL;
+  if (!g_file_trash(request->source, NULL, &error)) {
+    workspace_move_failed(request, error);
+    g_clear_error(&error);
+    return;
+  }
+
+  for (guint i = 0; i < request->tabs->len; i++) {
+    MovedTab *tab = g_ptr_array_index(request->tabs, i);
+    if (adw_tab_view_get_page_position(tab->window->tab_view, tab->page) < 0)
+      continue;
+    g_object_set_data(G_OBJECT(tab->page), "workspace-trash-force-close",
+                      GINT_TO_POINTER(1));
+    adw_tab_view_close_page(tab->window->tab_view, tab->page);
+  }
+
+  gchar *basename = g_file_get_basename(request->source);
+  g_free(request->initiator->workspace_pending_toast);
+  request->initiator->workspace_pending_toast =
+      g_strdup_printf("Moved %s to %s", basename, workspace_trash_name());
+  g_free(basename);
+
+  GtkApplication *application = gtk_window_get_application(
+      GTK_WINDOW(request->initiator));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    if (!window->workspace ||
+        !g_file_equal(pdfv_workspace_get_folder(window->workspace),
+                      request->root))
+      continue;
+    remove_workspace_state_after_trash(window, request->source);
+    save_workspace_tab_session(window);
+    reload_workspace(window, NULL);
+  }
+  workspace_move_request_free(request);
+}
+
 static void workspace_move_execute(WorkspaceMoveRequest *request) {
   GError *error = NULL;
   GFile *destination = pdfv_workspace_move_item(
@@ -3559,6 +3832,12 @@ static void workspace_move_execute(WorkspaceMoveRequest *request) {
                              tab->page_number, FALSE, FALSE, 0);
   }
 
+  gchar *basename = g_file_get_basename(destination);
+  g_free(request->initiator->workspace_pending_toast);
+  request->initiator->workspace_pending_toast =
+      g_strdup_printf("Moved %s", basename);
+  g_free(basename);
+
   for (GList *at = application ? gtk_application_get_windows(application)
                                : NULL;
        at; at = at->next) {
@@ -3574,12 +3853,6 @@ static void workspace_move_execute(WorkspaceMoveRequest *request) {
                                   ? destination : NULL);
   }
 
-  gchar *basename = g_file_get_basename(destination);
-  gchar *message = g_strdup_printf("Moved %s safely", basename);
-  adw_toast_overlay_add_toast(request->initiator->toast_overlay,
-                              adw_toast_new(message));
-  g_free(message);
-  g_free(basename);
   g_object_unref(destination);
   workspace_move_request_free(request);
 }
@@ -3649,7 +3922,10 @@ static void workspace_move_save_next(WorkspaceMoveRequest *request) {
       return;
     }
   }
-  workspace_move_execute(request);
+  if (request->trash)
+    workspace_trash_execute(request);
+  else
+    workspace_move_execute(request);
 }
 
 static void begin_workspace_move(PdfvWindow *self, GFile *source,
@@ -3722,41 +3998,7 @@ static void begin_workspace_move(PdfvWindow *self, GFile *source,
       (GDestroyNotify)moved_tab_free);
   self->workspace_move_running = TRUE;
 
-  GtkApplication *application = gtk_window_get_application(GTK_WINDOW(self));
-  for (GList *at = application ? gtk_application_get_windows(application)
-                               : NULL;
-       at; at = at->next) {
-    if (!PDFV_IS_WINDOW(at->data))
-      continue;
-    PdfvWindow *window = PDFV_WINDOW(at->data);
-    guint pages = adw_tab_view_get_n_pages(window->tab_view);
-    for (guint i = 0; i < pages; i++) {
-      AdwTabPage *page = adw_tab_view_get_nth_page(window->tab_view, i);
-      GtkWidget *stack = adw_tab_page_get_child(page);
-      GFile *open_file = GTK_IS_STACK(stack)
-          ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
-      if (!open_file || !file_is_at_or_below(
-                            source, open_file, request->source_is_folder))
-        continue;
-      GFile *new_file = file_after_move(
-          source, request->expected_destination, open_file,
-          request->source_is_folder);
-      if (!new_file)
-        continue;
-      MovedTab *tab = g_new0(MovedTab, 1);
-      tab->window = g_object_ref(window);
-      tab->page = g_object_ref(page);
-      tab->new_file = new_file;
-      tab->editor = g_object_get_data(G_OBJECT(stack), "markdown-editor");
-      if (tab->editor)
-        g_object_ref(tab->editor);
-      PdfvDocumentView *view = g_object_get_data(
-          G_OBJECT(stack), "document-view");
-      tab->page_number = view && pdfv_document_view_get_document(view)
-          ? pdfv_document_view_get_current_page(view) : 0;
-      g_ptr_array_add(request->tabs, tab);
-    }
-  }
+  collect_workspace_move_tabs(request);
   if (request->tabs->len > 0) {
     AdwToast *toast = adw_toast_new(
         "Saving open notes before moving…");
@@ -3764,6 +4006,113 @@ static void begin_workspace_move(PdfvWindow *self, GFile *source,
     adw_toast_overlay_add_toast(self->toast_overlay, toast);
   }
   workspace_move_save_next(request);
+}
+
+static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder) {
+  if (!self->workspace || self->workspace_move_running)
+    return;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  GFileType type = g_file_query_file_type(
+      folder, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
+  GError *error = NULL;
+  if (!pdfv_workspace_file_is_within(root, folder) ||
+      g_file_equal(root, folder)) {
+    g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                        "Only folders inside this workspace can be moved "
+                        "to the system recycle bin");
+  } else if (type != G_FILE_TYPE_DIRECTORY) {
+    g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                        "The folder no longer exists");
+  }
+  if (error) {
+    show_file_operation_error(self, "Could Not Remove Folder", error);
+    g_clear_error(&error);
+    return;
+  }
+
+  WorkspaceMoveRequest *request = g_new0(WorkspaceMoveRequest, 1);
+  request->initiator = g_object_ref(self);
+  request->root = g_object_ref(root);
+  request->source = g_object_ref(folder);
+  request->source_is_folder = TRUE;
+  request->trash = TRUE;
+  request->tabs = g_ptr_array_new_with_free_func(
+      (GDestroyNotify)moved_tab_free);
+  self->workspace_move_running = TRUE;
+  collect_workspace_move_tabs(request);
+
+  gboolean has_open_note = FALSE;
+  for (guint i = 0; i < request->tabs->len; i++) {
+    MovedTab *tab = g_ptr_array_index(request->tabs, i);
+    if (tab->editor) {
+      has_open_note = TRUE;
+      break;
+    }
+  }
+  if (has_open_note) {
+    gchar *message = g_strdup_printf(
+        "Saving open notes before moving folder to %s…",
+        workspace_trash_name());
+    AdwToast *toast = adw_toast_new(message);
+    g_free(message);
+    adw_toast_set_timeout(toast, 2);
+    adw_toast_overlay_add_toast(self->toast_overlay, toast);
+  }
+  workspace_move_save_next(request);
+}
+
+typedef struct {
+  PdfvWindow *window;
+  GFile *folder;
+} WorkspaceTrashConfirmation;
+
+static void workspace_trash_confirmation_free(
+    WorkspaceTrashConfirmation *confirmation) {
+  g_clear_object(&confirmation->window);
+  g_clear_object(&confirmation->folder);
+  g_free(confirmation);
+}
+
+static void on_workspace_trash_confirmed(GObject *source,
+                                         GAsyncResult *result,
+                                         gpointer user_data) {
+  WorkspaceTrashConfirmation *confirmation = user_data;
+  const gchar *response = adw_alert_dialog_choose_finish(
+      ADW_ALERT_DIALOG(source), result);
+  if (g_strcmp0(response, "trash") == 0)
+    begin_workspace_trash_folder(confirmation->window,
+                                 confirmation->folder);
+  workspace_trash_confirmation_free(confirmation);
+}
+
+static void show_workspace_trash_confirmation(PdfvWindow *self,
+                                              GFile *folder) {
+  gchar *basename = g_file_get_basename(folder);
+  gchar *title = g_strdup_printf("Move “%s” to %s?", basename,
+                                 workspace_trash_name());
+  gchar *description = g_strdup_printf(
+      "The folder and everything inside it will be moved to the system %s. "
+      "You can restore it from there.", workspace_trash_name());
+  gchar *response_label = g_strdup_printf("Move to %s",
+                                          workspace_trash_name());
+  AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
+      title, description));
+  adw_alert_dialog_add_responses(dialog, "cancel", "Cancel",
+                                 "trash", response_label, NULL);
+  adw_alert_dialog_set_default_response(dialog, "cancel");
+  adw_alert_dialog_set_close_response(dialog, "cancel");
+  adw_alert_dialog_set_response_appearance(
+      dialog, "trash", ADW_RESPONSE_DESTRUCTIVE);
+  WorkspaceTrashConfirmation *confirmation =
+      g_new0(WorkspaceTrashConfirmation, 1);
+  confirmation->window = g_object_ref(self);
+  confirmation->folder = g_object_ref(folder);
+  adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
+                          on_workspace_trash_confirmed, confirmation);
+  g_free(response_label);
+  g_free(description);
+  g_free(title);
+  g_free(basename);
 }
 
 static void open_workspace_folder_internal(PdfvWindow *self, GFile *folder,
@@ -4034,6 +4383,16 @@ static void action_workspace_context_open_folder(GSimpleAction *action,
   if (self->workspace_context_file)
     open_folder_in_system_files(self, self->workspace_context_file,
                                 self->workspace_context_is_folder);
+}
+
+static void action_workspace_context_trash_folder(GSimpleAction *action,
+                                                  GVariant *parameter,
+                                                  gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file && self->workspace_context_is_folder)
+    show_workspace_trash_confirmation(self, self->workspace_context_file);
 }
 
 static void action_tab_context_open_new_tab(GSimpleAction *action,
@@ -4777,6 +5136,8 @@ static GActionEntry win_actions[] = {
      .activate = action_workspace_context_open_default},
     {.name = "workspace-context-open-folder",
      .activate = action_workspace_context_open_folder},
+    {.name = "workspace-context-trash-folder",
+     .activate = action_workspace_context_trash_folder},
     {.name = "tab-context-open-new-tab",
      .activate = action_tab_context_open_new_tab},
     {.name = "tab-context-open-new-window",
@@ -4967,8 +5328,8 @@ static void pdfv_window_dispose(GObject *object) {
     pdfv_workspace_cancel(self->workspace);
     g_signal_handlers_disconnect_by_data(self->workspace, self);
   }
-  if (self->workspace_selection)
-    gtk_single_selection_set_model(self->workspace_selection, NULL);
+  if (self->workspace_list)
+    gtk_list_view_set_model(self->workspace_list, NULL);
   self->workspace_selection = NULL;
   g_clear_object(&self->workspace_tree);
   g_clear_object(&self->workspace);
@@ -4977,6 +5338,7 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
   g_clear_object(&self->workspace_pending_selection);
+  g_clear_pointer(&self->workspace_pending_toast, g_free);
   g_clear_object(&self->workspace_context_file);
   g_clear_object(&self->tab_context_page);
   g_clear_object(&self->tab_context_file);
@@ -5334,6 +5696,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_widget_set_margin_bottom(self->workspace_tools, 6);
   gtk_widget_set_margin_start(self->workspace_tools, 6);
   gtk_widget_set_margin_end(self->workspace_tools, 6);
+  gtk_widget_set_halign(self->workspace_tools, GTK_ALIGN_CENTER);
   gtk_widget_add_css_class(self->workspace_tools, "toolbar");
   gtk_widget_set_sensitive(self->workspace_tools, FALSE);
 

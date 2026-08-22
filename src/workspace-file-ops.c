@@ -25,6 +25,20 @@ static gboolean file_is_directory(GFile *file) {
       G_FILE_TYPE_DIRECTORY;
 }
 
+static gboolean file_is_workspace_trash(GFile *root, GFile *file) {
+  gchar *relative = g_file_get_relative_path(root, file);
+  gboolean trash = relative &&
+      (g_str_equal(relative, ".trash") ||
+       g_str_has_prefix(relative, ".trash/"));
+  g_free(relative);
+  return trash;
+}
+
+static gboolean valid_creation_parent(GFile *root, GFile *parent) {
+  return parent && pdfv_workspace_file_is_within(root, parent) &&
+      !file_is_workspace_trash(root, parent) && file_is_directory(parent);
+}
+
 GFile *pdfv_workspace_creation_parent(GFile *root, GFile *selected,
                                       gboolean selected_is_folder,
                                       GFile *active_file) {
@@ -33,12 +47,16 @@ GFile *pdfv_workspace_creation_parent(GFile *root, GFile *selected,
   if (selected && pdfv_workspace_file_is_within(root, selected)) {
     parent = selected_is_folder ? g_object_ref(selected)
                                 : g_file_get_parent(selected);
-  } else if (active_file &&
-             pdfv_workspace_file_is_within(root, active_file)) {
-    parent = g_file_get_parent(active_file);
+    if (!valid_creation_parent(root, parent))
+      g_clear_object(&parent);
   }
-  if (!parent || !pdfv_workspace_file_is_within(root, parent) ||
-      !file_is_directory(parent)) {
+  if (!parent && active_file &&
+      pdfv_workspace_file_is_within(root, active_file)) {
+    parent = g_file_get_parent(active_file);
+    if (!valid_creation_parent(root, parent))
+      g_clear_object(&parent);
+  }
+  if (!parent) {
     g_clear_object(&parent);
     parent = g_object_ref(root);
   }

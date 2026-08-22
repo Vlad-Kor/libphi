@@ -14,6 +14,8 @@ typedef struct {
   GFile *nested;
   GFile *empty;
   GFile *deep_empty;
+  GFile *trash;
+  GFile *trashed_note;
   GFile *first;
   GFile *second;
   GFile *note;
@@ -165,6 +167,15 @@ static void test_workspace_search(void) {
   state.deep_empty = g_file_get_child(state.empty, "Still Empty");
   g_assert_true(g_file_make_directory(state.deep_empty, NULL, &error));
   g_assert_no_error(error);
+  state.trash = g_file_get_child(state.root, ".trash");
+  g_assert_true(g_file_make_directory(state.trash, NULL, &error));
+  g_assert_no_error(error);
+  state.trashed_note = g_file_get_child(state.trash, "deleted.md");
+  gchar *trashed_path = g_file_get_path(state.trashed_note);
+  g_assert_true(g_file_set_contents(trashed_path, "# Deleted\n", -1,
+                                    &error));
+  g_assert_no_error(error);
+  g_free(trashed_path);
   state.first = g_file_get_child(state.root, "first.pdf");
   state.second = g_file_get_child(state.nested, "second.PDF");
   state.note = g_file_get_child(state.empty, "lecture.md");
@@ -233,6 +244,10 @@ static void test_workspace_search(void) {
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.note, NULL, &error));
   g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.trashed_note, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(state.trash, NULL, &error));
+  g_assert_no_error(error);
   g_assert_true(g_file_delete(state.nested, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(state.deep_empty, NULL, &error));
@@ -244,6 +259,8 @@ static void test_workspace_search(void) {
   g_object_unref(state.second);
   g_object_unref(state.first);
   g_object_unref(state.note);
+  g_object_unref(state.trashed_note);
+  g_object_unref(state.trash);
   g_object_unref(state.nested);
   g_object_unref(state.deep_empty);
   g_object_unref(state.empty);
@@ -262,6 +279,71 @@ static void test_workspace_search(void) {
   g_free(root_path);
 }
 
+typedef struct {
+  GMainLoop *loop;
+  gboolean loaded;
+} ReloadState;
+
+static void reload_finished(GObject *source, GAsyncResult *result,
+                            gpointer user_data) {
+  ReloadState *state = user_data;
+  GError *error = NULL;
+  state->loaded = pdfv_workspace_load_finish(
+      PDFV_WORKSPACE(source), result, &error);
+  g_assert_no_error(error);
+  g_main_loop_quit(state->loop);
+}
+
+static void load_workspace_sync(PdfvWorkspace *workspace) {
+  ReloadState state = {.loop = g_main_loop_new(NULL, FALSE)};
+  pdfv_workspace_load_async(workspace, NULL, reload_finished, &state);
+  g_main_loop_run(state.loop);
+  g_main_loop_unref(state.loop);
+  g_assert_true(state.loaded);
+}
+
+static void test_workspace_reload_publishes_snapshot(void) {
+  GError *error = NULL;
+  gchar *root_path = g_dir_make_tmp("pdfv-workspace-reload-XXXXXX", &error);
+  g_assert_no_error(error);
+  GFile *root = g_file_new_for_path(root_path);
+  GFile *first = g_file_get_child(root, "first.md");
+  gchar *first_path = g_file_get_path(first);
+  g_assert_true(g_file_set_contents(first_path, "# First\n", -1, &error));
+  g_assert_no_error(error);
+
+  PdfvWorkspace *workspace = pdfv_workspace_new(root);
+  load_workspace_sync(workspace);
+  GListModel *previous = g_object_ref(pdfv_workspace_get_items(workspace));
+  g_assert_cmpuint(g_list_model_get_n_items(previous), ==, 1);
+
+  GFile *second = g_file_get_child(root, "second.md");
+  gchar *second_path = g_file_get_path(second);
+  g_assert_true(g_file_set_contents(second_path, "# Second\n", -1, &error));
+  g_assert_no_error(error);
+  load_workspace_sync(workspace);
+
+  GListModel *current = pdfv_workspace_get_items(workspace);
+  g_assert_true(current != previous);
+  g_assert_cmpuint(g_list_model_get_n_items(previous), ==, 1);
+  g_assert_cmpuint(g_list_model_get_n_items(current), ==, 2);
+
+  g_object_unref(previous);
+  g_object_unref(workspace);
+  g_assert_true(g_file_delete(second, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(first, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(root, NULL, &error));
+  g_assert_no_error(error);
+  g_object_unref(second);
+  g_object_unref(first);
+  g_object_unref(root);
+  g_free(second_path);
+  g_free(first_path);
+  g_free(root_path);
+}
+
 int main(int argc, char **argv) {
   GError *error = NULL;
   test_cache_home =
@@ -273,6 +355,8 @@ int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add_func("/workspace/recursive-unicode-search",
                   test_workspace_search);
+  g_test_add_func("/workspace/reload-publishes-snapshot",
+                  test_workspace_reload_publishes_snapshot);
   gint status = g_test_run();
   gchar *version_directory =
       g_build_filename(test_cache_home, "phi-pdf-viewer",

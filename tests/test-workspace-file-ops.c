@@ -55,6 +55,12 @@ static void test_workspace_file_operations(void) {
   chosen = pdfv_workspace_creation_parent(root, outside, TRUE, NULL);
   g_assert_true(g_file_equal(chosen, root));
   g_object_unref(chosen);
+  GFile *trash = pdfv_workspace_create_folder(
+      root, root, ".trash", &error);
+  g_assert_no_error(error);
+  chosen = pdfv_workspace_creation_parent(root, trash, TRUE, note);
+  g_assert_true(g_file_equal(chosen, folder));
+  g_object_unref(chosen);
 
   GFile *destination_folder = pdfv_workspace_create_folder(
       root, root, "Archive", &error);
@@ -96,11 +102,13 @@ static void test_workspace_file_operations(void) {
   delete_file(nested);
   delete_file(folder);
   delete_file(destination_folder);
+  delete_file(trash);
   delete_file(root);
   g_object_unref(moved);
   g_object_unref(collision);
   g_object_unref(nested);
   g_object_unref(destination_folder);
+  g_object_unref(trash);
   g_object_unref(note);
   g_object_unref(folder);
   g_object_unref(outside);
