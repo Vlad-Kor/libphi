@@ -171,7 +171,8 @@ static void show_workspace_creation_dialog(PdfvWindow *self,
                                            gboolean use_context);
 static void begin_workspace_move(PdfvWindow *self, GFile *source,
                                  GFile *destination_folder);
-static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder);
+static void begin_workspace_trash_item(PdfvWindow *self, GFile *file,
+                                       gboolean folder);
 static void workspace_sync_selection_to_active(PdfvWindow *self);
 static void on_workspace_selection_changed(GtkSelectionModel *selection,
                                            guint position, guint n_items,
@@ -1324,7 +1325,7 @@ static void on_workspace_middle_click(GtkGestureClick *gesture,
   }
 }
 
-static GMenu *workspace_context_menu(gboolean folder) {
+static GMenu *workspace_context_menu(GFile *file, gboolean folder) {
   GMenu *menu = g_menu_new();
   if (folder) {
     GMenu *create = g_menu_new();
@@ -1351,21 +1352,21 @@ static GMenu *workspace_context_menu(gboolean folder) {
                 "win.workspace-context-open-folder");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(files));
   g_object_unref(files);
-  if (folder) {
-    GMenu *danger = g_menu_new();
-    gchar *label = g_strdup_printf("Move Folder to %s…",
-                                   workspace_trash_name());
-    GMenuItem *trash = g_menu_item_new(
-        label, "win.workspace-context-trash-folder");
-    g_free(label);
-    GIcon *icon = g_themed_icon_new("user-trash-symbolic");
-    g_menu_item_set_icon(trash, icon);
-    g_object_unref(icon);
-    g_menu_append_item(danger, trash);
-    g_object_unref(trash);
-    g_menu_append_section(menu, NULL, G_MENU_MODEL(danger));
-    g_object_unref(danger);
-  }
+  GMenu *danger = g_menu_new();
+  const gchar *kind = folder ? "Folder"
+      : file_is_markdown(file) ? "Note" : "Document";
+  gchar *label = g_strdup_printf("Move %s to %s…", kind,
+                                 workspace_trash_name());
+  GMenuItem *trash = g_menu_item_new(
+      label, "win.workspace-context-trash");
+  g_free(label);
+  GIcon *icon = g_themed_icon_new("user-trash-symbolic");
+  g_menu_item_set_icon(trash, icon);
+  g_object_unref(icon);
+  g_menu_append_item(danger, trash);
+  g_object_unref(trash);
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(danger));
+  g_object_unref(danger);
   return menu;
 }
 
@@ -1404,7 +1405,7 @@ static void on_workspace_context_pressed(GtkGestureClick *gesture,
   g_set_object(&self->workspace_context_file, file);
   self->workspace_context_is_folder = folder;
 
-  GMenu *menu = workspace_context_menu(folder);
+  GMenu *menu = workspace_context_menu(file, folder);
   GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
   g_object_unref(menu);
   gtk_widget_set_parent(popover, row_widget);
@@ -3595,11 +3596,7 @@ static void workspace_move_request_free(WorkspaceMoveRequest *request) {
 
 static void workspace_move_failed(WorkspaceMoveRequest *request,
                                   const GError *error) {
-  show_file_operation_error(
-      request->initiator,
-      request->trash ? "Could Not Remove Folder"
-                     : "Could Not Move Item",
-      error);
+  show_file_operation_error(request->initiator, "Could Not Move Item", error);
   workspace_move_request_free(request);
 }
 
@@ -3702,11 +3699,12 @@ static void remap_workspace_after_move(PdfvWindow *self, GFile *source,
 }
 
 static void remove_workspace_state_after_trash(PdfvWindow *self,
-                                               GFile *folder) {
+                                               GFile *source,
+                                               gboolean source_is_folder) {
   if (!self->workspace)
     return;
   GFile *root = pdfv_workspace_get_folder(self->workspace);
-  gchar *relative = g_file_get_relative_path(root, folder);
+  gchar *relative = g_file_get_relative_path(root, source);
   if (!relative || !*relative) {
     g_free(relative);
     return;
@@ -3719,9 +3717,10 @@ static void remove_workspace_state_after_trash(PdfvWindow *self,
   gsize length = strlen(relative);
   while (g_hash_table_iter_next(&iter, &key, NULL)) {
     const gchar *path = key;
-    if (g_strcmp0(path, relative) == 0 ||
-        (g_str_has_prefix(path, relative) &&
-         path[length] == G_DIR_SEPARATOR))
+    if (source_is_folder &&
+        (g_strcmp0(path, relative) == 0 ||
+         (g_str_has_prefix(path, relative) &&
+          path[length] == G_DIR_SEPARATOR)))
       g_ptr_array_add(remove, g_strdup(path));
   }
   for (guint i = 0; i < remove->len; i++)
@@ -3730,19 +3729,20 @@ static void remove_workspace_state_after_trash(PdfvWindow *self,
   g_ptr_array_unref(remove);
 
   if (self->workspace_context_file && file_is_at_or_below(
-          folder, self->workspace_context_file, TRUE)) {
+          source, self->workspace_context_file, source_is_folder)) {
     g_clear_object(&self->workspace_context_file);
     self->workspace_context_is_folder = FALSE;
   }
   if (self->workspace_pending_selection && file_is_at_or_below(
-          folder, self->workspace_pending_selection, TRUE))
+          source, self->workspace_pending_selection, source_is_folder))
     g_clear_object(&self->workspace_pending_selection);
 
-  if (pdfv_settings_get_workspace_attachment_fixed(self->settings, root)) {
+  if (source_is_folder &&
+      pdfv_settings_get_workspace_attachment_fixed(self->settings, root)) {
     gchar *uri = pdfv_settings_dup_workspace_attachment_folder_uri(
         self->settings, root);
     GFile *attachments = uri && *uri ? g_file_new_for_uri(uri) : NULL;
-    if (attachments && file_is_at_or_below(folder, attachments, TRUE))
+    if (attachments && file_is_at_or_below(source, attachments, TRUE))
       pdfv_settings_set_workspace_attachment_policy(
           self->settings, root, FALSE, NULL);
     g_clear_object(&attachments);
@@ -3788,7 +3788,8 @@ static void workspace_trash_execute(WorkspaceMoveRequest *request) {
         !g_file_equal(pdfv_workspace_get_folder(window->workspace),
                       request->root))
       continue;
-    remove_workspace_state_after_trash(window, request->source);
+    remove_workspace_state_after_trash(window, request->source,
+                                       request->source_is_folder);
     save_workspace_tab_session(window);
     reload_workspace(window, NULL);
   }
@@ -4008,24 +4009,26 @@ static void begin_workspace_move(PdfvWindow *self, GFile *source,
   workspace_move_save_next(request);
 }
 
-static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder) {
+static void begin_workspace_trash_item(PdfvWindow *self, GFile *file,
+                                       gboolean folder) {
   if (!self->workspace || self->workspace_move_running)
     return;
   GFile *root = pdfv_workspace_get_folder(self->workspace);
   GFileType type = g_file_query_file_type(
-      folder, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
+      file, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
   GError *error = NULL;
-  if (!pdfv_workspace_file_is_within(root, folder) ||
-      g_file_equal(root, folder)) {
+  if (!pdfv_workspace_file_is_within(root, file) ||
+      g_file_equal(root, file)) {
     g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
-                        "Only folders inside this workspace can be moved "
+                        "Only items inside this workspace can be moved "
                         "to the system recycle bin");
-  } else if (type != G_FILE_TYPE_DIRECTORY) {
+  } else if ((folder && type != G_FILE_TYPE_DIRECTORY) ||
+             (!folder && type != G_FILE_TYPE_REGULAR)) {
     g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                        "The folder no longer exists");
+                        "The item no longer exists");
   }
   if (error) {
-    show_file_operation_error(self, "Could Not Remove Folder", error);
+    show_file_operation_error(self, "Could Not Move Item", error);
     g_clear_error(&error);
     return;
   }
@@ -4033,8 +4036,8 @@ static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder) {
   WorkspaceMoveRequest *request = g_new0(WorkspaceMoveRequest, 1);
   request->initiator = g_object_ref(self);
   request->root = g_object_ref(root);
-  request->source = g_object_ref(folder);
-  request->source_is_folder = TRUE;
+  request->source = g_object_ref(file);
+  request->source_is_folder = folder;
   request->trash = TRUE;
   request->tabs = g_ptr_array_new_with_free_func(
       (GDestroyNotify)moved_tab_free);
@@ -4051,7 +4054,8 @@ static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder) {
   }
   if (has_open_note) {
     gchar *message = g_strdup_printf(
-        "Saving open notes before moving folder to %s…",
+        folder ? "Saving open notes before moving folder to %s…"
+               : "Saving note before moving to %s…",
         workspace_trash_name());
     AdwToast *toast = adw_toast_new(message);
     g_free(message);
@@ -4063,13 +4067,14 @@ static void begin_workspace_trash_folder(PdfvWindow *self, GFile *folder) {
 
 typedef struct {
   PdfvWindow *window;
-  GFile *folder;
+  GFile *file;
+  gboolean folder;
 } WorkspaceTrashConfirmation;
 
 static void workspace_trash_confirmation_free(
-    WorkspaceTrashConfirmation *confirmation) {
+  WorkspaceTrashConfirmation *confirmation) {
   g_clear_object(&confirmation->window);
-  g_clear_object(&confirmation->folder);
+  g_clear_object(&confirmation->file);
   g_free(confirmation);
 }
 
@@ -4080,19 +4085,25 @@ static void on_workspace_trash_confirmed(GObject *source,
   const gchar *response = adw_alert_dialog_choose_finish(
       ADW_ALERT_DIALOG(source), result);
   if (g_strcmp0(response, "trash") == 0)
-    begin_workspace_trash_folder(confirmation->window,
-                                 confirmation->folder);
+    begin_workspace_trash_item(confirmation->window, confirmation->file,
+                               confirmation->folder);
   workspace_trash_confirmation_free(confirmation);
 }
 
 static void show_workspace_trash_confirmation(PdfvWindow *self,
-                                              GFile *folder) {
-  gchar *basename = g_file_get_basename(folder);
+                                              GFile *file,
+                                              gboolean folder) {
+  gchar *basename = g_file_get_basename(file);
   gchar *title = g_strdup_printf("Move “%s” to %s?", basename,
                                  workspace_trash_name());
-  gchar *description = g_strdup_printf(
-      "The folder and everything inside it will be moved to the system %s. "
-      "You can restore it from there.", workspace_trash_name());
+  const gchar *kind = file_is_markdown(file) ? "note" : "document";
+  gchar *description = folder
+      ? g_strdup_printf(
+          "The folder and everything inside it will be moved to the system "
+          "%s. You can restore it from there.", workspace_trash_name())
+      : g_strdup_printf(
+          "The %s will be moved to the system %s. You can restore it from "
+          "there.", kind, workspace_trash_name());
   gchar *response_label = g_strdup_printf("Move to %s",
                                           workspace_trash_name());
   AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
@@ -4106,7 +4117,8 @@ static void show_workspace_trash_confirmation(PdfvWindow *self,
   WorkspaceTrashConfirmation *confirmation =
       g_new0(WorkspaceTrashConfirmation, 1);
   confirmation->window = g_object_ref(self);
-  confirmation->folder = g_object_ref(folder);
+  confirmation->file = g_object_ref(file);
+  confirmation->folder = folder;
   adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
                           on_workspace_trash_confirmed, confirmation);
   g_free(response_label);
@@ -4385,14 +4397,16 @@ static void action_workspace_context_open_folder(GSimpleAction *action,
                                 self->workspace_context_is_folder);
 }
 
-static void action_workspace_context_trash_folder(GSimpleAction *action,
-                                                  GVariant *parameter,
-                                                  gpointer user_data) {
+static void action_workspace_context_trash(GSimpleAction *action,
+                                           GVariant *parameter,
+                                           gpointer user_data) {
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
-  if (self->workspace_context_file && self->workspace_context_is_folder)
-    show_workspace_trash_confirmation(self, self->workspace_context_file);
+  if (self->workspace_context_file)
+    show_workspace_trash_confirmation(
+        self, self->workspace_context_file,
+        self->workspace_context_is_folder);
 }
 
 static void action_tab_context_open_new_tab(GSimpleAction *action,
@@ -5136,8 +5150,8 @@ static GActionEntry win_actions[] = {
      .activate = action_workspace_context_open_default},
     {.name = "workspace-context-open-folder",
      .activate = action_workspace_context_open_folder},
-    {.name = "workspace-context-trash-folder",
-     .activate = action_workspace_context_trash_folder},
+    {.name = "workspace-context-trash",
+     .activate = action_workspace_context_trash},
     {.name = "tab-context-open-new-tab",
      .activate = action_tab_context_open_new_tab},
     {.name = "tab-context-open-new-window",
