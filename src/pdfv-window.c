@@ -5075,9 +5075,13 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   adw_preferences_group_set_title(snippets, "Snippet definitions");
   adw_preferences_group_set_description(
       snippets,
-      "Phi’s LaTeX snippets are based on and fully compatible with "
+      "Phi’s LaTeX snippets are based on and fully compatible* with "
       "Obsidian LaTeX Suite. See its repository for documentation on how "
       "the snippet format works.");
+  gtk_widget_set_tooltip_text(
+      GTK_WIDGET(snippets),
+      "Custom JavaScript replacements, export default wrappers, and "
+      "JavaScript regex literals are not supported.");
   adw_preferences_page_add(latex_page, snippets);
 
   AdwActionRow *documentation = ADW_ACTION_ROW(adw_action_row_new());
