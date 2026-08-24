@@ -21,6 +21,8 @@ pdfv_sources = [
 	'pdfv-application.c',
 	'pdfv-window.c',
 	'pdfv-document-view.c',
+	'pdfv-page-selector.c',
+	'pdfv-thumbnail-list.c',
 	'pdfv-workspace.c',
 	'workspace-file-ops.c',
 	'pdfv-settings.c',

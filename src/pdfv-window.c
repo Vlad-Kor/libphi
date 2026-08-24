@@ -10,7 +10,9 @@
 
 #include "pdfv-window.h"
 #include "pdfv-document-view.h"
+#include "pdfv-page-selector.h"
 #include "pdfv-settings.h"
+#include "pdfv-thumbnail-list.h"
 #include "pdfv-workspace.h"
 #include "workspace-file-ops.h"
 #include "markdown-editor.h"
@@ -42,9 +44,7 @@ struct _PdfvWindow {
   GtkButton *back_button;
   GtkButton *forward_button;
   GtkToggleButton *sidebar_button;
-  GtkWidget *page_selector;
-  GtkEntry *page_entry;
-  GtkLabel *page_count_label;
+  PdfvPageSelector *page_selector;
   GtkMenuButton *menu_button;
   GtkButton *presentation_exit_button;
   GMenu *file_menu_section;
@@ -53,8 +53,7 @@ struct _PdfvWindow {
   GMenu *view_menu_section;
 
   /* Sidebar */
-  GtkListView *thumbnail_list;
-  GtkSingleSelection *thumbnail_selection;
+  PdfvThumbnailList *thumbnail_list;
   AdwViewStack *sidebar_stack;
   AdwViewStackPage *pages_sidebar_page;
   AdwViewStackPage *workspace_sidebar_page;
@@ -360,87 +359,6 @@ static void update_zoom_info(PdfvWindow *self) {
   g_free(text);
 }
 
-static void update_page_selector(PdfvWindow *self) {
-  PhiDocument *document = self->current_view
-      ? pdfv_document_view_get_document(self->current_view) : NULL;
-  gboolean visible = document != NULL;
-  gtk_widget_set_visible(self->page_selector, visible);
-  if (!visible)
-    return;
-
-  gint page = pdfv_document_view_get_current_page(self->current_view);
-  gint pages = phi_document_get_n_pages(document);
-  gchar *page_text = g_strdup_printf("%d", page + 1);
-  gchar *count_text = g_strdup_printf("of %d", pages);
-  gtk_editable_set_text(GTK_EDITABLE(self->page_entry), page_text);
-  gtk_editable_set_position(GTK_EDITABLE(self->page_entry), -1);
-  gtk_label_set_text(self->page_count_label, count_text);
-
-  gchar total_text[32];
-  g_snprintf(total_text, sizeof(total_text), "%d", pages);
-  gint page_chars = MAX(1, (gint)strlen(total_text));
-  gint count_chars = MAX(5, (gint)strlen(count_text));
-  gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), page_chars);
-  gtk_editable_set_max_width_chars(GTK_EDITABLE(self->page_entry),
-                                   page_chars);
-  /* width-chars is based on an average glyph and can still shave a pixel off
-   * wide multi-digit values. Reserve the exact width of the widest numeric
-   * string for this page count, plus the entry's compact insets. */
-  gchar *widest_page = g_strnfill(page_chars, '8');
-  PangoLayout *page_layout = gtk_widget_create_pango_layout(
-      GTK_WIDGET(self->page_entry), widest_page);
-  gint page_width = 0;
-  pango_layout_get_pixel_size(page_layout, &page_width, NULL);
-  gtk_widget_set_size_request(GTK_WIDGET(self->page_entry),
-                              page_width + 18, -1);
-  g_object_unref(page_layout);
-  g_free(widest_page);
-  gtk_label_set_width_chars(self->page_count_label, count_chars);
-  g_free(count_text);
-  g_free(page_text);
-}
-
-static void on_page_entry_activated(GtkEntry *entry, PdfvWindow *self) {
-  if (!self->current_view)
-    return;
-  PhiDocument *document = pdfv_document_view_get_document(self->current_view);
-  if (!document)
-    return;
-
-  gchar *normalized = g_utf8_normalize(
-      gtk_editable_get_text(GTK_EDITABLE(entry)), -1, G_NORMALIZE_ALL);
-  gchar *end = NULL;
-  gint64 requested = g_ascii_strtoll(normalized, &end, 10);
-  while (end && g_ascii_isspace(*end))
-    end++;
-  gint pages = phi_document_get_n_pages(document);
-  if (normalized && end && end != normalized && *end == '\0' &&
-      requested >= 1 && requested <= pages)
-    pdfv_document_view_go_to_page(self->current_view,
-                                  (gint)requested - 1);
-  update_page_selector(self);
-  g_free(normalized);
-}
-
-static void on_page_entry_focus_leave(GtkEventControllerFocus *controller,
-                                      PdfvWindow *self) {
-  (void)controller;
-  update_page_selector(self);
-}
-
-static gboolean on_page_entry_scroll(GtkEventControllerScroll *controller,
-                                     gdouble dx, gdouble dy,
-                                     PdfvWindow *self) {
-  (void)controller;
-  (void)dx;
-  if (!self->current_view || dy == 0)
-    return GDK_EVENT_PROPAGATE;
-  gint page = pdfv_document_view_get_current_page(self->current_view);
-  pdfv_document_view_go_to_page(self->current_view,
-                                page + (dy > 0 ? 1 : -1));
-  return GDK_EVENT_STOP;
-}
-
 static void update_sidebar_button(PdfvWindow *self) {
   gboolean has_document = FALSE;
 
@@ -478,7 +396,7 @@ static void update_sidebar_button(PdfvWindow *self) {
     adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
   if (!has_document && !self->workspace)
     adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
-  update_page_selector(self);
+  pdfv_page_selector_set_view(self->page_selector, self->current_view);
   rebuild_main_menu(self);
 }
 
@@ -542,7 +460,6 @@ static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
   } else if (g_strcmp0(name, "current-page") == 0 &&
              view == self->current_view) {
     presentation_set_end_visible(self, FALSE);
-    update_page_selector(self);
     if (view == self->fullscreen_document_view)
       fullscreen_schedule_fit_page(self, view);
   }
@@ -877,280 +794,12 @@ static void on_style_dark_changed(AdwStyleManager *manager, GParamSpec *pspec,
                   g_object_ref(self), g_object_unref);
 }
 
-/* Thumbnail rendering is serialized on one worker. Each document uses a
- * background-only MuPDF context, separate from the one used by the view. */
-typedef struct _ThumbnailJob ThumbnailJob;
-
-typedef struct {
-  gint ref_count;
-  GtkWidget *drawing_area;
-  GtkLabel *page_label;
-  PhiDocument *document;
-  gint page_num;
-  guint generation;
-  cairo_surface_t *cached_surface;
-  ThumbnailJob *job;
-} ThumbnailData;
-
-struct _ThumbnailJob {
-  ThumbnailData *data;
-  PhiDocument *document;
-  gint page_num;
-  guint generation;
-  gint cancelled;
-  cairo_surface_t *surface;
-  GError *error;
-};
-
-static void thumbnail_render_worker(gpointer user_data, gpointer pool_data);
-
-static gpointer thumbnail_pool_init(gpointer user_data) {
-  (void)user_data;
-  GError *error = NULL;
-  GThreadPool *pool =
-      g_thread_pool_new(thumbnail_render_worker, NULL, 1, TRUE, &error);
-  if (!pool) {
-    g_warning("Could not create thumbnail worker: %s",
-              error ? error->message : "unknown error");
-    g_clear_error(&error);
-  }
-  return pool;
+static void populate_thumbnails(PdfvWindow *self,
+                                PhiDocument *document) {
+  pdfv_thumbnail_list_set_document(self->thumbnail_list, document);
 }
 
-static GThreadPool *thumbnail_get_pool(void) {
-  static GOnce once = G_ONCE_INIT;
-  return g_once(&once, thumbnail_pool_init, NULL);
-}
-
-static ThumbnailData *thumbnail_data_ref(ThumbnailData *data) {
-  g_atomic_int_inc(&data->ref_count);
-  return data;
-}
-
-static void thumbnail_data_unref(ThumbnailData *data) {
-  if (!g_atomic_int_dec_and_test(&data->ref_count))
-    return;
-
-  if (data->cached_surface)
-    cairo_surface_destroy(data->cached_surface);
-  g_clear_object(&data->document);
-  g_free(data);
-}
-
-static void thumbnail_data_reset(ThumbnailData *data) {
-  data->generation++;
-
-  if (data->job) {
-    g_atomic_int_set(&data->job->cancelled, TRUE);
-    data->job = NULL;
-  }
-
-  if (data->cached_surface) {
-    cairo_surface_destroy(data->cached_surface);
-    data->cached_surface = NULL;
-  }
-
-  g_clear_object(&data->document);
-  data->page_num = -1;
-}
-
-static void thumbnail_data_free(ThumbnailData *data) {
-  thumbnail_data_reset(data);
-  data->drawing_area = NULL;
-  data->page_label = NULL;
-  thumbnail_data_unref(data);
-}
-
-static gboolean thumbnail_render_complete(gpointer user_data) {
-  ThumbnailJob *job = user_data;
-  ThumbnailData *data = job->data;
-
-  if (!g_atomic_int_get(&job->cancelled) && data->job == job &&
-      data->generation == job->generation &&
-      data->document == job->document && job->surface) {
-    data->cached_surface = job->surface;
-    job->surface = NULL;
-    if (data->drawing_area)
-      gtk_widget_queue_draw(data->drawing_area);
-  }
-
-  if (data->job == job)
-    data->job = NULL;
-
-  if (job->error && !g_error_matches(job->error, G_IO_ERROR,
-                                      G_IO_ERROR_CANCELLED))
-    g_debug("Could not render page %d thumbnail: %s", job->page_num + 1,
-            job->error->message);
-
-  g_clear_error(&job->error);
-  if (job->surface)
-    cairo_surface_destroy(job->surface);
-  g_object_unref(job->document);
-  thumbnail_data_unref(data);
-  g_free(job);
-  return G_SOURCE_REMOVE;
-}
-
-static void thumbnail_render_worker(gpointer user_data, gpointer pool_data) {
-  (void)pool_data;
-  ThumbnailJob *job = user_data;
-
-  if (!g_atomic_int_get(&job->cancelled))
-    job->surface = phi_document_render_thumbnail(
-        job->document, job->page_num, 120, 160, &job->error);
-
-  g_main_context_invoke(NULL, thumbnail_render_complete, job);
-}
-
-static void thumbnail_queue_render(ThumbnailData *data) {
-  if (!data->document || data->page_num < 0 || data->cached_surface ||
-      data->job)
-    return;
-
-  ThumbnailJob *job = g_new0(ThumbnailJob, 1);
-  job->data = thumbnail_data_ref(data);
-  job->document = g_object_ref(data->document);
-  job->page_num = data->page_num;
-  job->generation = data->generation;
-  data->job = job;
-
-  GThreadPool *pool = thumbnail_get_pool();
-  if (!pool) {
-    job->error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED,
-                                     "Thumbnail worker is unavailable");
-    g_main_context_invoke(NULL, thumbnail_render_complete, job);
-    return;
-  }
-
-  GError *error = NULL;
-  if (!g_thread_pool_push(pool, job, &error)) {
-    job->error = error;
-    if (!job->error)
-      job->error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED,
-                                       "Could not queue thumbnail render");
-    g_main_context_invoke(NULL, thumbnail_render_complete, job);
-  }
-}
-
-static void on_thumbnail_draw(GtkDrawingArea *area, cairo_t *cr, int width,
-                              int height, ThumbnailData *data) {
-  (void)area;
-
-  if (!data->cached_surface)
-    thumbnail_queue_render(data);
-
-  gdouble padding = 8.0;
-  gdouble page_width = data->cached_surface
-                           ? cairo_image_surface_get_width(data->cached_surface)
-                           : 120.0;
-  gdouble page_height =
-      data->cached_surface
-          ? cairo_image_surface_get_height(data->cached_surface)
-          : 160.0;
-  gdouble scale =
-      MIN((width - padding * 2) / page_width,
-          (height - padding * 2) / page_height);
-  gdouble scaled_width = page_width * scale;
-  gdouble scaled_height = page_height * scale;
-  gdouble offset_x = (width - scaled_width) / 2.0;
-  gdouble offset_y = (height - scaled_height) / 2.0;
-
-  cairo_set_source_rgba(cr, 0, 0, 0, 0.15);
-  cairo_rectangle(cr, offset_x + 2, offset_y + 2, scaled_width, scaled_height);
-  cairo_fill(cr);
-
-  cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-  cairo_rectangle(cr, offset_x, offset_y, scaled_width, scaled_height);
-  cairo_fill(cr);
-
-  if (data->cached_surface) {
-    cairo_save(cr);
-    cairo_translate(cr, offset_x, offset_y);
-    cairo_scale(cr, scale, scale);
-    cairo_set_source_surface(cr, data->cached_surface, 0, 0);
-    cairo_paint(cr);
-    cairo_restore(cr);
-  }
-
-  cairo_set_source_rgba(cr, 0, 0, 0, 0.2);
-  cairo_set_line_width(cr, 1.0);
-  cairo_rectangle(cr, offset_x + 0.5, offset_y + 0.5, scaled_width - 1,
-                  scaled_height - 1);
-  cairo_stroke(cr);
-}
-
-static void thumbnail_factory_setup(GtkSignalListItemFactory *factory,
-                                    GtkListItem *list_item, PdfvWindow *self) {
-  (void)factory;
-  (void)self;
-
-  ThumbnailData *data = g_new0(ThumbnailData, 1);
-  data->ref_count = 1;
-  data->page_num = -1;
-  g_object_set_data_full(G_OBJECT(list_item), "thumb-data", data,
-                         (GDestroyNotify)thumbnail_data_free);
-
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-  gtk_widget_set_margin_top(box, 8);
-  gtk_widget_set_margin_bottom(box, 8);
-  gtk_widget_set_margin_start(box, 12);
-  gtk_widget_set_margin_end(box, 12);
-
-  data->drawing_area = gtk_drawing_area_new();
-  gtk_widget_set_size_request(data->drawing_area, 100, 130);
-  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(data->drawing_area),
-                                 (GtkDrawingAreaDrawFunc)on_thumbnail_draw,
-                                 data, NULL);
-  gtk_box_append(GTK_BOX(box), data->drawing_area);
-
-  data->page_label = GTK_LABEL(gtk_label_new(NULL));
-  gtk_widget_add_css_class(GTK_WIDGET(data->page_label), "caption");
-  gtk_widget_add_css_class(GTK_WIDGET(data->page_label), "dim-label");
-  gtk_box_append(GTK_BOX(box), GTK_WIDGET(data->page_label));
-
-  gtk_list_item_set_child(list_item, box);
-}
-
-static void thumbnail_factory_bind(GtkSignalListItemFactory *factory,
-                                   GtkListItem *list_item, PdfvWindow *self) {
-  (void)factory;
-  ThumbnailData *data =
-      g_object_get_data(G_OBJECT(list_item), "thumb-data");
-  GListModel *model = gtk_single_selection_get_model(self->thumbnail_selection);
-  guint position = gtk_list_item_get_position(list_item);
-
-  thumbnail_data_reset(data);
-  if (!PHI_IS_DOCUMENT(model) || position == GTK_INVALID_LIST_POSITION)
-    return;
-
-  data->document = g_object_ref(PHI_DOCUMENT(model));
-  data->page_num = (gint)position;
-
-  gchar *label = g_strdup_printf("%u", position + 1);
-  gtk_label_set_text(data->page_label, label);
-  g_free(label);
-  gtk_widget_queue_draw(data->drawing_area);
-}
-
-static void thumbnail_factory_unbind(GtkSignalListItemFactory *factory,
-                                     GtkListItem *list_item,
-                                     PdfvWindow *self) {
-  (void)factory;
-  (void)self;
-  ThumbnailData *data =
-      g_object_get_data(G_OBJECT(list_item), "thumb-data");
-  thumbnail_data_reset(data);
-}
-
-static void populate_thumbnails(PdfvWindow *self, PhiDocument *document) {
-  GListModel *model = document ? G_LIST_MODEL(document) : NULL;
-  if (gtk_single_selection_get_model(self->thumbnail_selection) == model)
-    return;
-
-  gtk_single_selection_set_model(self->thumbnail_selection, model);
-}
-
-static void on_thumbnail_activated(GtkListView *list, guint position,
+static void on_thumbnail_activated(PdfvThumbnailList *list, guint position,
                                    PdfvWindow *self) {
   (void)list;
   if (self->current_view && position != GTK_INVALID_LIST_POSITION)
@@ -6289,41 +5938,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_menu_button_set_primary(self->menu_button, TRUE);
 
   /* Match Papers' compact, editable "page of total" selector. */
-  self->page_selector = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_widget_add_css_class(self->page_selector, "numeric");
-  gtk_widget_add_css_class(self->page_selector, "pdfv-page-selector");
-  gtk_widget_set_tooltip_text(self->page_selector, "Page Count");
-  gtk_widget_set_visible(self->page_selector, FALSE);
-
-  self->page_entry = GTK_ENTRY(gtk_entry_new());
-  gtk_widget_set_direction(GTK_WIDGET(self->page_entry), GTK_TEXT_DIR_LTR);
-  gtk_entry_set_alignment(self->page_entry, 0.9f);
-  gtk_entry_set_max_length(self->page_entry, 12);
-  gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), 1);
-  gtk_editable_set_max_width_chars(GTK_EDITABLE(self->page_entry), 1);
-  gtk_widget_set_hexpand(GTK_WIDGET(self->page_entry), FALSE);
-  gtk_accessible_update_property(
-      GTK_ACCESSIBLE(self->page_entry), GTK_ACCESSIBLE_PROPERTY_LABEL,
-      "Select page", -1);
-  g_signal_connect(self->page_entry, "activate",
-                   G_CALLBACK(on_page_entry_activated), self);
-  GtkEventController *page_focus = gtk_event_controller_focus_new();
-  g_signal_connect(page_focus, "leave",
-                   G_CALLBACK(on_page_entry_focus_leave), self);
-  gtk_widget_add_controller(GTK_WIDGET(self->page_entry), page_focus);
-  GtkEventController *page_scroll = gtk_event_controller_scroll_new(
-      GTK_EVENT_CONTROLLER_SCROLL_VERTICAL |
-      GTK_EVENT_CONTROLLER_SCROLL_DISCRETE);
-  g_signal_connect(page_scroll, "scroll",
-                   G_CALLBACK(on_page_entry_scroll), self);
-  gtk_widget_add_controller(GTK_WIDGET(self->page_entry), page_scroll);
-  gtk_box_append(GTK_BOX(self->page_selector), GTK_WIDGET(self->page_entry));
-
-  self->page_count_label = GTK_LABEL(gtk_label_new("of 0"));
-  gtk_label_set_width_chars(self->page_count_label, 5);
-  gtk_widget_set_sensitive(GTK_WIDGET(self->page_count_label), FALSE);
-  gtk_box_append(GTK_BOX(self->page_selector),
-                 GTK_WIDGET(self->page_count_label));
+  self->page_selector = pdfv_page_selector_new();
 
   GMenu *menu = g_menu_new();
   self->file_menu_section = g_menu_new();
@@ -6442,24 +6057,8 @@ static void pdfv_window_init(PdfvWindow *self) {
                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_widget_set_vexpand(thumb_scroll, TRUE);
 
-  GtkListItemFactory *thumbnail_factory =
-      gtk_signal_list_item_factory_new();
-  g_signal_connect(thumbnail_factory, "setup",
-                   G_CALLBACK(thumbnail_factory_setup), self);
-  g_signal_connect(thumbnail_factory, "bind", G_CALLBACK(thumbnail_factory_bind),
-                   self);
-  g_signal_connect(thumbnail_factory, "unbind",
-                   G_CALLBACK(thumbnail_factory_unbind), self);
-
-  self->thumbnail_selection = gtk_single_selection_new(NULL);
-  gtk_single_selection_set_autoselect(self->thumbnail_selection, FALSE);
-  gtk_single_selection_set_can_unselect(self->thumbnail_selection, TRUE);
-  self->thumbnail_list = GTK_LIST_VIEW(gtk_list_view_new(
-      GTK_SELECTION_MODEL(self->thumbnail_selection), thumbnail_factory));
-  gtk_list_view_set_single_click_activate(self->thumbnail_list, TRUE);
-  gtk_widget_add_css_class(GTK_WIDGET(self->thumbnail_list),
-                           "navigation-sidebar");
-  g_signal_connect(self->thumbnail_list, "activate",
+  self->thumbnail_list = pdfv_thumbnail_list_new();
+  g_signal_connect(self->thumbnail_list, "page-activated",
                    G_CALLBACK(on_thumbnail_activated), self);
 
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(thumb_scroll),
@@ -6601,7 +6200,8 @@ static void pdfv_window_init(PdfvWindow *self) {
   g_signal_connect(tab_overview_btn, "clicked",
                    G_CALLBACK(on_tab_overview_button_clicked), self);
   adw_header_bar_pack_end(self->header_bar, tab_overview_btn);
-  adw_header_bar_pack_end(self->header_bar, self->page_selector);
+  adw_header_bar_pack_end(self->header_bar,
+                          GTK_WIDGET(self->page_selector));
 
   g_signal_connect(self->tab_view, "notify::selected-page",
                    G_CALLBACK(on_tab_selected), self);
