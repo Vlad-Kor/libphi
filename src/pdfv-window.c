@@ -10,6 +10,7 @@
 
 #include "pdfv-window.h"
 #include "pdfv-document-view.h"
+#include "pdfv-document-properties.h"
 #include "pdfv-page-selector.h"
 #include "pdfv-settings.h"
 #include "pdfv-thumbnail-list.h"
@@ -378,6 +379,7 @@ static void update_sidebar_button(PdfvWindow *self) {
       "go-back",        "go-forward",   "zoom-in",   "zoom-out",
       "zoom-reset",     "zoom-fit-width", "zoom-fit-page",
       "invert-colors",  "page-next",    "page-prev", "present",
+      "document-properties",
   };
   for (guint i = 0; i < G_N_ELEMENTS(pdf_action_names); i++) {
     GAction *pdf_action = g_action_map_lookup_action(
@@ -417,15 +419,19 @@ static void rebuild_main_menu(PdfvWindow *self) {
       !self->view_menu_section)
     return;
 
+  gboolean has_pdf = self->current_view &&
+      pdfv_document_view_get_document(self->current_view) != NULL;
+
   g_menu_remove_all(self->file_menu_section);
   g_menu_append(self->file_menu_section, "Open…", "win.open");
   g_menu_append(self->file_menu_section, "Open Folder…", "win.open-folder");
   g_menu_append(self->file_menu_section, "New Workspace Window",
                 "win.new-workspace-window");
   g_menu_append(self->file_menu_section, "New Tab", "win.new-tab");
+  if (has_pdf)
+    g_menu_append(self->file_menu_section, "Document Properties…",
+                  "win.document-properties");
 
-  gboolean has_pdf = self->current_view &&
-      pdfv_document_view_get_document(self->current_view) != NULL;
   g_menu_remove_all(self->zoom_menu_section);
   if (has_pdf) {
     g_menu_append(self->zoom_menu_section, "Zoom In", "win.zoom-in");
@@ -1641,7 +1647,9 @@ static void workspace_results_clear(PdfvWindow *self) {
   workspace_preview_cancel_load(self);
   g_clear_object(&self->workspace_preview_file);
   if (self->workspace_result_scroll_id) {
-    g_source_remove(self->workspace_result_scroll_id);
+    gtk_widget_remove_tick_callback(
+        GTK_WIDGET(self->workspace_results_list),
+        self->workspace_result_scroll_id);
     self->workspace_result_scroll_id = 0;
   }
   if (self->workspace_group_select_id) {
@@ -1881,31 +1889,42 @@ static void workspace_scroll_result_into_view(PdfvWindow *self,
     return;
   GtkAdjustment *adjustment = gtk_scrolled_window_get_vadjustment(
       self->workspace_results_scroll);
-  gdouble value = gtk_adjustment_get_value(adjustment);
-  gdouble page_size = gtk_adjustment_get_page_size(adjustment);
   gdouble top = bounds.origin.y;
   gdouble bottom = bounds.origin.y + bounds.size.height;
-  if (top < value)
-    gtk_adjustment_set_value(adjustment, top);
-  else if (bottom > value + page_size)
-    gtk_adjustment_set_value(adjustment, bottom - page_size);
+  gtk_adjustment_clamp_page(adjustment, top, bottom);
 }
 
-static gboolean workspace_scroll_selected_idle(gpointer user_data) {
+static gboolean workspace_scroll_selected_tick(GtkWidget *widget,
+                                                GdkFrameClock *frame_clock,
+                                                gpointer user_data) {
+  (void)widget;
+  (void)frame_clock;
   PdfvWindow *self = PDFV_WINDOW(user_data);
-  self->workspace_result_scroll_id = 0;
+  if (!gtk_widget_get_visible(self->workspace_search_overlay)) {
+    self->workspace_result_scroll_id = 0;
+    return G_SOURCE_REMOVE;
+  }
   GtkListBoxRow *row = workspace_find_result_row(
       self, self->workspace_result_group, self->workspace_result_match);
+  /* Rows are replaced in four-result windows. A tick can run before the new
+   * row has received its first allocation, so wait for the following frame
+   * instead of calculating a scroll position from stale or empty bounds. */
+  if (!row || !gtk_widget_get_mapped(GTK_WIDGET(row)) ||
+      gtk_widget_get_height(GTK_WIDGET(row)) <= 0)
+    return G_SOURCE_CONTINUE;
   workspace_scroll_result_into_view(self, row);
+  self->workspace_result_scroll_id = 0;
   return G_SOURCE_REMOVE;
 }
 
 static void workspace_schedule_result_scroll(PdfvWindow *self) {
   if (self->workspace_result_scroll_id)
-    g_source_remove(self->workspace_result_scroll_id);
-  self->workspace_result_scroll_id = g_idle_add_full(
-      G_PRIORITY_HIGH_IDLE, workspace_scroll_selected_idle,
-      g_object_ref(self), g_object_unref);
+    gtk_widget_remove_tick_callback(
+        GTK_WIDGET(self->workspace_results_list),
+        self->workspace_result_scroll_id);
+  self->workspace_result_scroll_id = gtk_widget_add_tick_callback(
+      GTK_WIDGET(self->workspace_results_list),
+      workspace_scroll_selected_tick, g_object_ref(self), g_object_unref);
 }
 
 static void workspace_results_update_selection(PdfvWindow *self,
@@ -2251,6 +2270,12 @@ static void workspace_search_close(PdfvWindow *self, gboolean commit) {
   else
     workspace_preview_cancel_delay(self);
   gtk_widget_set_visible(self->workspace_search_overlay, FALSE);
+  if (self->workspace_result_scroll_id) {
+    gtk_widget_remove_tick_callback(
+        GTK_WIDGET(self->workspace_results_list),
+        self->workspace_result_scroll_id);
+    self->workspace_result_scroll_id = 0;
+  }
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
     self->workspace_search_debounce_id = 0;
@@ -4972,6 +4997,25 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   adw_dialog_present(dialog, GTK_WIDGET(self));
 }
 
+static void action_document_properties(GSimpleAction *action,
+                                       GVariant *parameter,
+                                       gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  PhiDocument *document = self->current_view
+      ? pdfv_document_view_get_document(self->current_view) : NULL;
+  if (!document)
+    return;
+  GFile *file = workspace_active_file(self);
+  if (!file)
+    return;
+  pdfv_document_properties_present(
+      GTK_WIDGET(self), file, document,
+      pdfv_document_view_get_current_page(self->current_view));
+  g_object_unref(file);
+}
+
 static void action_go_back(GSimpleAction *action, GVariant *parameter,
                            gpointer user_data) {
   (void)action;
@@ -5567,6 +5611,8 @@ static GActionEntry win_actions[] = {
     {.name = "allow-remote-images", .state = "false",
      .change_state = action_allow_remote_images},
     {.name = "preferences", .activate = action_preferences},
+    {.name = "document-properties",
+     .activate = action_document_properties},
     {.name = "go-back", .activate = action_go_back},
     {.name = "go-forward", .activate = action_go_forward},
     {.name = "zoom-in", .activate = action_zoom_in},
@@ -5736,7 +5782,9 @@ static void pdfv_window_dispose(GObject *object) {
     self->workspace_group_select_id = 0;
   }
   if (self->workspace_result_scroll_id) {
-    g_source_remove(self->workspace_result_scroll_id);
+    gtk_widget_remove_tick_callback(
+        GTK_WIDGET(self->workspace_results_list),
+        self->workspace_result_scroll_id);
     self->workspace_result_scroll_id = 0;
   }
   if (self->workspace_scan_cancellable)

@@ -36,6 +36,25 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error);
 gint phi_document_get_n_pages(PhiDocument* self);
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error);
 
+/* Common document metadata exposed without leaking MuPDF's key strings into
+ * applications. The returned string belongs to the caller; NULL means that
+ * the document does not provide the requested field. */
+typedef enum {
+	PHI_DOCUMENT_METADATA_FORMAT,
+	PHI_DOCUMENT_METADATA_ENCRYPTION,
+	PHI_DOCUMENT_METADATA_TITLE,
+	PHI_DOCUMENT_METADATA_AUTHOR,
+	PHI_DOCUMENT_METADATA_SUBJECT,
+	PHI_DOCUMENT_METADATA_KEYWORDS,
+	PHI_DOCUMENT_METADATA_CREATOR,
+	PHI_DOCUMENT_METADATA_PRODUCER,
+	PHI_DOCUMENT_METADATA_CREATION_DATE,
+	PHI_DOCUMENT_METADATA_MODIFICATION_DATE,
+} PhiDocumentMetadata;
+
+gchar* phi_document_dup_metadata(PhiDocument* self,
+	PhiDocumentMetadata metadata);
+
 /*
  * Render a page with an independent MuPDF context. This is intended for a
  * serialized background worker; the returned image surface may be handed to

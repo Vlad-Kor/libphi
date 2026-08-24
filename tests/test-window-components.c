@@ -3,6 +3,7 @@
  */
 
 #include "pdfv-document-view.h"
+#include "pdfv-document-properties.h"
 #include "pdfv-page-selector.h"
 #include "pdfv-thumbnail-list.h"
 
@@ -63,11 +64,52 @@ static void test_thumbnail_list_accepts_document_changes(void) {
   g_object_unref(document);
 }
 
+static void test_document_property_formatting(void) {
+  gchar *a4 = pdfv_document_properties_format_page_size(595.28f, 841.89f);
+  g_assert_nonnull(g_strstr_len(a4, -1, "A4"));
+  g_assert_nonnull(g_strstr_len(a4, -1, "portrait"));
+  g_free(a4);
+
+  gchar *letter_landscape =
+      pdfv_document_properties_format_page_size(792.0f, 612.0f);
+  g_assert_nonnull(g_strstr_len(letter_landscape, -1, "Letter"));
+  g_assert_nonnull(g_strstr_len(letter_landscape, -1, "landscape"));
+  g_free(letter_landscape);
+
+  gchar *date = pdfv_document_properties_format_pdf_date(
+      "D:20240506070809+02'00'");
+  g_assert_nonnull(date);
+  g_assert_cmpstr(date, !=, "D:20240506070809+02'00'");
+  g_free(date);
+}
+
+static void test_document_properties_dialog_lifecycle(void) {
+  GFile *file =
+      g_file_new_for_path(TEST_DATA_DIR "/separate-diacritic.pdf");
+  PhiDocument *document = open_fixture();
+  GtkWindow *window = GTK_WINDOW(gtk_window_new());
+  g_object_ref_sink(window);
+  gtk_window_present(window);
+
+  pdfv_document_properties_present(GTK_WIDGET(window), file, document, 0);
+  while (g_main_context_iteration(NULL, FALSE))
+    ;
+
+  gtk_window_destroy(window);
+  g_object_unref(window);
+  g_object_unref(document);
+  g_object_unref(file);
+}
+
 int main(int argc, char **argv) {
   gtk_test_init(&argc, &argv, NULL);
   g_test_add_func("/window-components/page-selector",
                   test_page_selector_tracks_view);
   g_test_add_func("/window-components/thumbnail-list",
                   test_thumbnail_list_accepts_document_changes);
+  g_test_add_func("/window-components/document-property-formatting",
+                  test_document_property_formatting);
+  g_test_add_func("/window-components/document-properties-dialog",
+                  test_document_properties_dialog_lifecycle);
   return g_test_run();
 }

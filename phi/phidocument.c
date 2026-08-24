@@ -197,6 +197,49 @@ gint phi_document_get_n_pages(PhiDocument* self) {
 	return self->n_pages;
 }
 
+gchar* phi_document_dup_metadata(PhiDocument* self,
+		PhiDocumentMetadata metadata) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
+
+	static const gchar* const keys[] = {
+		[PHI_DOCUMENT_METADATA_FORMAT] = FZ_META_FORMAT,
+		[PHI_DOCUMENT_METADATA_ENCRYPTION] = FZ_META_ENCRYPTION,
+		[PHI_DOCUMENT_METADATA_TITLE] = FZ_META_INFO_TITLE,
+		[PHI_DOCUMENT_METADATA_AUTHOR] = FZ_META_INFO_AUTHOR,
+		[PHI_DOCUMENT_METADATA_SUBJECT] = FZ_META_INFO_SUBJECT,
+		[PHI_DOCUMENT_METADATA_KEYWORDS] = FZ_META_INFO_KEYWORDS,
+		[PHI_DOCUMENT_METADATA_CREATOR] = FZ_META_INFO_CREATOR,
+		[PHI_DOCUMENT_METADATA_PRODUCER] = FZ_META_INFO_PRODUCER,
+		[PHI_DOCUMENT_METADATA_CREATION_DATE] =
+			FZ_META_INFO_CREATIONDATE,
+		[PHI_DOCUMENT_METADATA_MODIFICATION_DATE] =
+			FZ_META_INFO_MODIFICATIONDATE,
+	};
+	if (metadata < 0 || metadata >= (gint)G_N_ELEMENTS(keys))
+		return NULL;
+
+	gchar* value = NULL;
+	fz_try(self->ctx) {
+		int required = fz_lookup_metadata(self->ctx, self->document,
+			keys[metadata], NULL, 0);
+		if (required > 0) {
+			value = g_malloc(required);
+			if (fz_lookup_metadata(self->ctx, self->document, keys[metadata],
+					value, required) < 0)
+				g_clear_pointer(&value, g_free);
+		}
+	} fz_catch(self->ctx) {
+		g_clear_pointer(&value, g_free);
+	}
+
+	if (value && !g_utf8_validate(value, -1, NULL)) {
+		gchar* valid = g_utf8_make_valid(value, -1);
+		g_free(value);
+		value = valid;
+	}
+	return value;
+}
+
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
 	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);

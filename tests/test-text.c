@@ -104,11 +104,26 @@ static void test_page_can_outlive_document(void) {
 	g_object_unref(page);
 }
 
+static void test_document_metadata(void) {
+	g_autoptr(PhiDocument) document = open_fixture();
+	g_autofree gchar* format = phi_document_dup_metadata(
+		document, PHI_DOCUMENT_METADATA_FORMAT);
+	g_autofree gchar* encryption = phi_document_dup_metadata(
+		document, PHI_DOCUMENT_METADATA_ENCRYPTION);
+	g_autofree gchar* author = phi_document_dup_metadata(
+		document, PHI_DOCUMENT_METADATA_AUTHOR);
+
+	g_assert_cmpstr(format, ==, "PDF 1.4");
+	g_assert_cmpstr(encryption, ==, "None");
+	g_assert_null(author);
+}
+
 int main(int argc, char** argv) {
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/text/separate-diacritic", test_separate_diacritic_text);
 	g_test_add_func("/thumbnail/render", test_thumbnail_render);
 	g_test_add_func("/lifetime/page-outlives-document",
 		test_page_can_outlive_document);
+	g_test_add_func("/document/metadata", test_document_metadata);
 	return g_test_run();
 }

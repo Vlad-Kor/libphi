@@ -80,6 +80,7 @@ test('document-view-test', test_document_view)
 test_window_components = executable('test-window-components',
 	'test-window-components.c',
 	'../src/pdfv-document-view.c',
+	'../src/pdfv-document-properties.c',
 	'../src/pdfv-page-selector.c',
 	'../src/pdfv-thumbnail-list.c',
 	include_directories: [inc, include_directories('../src')],
