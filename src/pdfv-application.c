@@ -132,6 +132,7 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 		about,
 		"A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK");
 	adw_about_dialog_set_website(about, "https://github.com/Vlad-Kor/libphi");
+	adw_about_dialog_add_link(about, "Other Repository", "https://github.com/sp1ritCS/libphi");
 	adw_about_dialog_add_acknowledgement_section(
 		about, "LaTeX snippet defaults", acknowledgements);
 	adw_about_dialog_add_acknowledgement_section(
