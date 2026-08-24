@@ -4936,6 +4936,63 @@ static void on_choose_attachment_folder(GtkButton *button,
   g_free(uri);
 }
 
+static GtkLabel *find_label_with_text(GtkWidget *widget,
+                                      const gchar *text) {
+  if (GTK_IS_LABEL(widget) &&
+      g_strcmp0(gtk_label_get_text(GTK_LABEL(widget)), text) == 0)
+    return GTK_LABEL(widget);
+
+  for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
+       child = gtk_widget_get_next_sibling(child)) {
+    GtkLabel *match = find_label_with_text(child, text);
+    if (match)
+      return match;
+  }
+  return NULL;
+}
+
+static gboolean on_compatibility_note_tooltip(
+    GtkWidget *widget, gint x, gint y, gboolean keyboard_mode,
+    GtkTooltip *tooltip, gpointer user_data) {
+  (void)user_data;
+  if (keyboard_mode || !GTK_IS_LABEL(widget))
+    return FALSE;
+
+  const gchar *text = gtk_label_get_text(GTK_LABEL(widget));
+  const gchar *marker = strstr(text, "compatible*");
+  if (!marker)
+    return FALSE;
+  marker = strchr(marker, '*');
+
+  PangoRectangle marker_position;
+  PangoLayout *layout = gtk_label_get_layout(GTK_LABEL(widget));
+  pango_layout_index_to_pos(layout, marker - text, &marker_position);
+
+  gint layout_x = 0;
+  gint layout_y = 0;
+  gtk_label_get_layout_offsets(GTK_LABEL(widget), &layout_x, &layout_y);
+  gint marker_start = MIN(marker_position.x,
+                          marker_position.x + marker_position.width);
+  gint marker_end = MAX(marker_position.x,
+                        marker_position.x + marker_position.width);
+  GdkRectangle hitbox = {
+      .x = layout_x + marker_start / PANGO_SCALE - 3,
+      .y = layout_y + marker_position.y / PANGO_SCALE - 3,
+      .width = MAX(1, (marker_end - marker_start) / PANGO_SCALE) + 6,
+      .height = MAX(1, marker_position.height / PANGO_SCALE) + 6,
+  };
+  if (x < hitbox.x || x >= hitbox.x + hitbox.width || y < hitbox.y ||
+      y >= hitbox.y + hitbox.height)
+    return FALSE;
+
+  gtk_tooltip_set_text(
+      tooltip,
+      "Custom JavaScript replacements, export default wrappers, and "
+      "JavaScript regex literals are not supported.");
+  gtk_tooltip_set_tip_area(tooltip, &hitbox);
+  return TRUE;
+}
+
 static void action_preferences(GSimpleAction *action, GVariant *parameter,
                                gpointer user_data) {
   (void)action;
@@ -5078,10 +5135,13 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
       "Phi’s LaTeX snippets are based on and fully compatible* with "
       "Obsidian LaTeX Suite. See its repository for documentation on how "
       "the snippet format works.");
-  gtk_widget_set_tooltip_text(
-      GTK_WIDGET(snippets),
-      "Custom JavaScript replacements, export default wrappers, and "
-      "JavaScript regex literals are not supported.");
+  GtkLabel *compatibility_note = find_label_with_text(
+      GTK_WIDGET(snippets), adw_preferences_group_get_description(snippets));
+  if (compatibility_note) {
+    gtk_widget_set_has_tooltip(GTK_WIDGET(compatibility_note), TRUE);
+    g_signal_connect(compatibility_note, "query-tooltip",
+                     G_CALLBACK(on_compatibility_note_tooltip), NULL);
+  }
   adw_preferences_page_add(latex_page, snippets);
 
   AdwActionRow *documentation = ADW_ACTION_ROW(adw_action_row_new());
