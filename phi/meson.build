@@ -18,7 +18,6 @@ phi_src = [
 	'phierrors.c',
 	'phidocument.c',
 	'phipage.c',
-	'phiview.c',
 
 	'phigiostream.c',
 	'phinodedevice.c',

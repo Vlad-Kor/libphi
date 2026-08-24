@@ -94,39 +94,6 @@ static void test_thumbnail_render(void) {
 
 typedef struct {
 	PhiDocument* document;
-	GskRenderNode* node;
-	GError* error;
-} PageNodeResult;
-
-static gpointer render_page_node_thread(gpointer user_data) {
-	PageNodeResult* result = user_data;
-	result->node = phi_document_render_page_node(result->document, 0, NULL,
-		&result->error);
-	return NULL;
-}
-
-static void test_page_node_render(void) {
-	g_autoptr(PhiDocument) document = open_fixture();
-	PageNodeResult result = { .document = document };
-	GThread* worker = g_thread_new("page-node-test",
-		render_page_node_thread, &result);
-	g_thread_join(worker);
-
-	g_assert_no_error(result.error);
-	g_assert_nonnull(result.node);
-	gsk_render_node_unref(result.node);
-
-	g_autoptr(GCancellable) cancellable = g_cancellable_new();
-	g_cancellable_cancel(cancellable);
-	result.node = phi_document_render_page_node(document, 0, cancellable,
-		&result.error);
-	g_assert_null(result.node);
-	g_assert_error(result.error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
-	g_clear_error(&result.error);
-}
-
-typedef struct {
-	PhiDocument* document;
 	GdkTexture* texture;
 	GError* error;
 } PageTextureResult;
@@ -208,7 +175,6 @@ int main(int argc, char** argv) {
 	gtk_test_init(&argc, &argv, NULL);
 	g_test_add_func("/text/separate-diacritic", test_separate_diacritic_text);
 	g_test_add_func("/thumbnail/render", test_thumbnail_render);
-	g_test_add_func("/page-node/render", test_page_node_render);
 	g_test_add_func("/page-texture/render", test_page_texture_render);
 	g_test_add_func("/lifetime/page-outlives-document",
 		test_page_can_outlive_document);

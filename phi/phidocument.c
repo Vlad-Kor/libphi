@@ -19,7 +19,6 @@
 #include "phi/phidocumentprivate.h"
 
 #include "phi/phigiostreamprivate.h"
-#include "phi/phinodedeviceprivate.h"
 #include "phi/phipageprivate.h"
 
 #include <math.h>
@@ -387,9 +386,8 @@ static gboolean phi_document_ensure_render_document(PhiDocument* self,
 		return FALSE;
 	}
 
-	/* Image nodes retain cloned contexts until their immutable texture bytes
-	 * are released, potentially on the GTK thread. MuPDF requires real lock
-	 * callbacks whenever a context may be cloned or used across threads. */
+	/* The context may be entered by different pool threads over its lifetime.
+	 * Individual renders remain serialized by render_lock. */
 	fz_locks_context locks = {
 		.user = self,
 		.lock = phi_document_ctx_lock_lock,
@@ -557,59 +555,6 @@ unlock:
 	g_bytes_unref(bytes);
 	return texture;
 }
-
-GskRenderNode* phi_document_render_page_node(PhiDocument* self, gint pageno,
-		GCancellable* cancellable, GError** error) {
-	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
-	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
-
-	GskRenderNode* node = NULL;
-	fz_page* page = NULL;
-	fz_device* device = NULL;
-	fz_cookie cookie = {0};
-	gulong cancelled_handler = 0;
-
-	g_mutex_lock(&self->render_lock);
-	if ((cancellable &&
-		 g_cancellable_set_error_if_cancelled(cancellable, error)) ||
-		!phi_document_ensure_render_document(self, cancellable, error))
-		goto unlock;
-
-	if (cancellable)
-		cancelled_handler = g_cancellable_connect(
-			cancellable, G_CALLBACK(phi_document_cancel_render_cookie),
-			&cookie, NULL);
-
-	fz_try(self->render_ctx) {
-		page = fz_load_page(self->render_ctx, self->render_document, pageno);
-		device = phi_node_device_new(self->render_ctx, G_OBJECT(self));
-		fz_run_page(self->render_ctx, page, device, fz_identity, &cookie);
-		if (!cancellable || !g_cancellable_is_cancelled(cancellable))
-			node = phi_node_device_pop_root(device);
-	} fz_always(self->render_ctx) {
-		if (device)
-			fz_drop_device(self->render_ctx, device);
-		if (page)
-			fz_drop_page(self->render_ctx, page);
-	} fz_catch(self->render_ctx) {
-		if (!cancellable || !g_cancellable_is_cancelled(cancellable))
-			g_set_error_literal(error, PHI_MU_ERROR,
-				fz_caught(self->render_ctx),
-				fz_caught_message(self->render_ctx));
-	}
-
-	if (cancelled_handler)
-		g_cancellable_disconnect(cancellable, cancelled_handler);
-	if (cancellable && g_cancellable_is_cancelled(cancellable)) {
-		g_clear_pointer(&node, gsk_render_node_unref);
-		g_cancellable_set_error_if_cancelled(cancellable, error);
-	}
-
-unlock:
-	g_mutex_unlock(&self->render_lock);
-	return node;
-}
-
 static PhiOutlineItem* phi_outline_convert(fz_context* ctx, fz_outline* outline) {
 	if (!outline)
 		return NULL;

@@ -74,12 +74,6 @@ GdkTexture* phi_document_render_page_texture(PhiDocument* self, gint pageno,
 	gdouble scale, gint tile_x, gint tile_y, gint tile_width,
 	gint tile_height, GCancellable* cancellable, GError** error);
 
-/* Build an immutable page scene graph using a file-backed MuPDF context that
- * is independent from the document's interactive context. This function is
- * safe to call from a worker thread; calls for one document are serialized. */
-GskRenderNode* phi_document_render_page_node(PhiDocument* self, gint pageno,
-	GCancellable* cancellable, GError** error);
-
 /* Outline (Table of Contents) */
 typedef struct _PhiOutlineItem PhiOutlineItem;
 struct _PhiOutlineItem {
