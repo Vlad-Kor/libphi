@@ -25,6 +25,7 @@ pdfv_sources = [
 	'pdfv-page-selector.c',
 	'pdfv-thumbnail-list.c',
 	'pdfv-workspace.c',
+	'workspace-history.c',
 	'workspace-file-ops.c',
 	'pdfv-settings.c',
 	'markdown-editor.c',

@@ -15,6 +15,7 @@
 #include "pdfv-settings.h"
 #include "pdfv-thumbnail-list.h"
 #include "pdfv-workspace.h"
+#include "workspace-history.h"
 #include "workspace-file-ops.h"
 #include "markdown-editor.h"
 #include "markdown-resource-scheme.h"
@@ -52,6 +53,7 @@ struct _PdfvWindow {
   GMenu *workspace_menu_section;
   GMenu *zoom_menu_section;
   GMenu *view_menu_section;
+  GMenu *open_workspace_menu;
 
   /* Sidebar */
   PdfvThumbnailList *thumbnail_list;
@@ -414,6 +416,44 @@ static void update_markdown_actions(PdfvWindow *self) {
   rebuild_main_menu(self);
 }
 
+static void rebuild_open_workspace_menu(PdfvWindow *self) {
+  if (!self->open_workspace_menu)
+    return;
+  g_menu_remove_all(self->open_workspace_menu);
+  g_menu_append(self->open_workspace_menu, "Choose Folder…",
+                "win.open-folder");
+
+  GPtrArray *recent = pdfv_workspace_history_list();
+  GMenu *recent_section = g_menu_new();
+  guint visible = 0;
+  GFile *current = self->workspace
+      ? pdfv_workspace_get_folder(self->workspace) : NULL;
+  for (guint i = 0; i < recent->len; i++) {
+    GFile *folder = g_ptr_array_index(recent, i);
+    if (current && g_file_equal(current, folder))
+      continue;
+    gchar *label = g_file_get_basename(folder);
+    if (!label || !*label) {
+      g_free(label);
+      label = g_file_get_parse_name(folder);
+    }
+    gchar *uri = g_file_get_uri(folder);
+    GMenuItem *item = g_menu_item_new(label, NULL);
+    g_menu_item_set_action_and_target(item, "win.open-recent-workspace",
+                                      "s", uri);
+    g_menu_append_item(recent_section, item);
+    g_object_unref(item);
+    g_free(uri);
+    g_free(label);
+    visible++;
+  }
+  if (visible > 0)
+    g_menu_append_section(self->open_workspace_menu, "Recent Workspaces",
+                          G_MENU_MODEL(recent_section));
+  g_object_unref(recent_section);
+  g_ptr_array_unref(recent);
+}
+
 static void rebuild_main_menu(PdfvWindow *self) {
   if (!self->file_menu_section || !self->zoom_menu_section ||
       !self->view_menu_section)
@@ -421,24 +461,29 @@ static void rebuild_main_menu(PdfvWindow *self) {
 
   gboolean has_pdf = self->current_view &&
       pdfv_document_view_get_document(self->current_view) != NULL;
+  rebuild_open_workspace_menu(self);
 
   g_menu_remove_all(self->file_menu_section);
   g_menu_append(self->file_menu_section, "Open…", "win.open");
-  g_menu_append(self->file_menu_section, "Open Folder…", "win.open-folder");
+  GMenuItem *open_workspace = g_menu_item_new_submenu(
+      "Open Workspace", G_MENU_MODEL(self->open_workspace_menu));
+  g_menu_append_item(self->file_menu_section, open_workspace);
+  g_object_unref(open_workspace);
   g_menu_append(self->file_menu_section, "New Workspace Window",
                 "win.new-workspace-window");
-  g_menu_append(self->file_menu_section, "New Tab", "win.new-tab");
   if (has_pdf)
     g_menu_append(self->file_menu_section, "Document Properties…",
                   "win.document-properties");
 
   g_menu_remove_all(self->zoom_menu_section);
   if (has_pdf) {
-    g_menu_append(self->zoom_menu_section, "Zoom In", "win.zoom-in");
-    g_menu_append(self->zoom_menu_section, "Zoom Out", "win.zoom-out");
     g_menu_append(self->zoom_menu_section, "Reset Zoom", "win.zoom-reset");
-    g_menu_append(self->zoom_menu_section, "Fit Width", "win.zoom-fit-width");
-    g_menu_append(self->zoom_menu_section, "Fit Page", "win.zoom-fit-page");
+    if (!self->presentation_mode_active) {
+      g_menu_append(self->zoom_menu_section, "Fit Width",
+                    "win.zoom-fit-width");
+      g_menu_append(self->zoom_menu_section, "Fit Page",
+                    "win.zoom-fit-page");
+    }
   }
 
   g_menu_remove_all(self->view_menu_section);
@@ -452,6 +497,16 @@ static void rebuild_main_menu(PdfvWindow *self) {
   if (has_pdf)
     g_menu_append(self->view_menu_section, "Present as Slideshow",
                   "win.present");
+}
+
+static void rebuild_application_main_menus(PdfvWindow *source) {
+  GtkApplication *application = gtk_window_get_application(GTK_WINDOW(source));
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (PDFV_IS_WINDOW(at->data))
+      rebuild_main_menu(PDFV_WINDOW(at->data));
+  }
 }
 
 static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
@@ -2331,10 +2386,11 @@ static GtkWidget *create_empty_state(PdfvWindow *self) {
   gtk_actionable_set_action_name(GTK_ACTIONABLE(open_file), "win.open");
   gtk_box_append(GTK_BOX(actions), open_file);
 
-  GtkWidget *open_folder = gtk_button_new_with_label("Open Folder…");
+  GtkWidget *open_folder = gtk_menu_button_new();
+  gtk_menu_button_set_label(GTK_MENU_BUTTON(open_folder), "Open Workspace");
+  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(open_folder),
+                                 G_MENU_MODEL(self->open_workspace_menu));
   gtk_widget_add_css_class(open_folder, "pill");
-  gtk_actionable_set_action_name(GTK_ACTIONABLE(open_folder),
-                                 "win.open-folder");
   gtk_box_append(GTK_BOX(actions), open_folder);
   adw_status_page_set_child(ADW_STATUS_PAGE(status), actions);
 
@@ -3032,50 +3088,6 @@ static void action_open(GSimpleAction *action, GVariant *parameter,
                        self);
 }
 
-static gchar *workspace_state_file(void) {
-  return g_build_filename(g_get_user_config_dir(), "phi-pdf-viewer",
-                          "state.ini", NULL);
-}
-
-static void remember_workspace(GFile *folder) {
-  gchar *filename = workspace_state_file();
-  gchar *directory = g_path_get_dirname(filename);
-  GKeyFile *state = g_key_file_new();
-  g_key_file_load_from_file(state, filename, G_KEY_FILE_KEEP_COMMENTS, NULL);
-  if (folder) {
-    gchar *uri = g_file_get_uri(folder);
-    g_key_file_set_string(state, "workspace", "uri", uri);
-    g_free(uri);
-  } else {
-    g_key_file_remove_key(state, "workspace", "uri", NULL);
-  }
-
-  gsize length = 0;
-  gchar *contents = g_key_file_to_data(state, &length, NULL);
-  if (g_mkdir_with_parents(directory, 0700) != 0 ||
-      !g_file_set_contents(filename, contents, length, NULL))
-    g_debug("Could not save workspace state at %s", filename);
-  g_free(contents);
-  g_key_file_unref(state);
-  g_free(directory);
-  g_free(filename);
-}
-
-static GFile *get_remembered_workspace(void) {
-  gchar *filename = workspace_state_file();
-  GKeyFile *state = g_key_file_new();
-  GFile *folder = NULL;
-  if (g_key_file_load_from_file(state, filename, G_KEY_FILE_NONE, NULL)) {
-    gchar *uri = g_key_file_get_string(state, "workspace", "uri", NULL);
-    if (uri && *uri)
-      folder = g_file_new_for_uri(uri);
-    g_free(uri);
-  }
-  g_key_file_unref(state);
-  g_free(filename);
-  return folder;
-}
-
 static gchar *workspace_page_relative_path(PdfvWindow *self,
                                            AdwTabPage *page,
                                            GFile *folder) {
@@ -3229,7 +3241,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   g_simple_action_set_enabled(G_SIMPLE_ACTION(search_action), FALSE);
   g_simple_action_set_enabled(G_SIMPLE_ACTION(close_action), FALSE);
   if (forget)
-    remember_workspace(NULL);
+    pdfv_workspace_history_clear_current();
   apply_markdown_preferences(self);
 
   gboolean has_document =
@@ -3331,7 +3343,8 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
     adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
     adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
-    remember_workspace(pdfv_workspace_get_folder(workspace));
+    pdfv_workspace_history_remember(pdfv_workspace_get_folder(workspace));
+    rebuild_application_main_menus(self);
     apply_markdown_preferences(self);
     update_sidebar_button(self);
   } else if (error &&
@@ -4235,6 +4248,34 @@ static void action_open_folder(GSimpleAction *action, GVariant *parameter,
   gtk_file_dialog_set_title(dialog, "Open Workspace Folder");
   gtk_file_dialog_select_folder(dialog, GTK_WINDOW(self), NULL,
                                 on_folder_dialog_selected, g_object_ref(self));
+}
+
+static void action_open_recent_workspace(GSimpleAction *action,
+                                         GVariant *parameter,
+                                         gpointer user_data) {
+  (void)action;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (!parameter)
+    return;
+  const gchar *uri = g_variant_get_string(parameter, NULL);
+  GFile *folder = g_file_new_for_uri(uri);
+  if (g_file_query_file_type(folder, G_FILE_QUERY_INFO_NONE, NULL) !=
+      G_FILE_TYPE_DIRECTORY) {
+    pdfv_workspace_history_forget(folder);
+    rebuild_application_main_menus(self);
+    GError *error = g_error_new_literal(
+        G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        "The folder no longer exists or is not available.");
+    show_file_operation_error(self, "Could Not Open Recent Workspace",
+                              error);
+    g_error_free(error);
+    g_object_unref(folder);
+    return;
+  }
+  if (!self->workspace ||
+      !g_file_equal(pdfv_workspace_get_folder(self->workspace), folder))
+    open_workspace_folder(self, folder);
+  g_object_unref(folder);
 }
 
 static void action_workspace_search(GSimpleAction *action, GVariant *parameter,
@@ -5413,6 +5454,7 @@ static void action_fullscreen(GSimpleAction *action, GVariant *parameter,
       presentation_set_end_visible(self, FALSE);
       fullscreen_restore_document_mode(self);
       self->presentation_mode_active = FALSE;
+      rebuild_main_menu(self);
       gtk_widget_set_tooltip_text(
           GTK_WIDGET(self->presentation_exit_button),
           "Exit Fullscreen (Esc)");
@@ -5442,6 +5484,7 @@ static void action_present(GSimpleAction *action, GVariant *parameter,
       return;
     }
     self->presentation_mode_active = TRUE;
+    rebuild_main_menu(self);
     gtk_widget_set_tooltip_text(
         GTK_WIDGET(self->presentation_exit_button),
         "Exit Slideshow (Esc)");
@@ -5451,6 +5494,7 @@ static void action_present(GSimpleAction *action, GVariant *parameter,
   }
 
   self->presentation_mode_active = TRUE;
+  rebuild_main_menu(self);
   set_fullscreen_chrome(self, TRUE);
   gtk_window_fullscreen(GTK_WINDOW(self));
 }
@@ -5567,6 +5611,9 @@ static void action_find_prev(GSimpleAction *action, GVariant *parameter,
 static GActionEntry win_actions[] = {
     {.name = "open", .activate = action_open},
     {.name = "open-folder", .activate = action_open_folder},
+    {.name = "open-recent-workspace",
+     .activate = action_open_recent_workspace,
+     .parameter_type = "s"},
     {.name = "workspace-search", .activate = action_workspace_search},
     {.name = "close-workspace", .activate = action_close_workspace},
     {.name = "workspace-new-note",
@@ -5821,6 +5868,7 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->workspace_menu_section);
   g_clear_object(&self->zoom_menu_section);
   g_clear_object(&self->view_menu_section);
+  g_clear_object(&self->open_workspace_menu);
   g_clear_pointer(&self->settings, pdfv_settings_free);
 
   if (self->current_outline) {
@@ -5837,6 +5885,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->settings = pdfv_settings_new();
+  self->open_workspace_menu = g_menu_new();
   self->workspace_result_headers = g_ptr_array_new();
   self->workspace_expanded_paths =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
@@ -6503,7 +6552,7 @@ PdfvWindow *pdfv_window_new(AdwApplication *app) {
 
 void pdfv_window_restore_last_workspace(PdfvWindow *self) {
   g_return_if_fail(PDFV_IS_WINDOW(self));
-  GFile *folder = get_remembered_workspace();
+  GFile *folder = pdfv_workspace_history_dup_current();
   if (!folder)
     return;
   if (g_file_query_file_type(folder, G_FILE_QUERY_INFO_NONE, NULL) ==

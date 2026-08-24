@@ -48,6 +48,15 @@ test_workspace_file_ops = executable('test-workspace-file-ops',
 
 test('workspace-file-ops-test', test_workspace_file_ops)
 
+test_workspace_history = executable('test-workspace-history',
+	'test-workspace-history.c',
+	'../src/workspace-history.c',
+	include_directories: [inc, include_directories('../src')],
+	dependencies: [gio_dep],
+)
+
+test('workspace-history-test', test_workspace_history)
+
 test_markdown_vault = executable('test-markdown-vault',
 	'test-markdown-vault.c',
 	'../src/markdown-vault-adapter.c',
