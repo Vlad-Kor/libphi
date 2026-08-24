@@ -138,8 +138,11 @@ struct _PdfvWindow {
   gboolean fullscreen_sidebar_was_visible;
   guint fullscreen_hide_timeout_id;
   PdfvDocumentView *fullscreen_document_view;
+  GtkScrolledWindow *fullscreen_scrolled_window;
   gboolean fullscreen_document_was_continuous;
   gboolean fullscreen_document_was_presentation;
+  GtkPolicyType fullscreen_hscrollbar_policy;
+  GtkPolicyType fullscreen_vscrollbar_policy;
   gdouble fullscreen_document_zoom;
   gdouble fullscreen_document_minimum_zoom;
   guint fullscreen_fit_generation;
@@ -380,6 +383,18 @@ static void update_page_selector(PdfvWindow *self) {
   gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), page_chars);
   gtk_editable_set_max_width_chars(GTK_EDITABLE(self->page_entry),
                                    page_chars);
+  /* width-chars is based on an average glyph and can still shave a pixel off
+   * wide multi-digit values. Reserve the exact width of the widest numeric
+   * string for this page count, plus the entry's compact insets. */
+  gchar *widest_page = g_strnfill(page_chars, '8');
+  PangoLayout *page_layout = gtk_widget_create_pango_layout(
+      GTK_WIDGET(self->page_entry), widest_page);
+  gint page_width = 0;
+  pango_layout_get_pixel_size(page_layout, &page_width, NULL);
+  gtk_widget_set_size_request(GTK_WIDGET(self->page_entry),
+                              page_width + 18, -1);
+  g_object_unref(page_layout);
+  g_free(widest_page);
   gtk_label_set_width_chars(self->page_count_label, count_chars);
   g_free(count_text);
   g_free(page_text);
@@ -5433,6 +5448,13 @@ static void fullscreen_restore_document_mode(PdfvWindow *self) {
   pdfv_document_view_set_zoom(view, self->fullscreen_document_zoom);
   pdfv_document_view_set_presentation_mode(
       view, self->fullscreen_document_was_presentation);
+  if (self->fullscreen_scrolled_window) {
+    gtk_scrolled_window_set_policy(
+        self->fullscreen_scrolled_window,
+        self->fullscreen_hscrollbar_policy,
+        self->fullscreen_vscrollbar_policy);
+    g_clear_object(&self->fullscreen_scrolled_window);
+  }
   g_clear_object(&self->fullscreen_document_view);
 }
 
@@ -5454,6 +5476,19 @@ static void fullscreen_refresh_document_mode(PdfvWindow *self) {
       pdfv_document_view_get_zoom(self->current_view);
   self->fullscreen_document_minimum_zoom =
       pdfv_document_view_get_minimum_zoom(self->current_view);
+  GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(self->current_view));
+  while (parent && !GTK_IS_SCROLLED_WINDOW(parent))
+    parent = gtk_widget_get_parent(parent);
+  if (parent) {
+    self->fullscreen_scrolled_window =
+        g_object_ref(GTK_SCROLLED_WINDOW(parent));
+    gtk_scrolled_window_get_policy(
+        self->fullscreen_scrolled_window,
+        &self->fullscreen_hscrollbar_policy,
+        &self->fullscreen_vscrollbar_policy);
+    gtk_scrolled_window_set_policy(self->fullscreen_scrolled_window,
+                                   GTK_POLICY_NEVER, GTK_POLICY_NEVER);
+  }
   pdfv_document_view_set_presentation_mode(self->current_view, TRUE);
   pdfv_document_view_set_minimum_zoom(self->current_view, 0.0);
   pdfv_document_view_set_continuous(self->current_view, FALSE);
@@ -6042,6 +6077,7 @@ static void pdfv_window_dispose(GObject *object) {
                       GUINT_TO_POINTER(++self->fullscreen_fit_generation));
     g_clear_object(&self->fullscreen_document_view);
   }
+  g_clear_object(&self->fullscreen_scrolled_window);
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
     self->workspace_search_debounce_id = 0;

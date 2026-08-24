@@ -236,11 +236,27 @@ calculate_layout(PdfvDocumentView* self)
     }
 }
 
+static gboolean
+is_fitted_presentation(PdfvDocumentView* self)
+{
+    return self->presentation_mode &&
+        self->zoom <= self->minimum_zoom * 1.0001 + 0.000001;
+}
+
 static void
 update_adjustments(PdfvDocumentView* self)
 {
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
+    gboolean fitted_presentation = is_fitted_presentation(self);
+
+    /* A fitted slide is always centered. This also repairs the position if a
+     * touchpad overshoot or a scrollbar drag managed to update an adjustment
+     * while presentation mode was settling. */
+    if (fitted_presentation) {
+        self->scroll_x = 0;
+        self->scroll_y = 0;
+    }
     
     if (self->hadjustment) {
         /* When page is centered, scroll_x=0 means centered.
@@ -251,9 +267,10 @@ update_adjustments(PdfvDocumentView* self)
         gdouble scroll_range = MAX(0, self->max_width - width);
         gdouble lower = -scroll_range / 2.0;
         gdouble upper = scroll_range / 2.0 + width;
+        self->scroll_x = CLAMP(self->scroll_x, lower, upper - width);
         
         gtk_adjustment_configure(self->hadjustment,
-            CLAMP(self->scroll_x, lower, upper - width),
+            self->scroll_x,
             lower, upper,
             width * 0.1,
             width * 0.9,
@@ -261,9 +278,16 @@ update_adjustments(PdfvDocumentView* self)
     }
     
     if (self->vadjustment) {
+        /* GtkAdjustment requires its upper bound to include page_size. If a
+         * non-continuous slide is shorter than the viewport, using the raw
+         * document height produces a bogus scroll range and a visible,
+         * draggable scrollbar. */
+        gdouble upper = MAX(self->total_height, (gdouble)height);
+        self->scroll_y = CLAMP(self->scroll_y, 0,
+                               MAX(0, upper - height));
         gtk_adjustment_configure(self->vadjustment,
             self->scroll_y,
-            0, self->total_height,
+            0, upper,
             height * 0.1,
             height * 0.9,
             height);
@@ -780,6 +804,13 @@ static void
 on_hadjustment_changed(GtkAdjustment* adj, PdfvDocumentView* self)
 {
     gdouble value = gtk_adjustment_get_value(adj);
+    if (is_fitted_presentation(self)) {
+        self->scroll_x = 0;
+        if (fabs(value) > 0.000001)
+            gtk_adjustment_set_value(adj, 0);
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+        return;
+    }
     if (value != self->scroll_x) {
         self->scroll_x = value;
         gtk_widget_queue_draw(GTK_WIDGET(self));
@@ -790,6 +821,13 @@ static void
 on_vadjustment_changed(GtkAdjustment* adj, PdfvDocumentView* self)
 {
     gdouble value = gtk_adjustment_get_value(adj);
+    if (is_fitted_presentation(self)) {
+        self->scroll_y = 0;
+        if (fabs(value) > 0.000001)
+            gtk_adjustment_set_value(adj, 0);
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+        return;
+    }
     if (value != self->scroll_y) {
         self->scroll_y = value;
         gtk_widget_queue_draw(GTK_WIDGET(self));
@@ -1122,8 +1160,7 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
      * pan. Consume smooth scrolling before GtkScrolledWindow can apply its
      * elastic overshoot and expose empty space around the slide. Zoomed-in
      * slides remain scrollable normally. */
-    if (self->presentation_mode &&
-        self->zoom <= self->minimum_zoom + 0.000001)
+    if (is_fitted_presentation(self))
         return TRUE;
     
     return FALSE; /* Let default scrolling happen */
@@ -1890,6 +1927,8 @@ pdfv_document_view_set_minimum_zoom(PdfvDocumentView* self, gdouble zoom)
     self->minimum_zoom = CLAMP(zoom, MIN_ZOOM, MAX_ZOOM);
     if (self->zoom < self->minimum_zoom)
         pdfv_document_view_set_zoom(self, self->minimum_zoom);
+    else if (self->presentation_mode)
+        update_adjustments(self);
 }
 
 gdouble
