@@ -40,7 +40,7 @@ struct _PhiDocument {
 	fz_context* thumbnail_ctx;
 	fz_document* thumbnail_document;
 
-	/* Independent renderer for asynchronous full-page scene graphs. */
+	/* Independent renderer for asynchronous page scenes and raster tiles. */
 	GMutex render_lock;
 	fz_context* render_ctx;
 	fz_document* render_document;

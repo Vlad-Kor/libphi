@@ -63,6 +63,17 @@ gchar* phi_document_dup_metadata(PhiDocument* self,
 cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 	gint max_width, gint max_height, GError** error);
 
+/* Rasterize a page, or a rectangular tile of it, at @scale device pixels per
+ * PDF point. Tile coordinates are measured in pixels from the top-left of the
+ * scaled page. Pass non-positive tile dimensions to render the whole page.
+ *
+ * The immutable texture is safe to hand back to GTK from a worker thread.
+ * Calls for one document are serialized and use a file-backed MuPDF context
+ * that is independent from the document's interactive context. */
+GdkTexture* phi_document_render_page_texture(PhiDocument* self, gint pageno,
+	gdouble scale, gint tile_x, gint tile_y, gint tile_width,
+	gint tile_height, GCancellable* cancellable, GError** error);
+
 /* Build an immutable page scene graph using a file-backed MuPDF context that
  * is independent from the document's interactive context. This function is
  * safe to call from a worker thread; calls for one document are serialized. */

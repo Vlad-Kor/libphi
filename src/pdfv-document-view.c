@@ -18,8 +18,11 @@
 #define MAX_ZOOM 10.0
 #define ZOOM_STEP 1.2
 #define PAGE_GAP 10
-#define RENDER_CACHE_LIMIT 10
 #define RENDER_PREFETCH_DISTANCE 3
+#define RASTER_SCALE_QUANTUM 64.0
+#define RASTER_TILE_SIZE 1024
+#define RASTER_WHOLE_PAGE_MAX_PIXELS (8u * 1024u * 1024u)
+#define RASTER_CACHE_BUDGET_BYTES (128u * 1024u * 1024u)
 
 typedef struct {
     gint page;
@@ -39,6 +42,23 @@ typedef struct {
     gint quad_count;
     PhiTextQuad* quads;
 } SearchPageResult;
+
+typedef struct {
+    gint page;
+    guint scale_key;
+    gint tile_x;
+    gint tile_y;
+    gboolean whole_page;
+} RenderKey;
+
+typedef struct {
+    RenderKey key;
+    GdkTexture* texture;
+    GskRenderNode* node;
+    graphene_rect_t page_rect;
+    gsize bytes;
+    guint64 age;
+} RenderCacheEntry;
 
 struct _PdfvDocumentView {
     GtkWidget parent_instance;
@@ -102,13 +122,13 @@ struct _PdfvDocumentView {
     gdouble pointer_x;
     gdouble pointer_y;
     
-    /* Base-scale immutable page scenes. Entries are indexed by page and
-     * evicted by age; scene construction happens only on a worker thread. */
-    GskRenderNode** render_cache;
-    guint64* render_cache_ages;
-    gboolean* render_failed;
-    gint render_cache_length;
-    guint render_cache_count;
+    /* Worker-rasterized page textures, keyed by page, zoom/device scale and
+     * tile. The cache is bounded by bytes instead of an arbitrary page count. */
+    GHashTable* render_cache;  /* RenderKey -> RenderCacheEntry */
+    GHashTable* render_failed; /* RenderKey set */
+    GskRenderNode** fallback_nodes; /* Stream-only documents */
+    gint fallback_length;
+    gsize render_cache_bytes;
     guint64 render_cache_clock;
 
     /* One render is active per view. A new visible range may cancel it so a
@@ -119,6 +139,7 @@ struct _PdfvDocumentView {
     guint render_next_serial;
     guint render_generation;
     gboolean render_job_prefetch;
+    RenderKey render_job_key;
     gint render_visible_first;
     gint render_visible_last;
     gint render_observed_first;
@@ -183,19 +204,53 @@ G_DEFINE_TYPE_WITH_CODE(PdfvDocumentView, pdfv_document_view, GTK_TYPE_WIDGET,
     G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, pdfv_document_view_scrollable_init))
 
 static void
+render_cache_entry_free(RenderCacheEntry* entry)
+{
+    if (!entry)
+        return;
+    g_clear_object(&entry->texture);
+    g_clear_pointer(&entry->node, gsk_render_node_unref);
+    g_free(entry);
+}
+
+static guint
+render_key_hash(gconstpointer data)
+{
+    const RenderKey* key = data;
+    guint hash = (guint)key->page * 2654435761u;
+    hash = (hash ^ key->scale_key) * 16777619u;
+    hash = (hash ^ (guint)key->tile_x) * 16777619u;
+    hash = (hash ^ (guint)key->tile_y) * 16777619u;
+    return hash ^ (key->whole_page ? 0x9e3779b9u : 0u);
+}
+
+static gboolean
+render_key_equal(gconstpointer a, gconstpointer b)
+{
+    const RenderKey* left = a;
+    const RenderKey* right = b;
+    return left->page == right->page &&
+        left->scale_key == right->scale_key &&
+        left->tile_x == right->tile_x &&
+        left->tile_y == right->tile_y &&
+        left->whole_page == right->whole_page;
+}
+
+static void
 clear_render_cache(PdfvDocumentView* self)
 {
-    if (self->render_cache) {
-        for (gint i = 0; i < self->render_cache_length; i++) {
-            if (self->render_cache[i])
-                gsk_render_node_unref(self->render_cache[i]);
-        }
+    if (self->render_cache)
+        g_hash_table_remove_all(self->render_cache);
+    if (self->render_failed)
+        g_hash_table_remove_all(self->render_failed);
+    if (self->fallback_nodes) {
+        for (gint i = 0; i < self->fallback_length; i++)
+            g_clear_pointer(&self->fallback_nodes[i],
+                            gsk_render_node_unref);
     }
-    g_clear_pointer(&self->render_cache, g_free);
-    g_clear_pointer(&self->render_cache_ages, g_free);
-    g_clear_pointer(&self->render_failed, g_free);
-    self->render_cache_length = 0;
-    self->render_cache_count = 0;
+    g_clear_pointer(&self->fallback_nodes, g_free);
+    self->fallback_length = 0;
+    self->render_cache_bytes = 0;
     self->render_cache_clock = 0;
 }
 
@@ -205,10 +260,8 @@ allocate_render_cache(PdfvDocumentView* self, gint n_pages)
     clear_render_cache(self);
     if (n_pages <= 0)
         return;
-    self->render_cache = g_new0(GskRenderNode*, n_pages);
-    self->render_cache_ages = g_new0(guint64, n_pages);
-    self->render_failed = g_new0(gboolean, n_pages);
-    self->render_cache_length = n_pages;
+    self->fallback_nodes = g_new0(GskRenderNode*, n_pages);
+    self->fallback_length = n_pages;
 }
 
 static void
@@ -222,6 +275,7 @@ cancel_page_render(PdfvDocumentView* self, gboolean invalidate_generation)
     self->render_job_page = -1;
     self->render_job_serial = 0;
     self->render_job_prefetch = FALSE;
+    self->render_job_key = (RenderKey){0};
 }
 
 static void
@@ -575,72 +629,232 @@ ensure_page_loaded_and_update_layout(PdfvDocumentView* self, gint page_num)
     return page;
 }
 
-static gboolean
-render_cache_has_page(PdfvDocumentView* self, gint page)
-{
-    return self->render_cache && page >= 0 &&
-        page < self->render_cache_length && self->render_cache[page];
-}
-
-static void
-render_cache_touch(PdfvDocumentView* self, gint page)
-{
-    if (!render_cache_has_page(self, page))
-        return;
-    self->render_cache_ages[page] = ++self->render_cache_clock;
-}
-
-static gint
-render_cache_oldest_page(PdfvDocumentView* self, gboolean allow_visible)
-{
-    gint oldest_page = -1;
-    guint64 oldest_age = G_MAXUINT64;
-    for (gint page = 0; page < self->render_cache_length; page++) {
-        if (!self->render_cache[page])
-            continue;
-        gboolean visible = page >= self->render_visible_first &&
-            page <= self->render_visible_last;
-        if (!allow_visible && visible)
-            continue;
-        if (self->render_cache_ages[page] < oldest_age) {
-            oldest_age = self->render_cache_ages[page];
-            oldest_page = page;
-        }
-    }
-    return oldest_page;
-}
-
-static void
-render_cache_store(PdfvDocumentView* self, gint page, GskRenderNode* node)
-{
-    if (!node || !self->render_cache || page < 0 ||
-        page >= self->render_cache_length)
-        return;
-    if (self->render_cache[page]) {
-        gsk_render_node_unref(self->render_cache[page]);
-    } else {
-        while (self->render_cache_count >= RENDER_CACHE_LIMIT) {
-            gint evict = render_cache_oldest_page(self, FALSE);
-            if (evict < 0)
-                evict = render_cache_oldest_page(self, TRUE);
-            if (evict < 0)
-                break;
-            g_clear_pointer(&self->render_cache[evict],
-                            gsk_render_node_unref);
-            self->render_cache_ages[evict] = 0;
-            self->render_cache_count--;
-        }
-        self->render_cache_count++;
-    }
-    self->render_cache[page] = gsk_render_node_ref(node);
-    render_cache_touch(self, page);
-}
+typedef struct {
+    guint scale_key;
+    gdouble scale;
+    gint full_width;
+    gint full_height;
+    gboolean whole_page;
+} RasterPlan;
 
 typedef struct {
-    gint page;
+    gint first_x;
+    gint last_x;
+    gint first_y;
+    gint last_y;
+} TileRange;
+
+typedef struct {
+    RenderKey key;
+    gdouble render_scale;
+    gint tile_width;
+    gint tile_height;
     guint generation;
     guint serial;
+    gboolean prefetch;
 } PageRenderRequest;
+
+static guint
+current_render_scale_key(PdfvDocumentView* self)
+{
+    gint widget_scale = MAX(1,
+        gtk_widget_get_scale_factor(GTK_WIDGET(self)));
+    return MAX(1u, (guint)llround(
+        self->zoom * widget_scale * RASTER_SCALE_QUANTUM));
+}
+
+static gdouble
+render_scale_from_key(guint scale_key)
+{
+    return scale_key / RASTER_SCALE_QUANTUM;
+}
+
+static void
+page_base_size(PdfvDocumentView* self, gint page, gdouble* width,
+               gdouble* height)
+{
+    gdouble zoom = MAX(self->zoom, MIN_ZOOM);
+    *width = g_array_index(self->page_widths, gdouble, page) / zoom;
+    *height = g_array_index(self->page_heights, gdouble, page) / zoom;
+}
+
+static RasterPlan
+raster_plan_for_page(PdfvDocumentView* self, gint page)
+{
+    RasterPlan plan = {0};
+    gdouble page_width = 1;
+    gdouble page_height = 1;
+    page_base_size(self, page, &page_width, &page_height);
+    plan.scale_key = current_render_scale_key(self);
+    plan.scale = render_scale_from_key(plan.scale_key);
+    plan.full_width = MAX(1, (gint)ceil(page_width * plan.scale));
+    plan.full_height = MAX(1, (gint)ceil(page_height * plan.scale));
+    plan.whole_page =
+        (guint64)plan.full_width * plan.full_height <=
+        RASTER_WHOLE_PAGE_MAX_PIXELS;
+    return plan;
+}
+
+static void
+page_display_geometry(PdfvDocumentView* self, gint page, gdouble* x,
+                      gdouble* y, gdouble* width, gdouble* height)
+{
+    gint view_width = gtk_widget_get_width(GTK_WIDGET(self));
+    gint view_height = gtk_widget_get_height(GTK_WIDGET(self));
+    *width = g_array_index(self->page_widths, gdouble, page);
+    *height = g_array_index(self->page_heights, gdouble, page);
+    *x = (view_width - *width) / 2.0 - self->scroll_x;
+    *y = self->continuous
+        ? g_array_index(self->page_offsets, gdouble, page) - self->scroll_y
+        : MAX(0, (view_height - *height) / 2.0) - self->scroll_y;
+}
+
+static TileRange
+tile_range_for_page(PdfvDocumentView* self, gint page,
+                    const RasterPlan* plan, gboolean prefetch)
+{
+    TileRange range = {0};
+    gdouble x, y, display_width, display_height;
+    page_display_geometry(self, page, &x, &y, &display_width,
+                          &display_height);
+    gint view_width = gtk_widget_get_width(GTK_WIDGET(self));
+    gint view_height = gtk_widget_get_height(GTK_WIDGET(self));
+    gdouble base_width = display_width / MAX(self->zoom, MIN_ZOOM);
+    gdouble base_height = display_height / MAX(self->zoom, MIN_ZOOM);
+    gdouble base_x0 = CLAMP(-x / self->zoom, 0, base_width);
+    gdouble base_x1 = CLAMP((view_width - x) / self->zoom,
+                            base_x0, base_width);
+    gint pixel_x0 = CLAMP((gint)floor(base_x0 * plan->scale),
+                          0, plan->full_width - 1);
+    gint pixel_x1 = CLAMP((gint)ceil(base_x1 * plan->scale),
+                          pixel_x0 + 1, plan->full_width);
+
+    range.first_x = (pixel_x0 / RASTER_TILE_SIZE) * RASTER_TILE_SIZE;
+    range.last_x = ((pixel_x1 - 1) / RASTER_TILE_SIZE) * RASTER_TILE_SIZE;
+
+    if (prefetch) {
+        gint edge_y = self->render_direction < 0
+            ? plan->full_height - 1 : 0;
+        range.first_y = range.last_y =
+            (edge_y / RASTER_TILE_SIZE) * RASTER_TILE_SIZE;
+        return range;
+    }
+
+    gdouble base_y0 = CLAMP(-y / self->zoom, 0, base_height);
+    gdouble base_y1 = CLAMP((view_height - y) / self->zoom,
+                            base_y0, base_height);
+    gint pixel_y0 = CLAMP((gint)floor(base_y0 * plan->scale),
+                          0, plan->full_height - 1);
+    gint pixel_y1 = CLAMP((gint)ceil(base_y1 * plan->scale),
+                          pixel_y0 + 1, plan->full_height);
+    range.first_y = (pixel_y0 / RASTER_TILE_SIZE) * RASTER_TILE_SIZE;
+    range.last_y = ((pixel_y1 - 1) / RASTER_TILE_SIZE) * RASTER_TILE_SIZE;
+    return range;
+}
+
+static RenderCacheEntry*
+render_cache_lookup(PdfvDocumentView* self, const RenderKey* key)
+{
+    return g_hash_table_lookup(self->render_cache, key);
+}
+
+static gboolean
+render_key_failed(PdfvDocumentView* self, const RenderKey* key)
+{
+    return g_hash_table_contains(self->render_failed, key);
+}
+
+static void
+render_key_mark_failed(PdfvDocumentView* self, const RenderKey* key)
+{
+    RenderKey* copy = g_memdup2(key, sizeof(*copy));
+    g_hash_table_add(self->render_failed, copy);
+}
+
+static void
+render_cache_touch(RenderCacheEntry* entry, PdfvDocumentView* self)
+{
+    entry->age = ++self->render_cache_clock;
+}
+
+static gboolean
+render_cache_entry_protected(PdfvDocumentView* self,
+                             const RenderCacheEntry* entry)
+{
+    return entry->key.page >= self->render_visible_first &&
+        entry->key.page <= self->render_visible_last &&
+        entry->key.scale_key == current_render_scale_key(self);
+}
+
+static gboolean
+render_cache_evict_oldest(PdfvDocumentView* self, gboolean allow_protected)
+{
+    GHashTableIter iter;
+    gpointer value = NULL;
+    RenderCacheEntry* oldest = NULL;
+    g_hash_table_iter_init(&iter, self->render_cache);
+    while (g_hash_table_iter_next(&iter, NULL, &value)) {
+        RenderCacheEntry* entry = value;
+        if (!allow_protected && render_cache_entry_protected(self, entry))
+            continue;
+        if (!oldest || entry->age < oldest->age)
+            oldest = entry;
+    }
+    if (!oldest)
+        return FALSE;
+    RenderKey key = oldest->key;
+    self->render_cache_bytes -= oldest->bytes;
+    return g_hash_table_remove(self->render_cache, &key);
+}
+
+static void
+render_cache_store(PdfvDocumentView* self,
+                   const PageRenderRequest* request, GdkTexture* texture)
+{
+    if (!texture)
+        return;
+
+    RenderCacheEntry* previous = render_cache_lookup(
+        self, &request->key);
+    if (previous) {
+        self->render_cache_bytes -= previous->bytes;
+        g_hash_table_remove(self->render_cache, &request->key);
+    }
+
+    gdouble page_width = 1;
+    gdouble page_height = 1;
+    page_base_size(self, request->key.page, &page_width, &page_height);
+    RenderCacheEntry* entry = g_new0(RenderCacheEntry, 1);
+    entry->key = request->key;
+    entry->texture = g_object_ref(texture);
+    if (request->key.whole_page) {
+        entry->page_rect = GRAPHENE_RECT_INIT(
+            0, 0, page_width, page_height);
+    } else {
+        gdouble x = request->key.tile_x / request->render_scale;
+        gdouble y = request->key.tile_y / request->render_scale;
+        gdouble width = MIN(
+            gdk_texture_get_width(texture) / request->render_scale,
+            MAX(0, page_width - x));
+        gdouble height = MIN(
+            gdk_texture_get_height(texture) / request->render_scale,
+            MAX(0, page_height - y));
+        entry->page_rect = GRAPHENE_RECT_INIT(x, y, width, height);
+    }
+    entry->node = gsk_texture_node_new(texture, &entry->page_rect);
+    entry->bytes = (gsize)gdk_texture_get_width(texture) *
+        gdk_texture_get_height(texture) * 4;
+    render_cache_touch(entry, self);
+    self->render_cache_bytes += entry->bytes;
+    g_hash_table_insert(self->render_cache, &entry->key, entry);
+
+    while (self->render_cache_bytes > RASTER_CACHE_BUDGET_BYTES &&
+           g_hash_table_size(self->render_cache) > 1) {
+        if (!render_cache_evict_oldest(self, FALSE) &&
+            !render_cache_evict_oldest(self, TRUE))
+            break;
+    }
+}
 
 typedef struct {
     GWeakRef view;
@@ -670,26 +884,106 @@ render_page_worker(GTask* task, gpointer source_object, gpointer task_data,
     PhiDocument* document = PHI_DOCUMENT(source_object);
     PageRenderRequest* request = task_data;
     GError* error = NULL;
-    GskRenderNode* node = phi_document_render_page_node(
-        document, request->page, cancellable, &error);
-    if (node) {
-        g_task_return_pointer(task, node,
-                              (GDestroyNotify)gsk_render_node_unref);
+    GdkTexture* texture = phi_document_render_page_texture(
+        document, request->key.page, request->render_scale,
+        request->key.tile_x, request->key.tile_y,
+        request->key.whole_page ? 0 : request->tile_width,
+        request->key.whole_page ? 0 : request->tile_height,
+        cancellable, &error);
+    if (texture) {
+        g_task_return_pointer(task, texture, g_object_unref);
     } else if (error) {
         g_task_return_error(task, error);
     } else {
         g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                "Page rendering returned no scene");
+                                "Page rendering returned no texture");
     }
+}
+
+static gboolean
+render_key_matches_page(PdfvDocumentView* self, const RenderKey* key,
+                        gboolean prefetch)
+{
+    RasterPlan plan = raster_plan_for_page(self, key->page);
+    if (key->scale_key != plan.scale_key ||
+        key->whole_page != plan.whole_page)
+        return FALSE;
+    if (plan.whole_page)
+        return key->tile_x == 0 && key->tile_y == 0;
+    TileRange range = tile_range_for_page(self, key->page, &plan,
+                                          prefetch);
+    return key->tile_x >= range.first_x && key->tile_x <= range.last_x &&
+        key->tile_y >= range.first_y && key->tile_y <= range.last_y &&
+        key->tile_x % RASTER_TILE_SIZE == 0 &&
+        key->tile_y % RASTER_TILE_SIZE == 0;
+}
+
+static gboolean
+find_missing_for_page(PdfvDocumentView* self, gint page, gboolean prefetch,
+                      PageRenderRequest* request)
+{
+    if (page < 0 || page >= self->fallback_length ||
+        self->fallback_nodes[page])
+        return FALSE;
+    RasterPlan plan = raster_plan_for_page(self, page);
+    if (plan.whole_page) {
+        RenderKey key = {
+            .page = page,
+            .scale_key = plan.scale_key,
+            .whole_page = TRUE
+        };
+        if (render_cache_lookup(self, &key) || render_key_failed(self, &key))
+            return FALSE;
+        *request = (PageRenderRequest){
+            .key = key,
+            .render_scale = plan.scale,
+            .prefetch = prefetch
+        };
+        return TRUE;
+    }
+
+    TileRange range = tile_range_for_page(self, page, &plan, prefetch);
+    gint y = self->render_direction < 0 ? range.last_y : range.first_y;
+    gint y_end = self->render_direction < 0 ? range.first_y : range.last_y;
+    gint y_step = self->render_direction < 0
+        ? -RASTER_TILE_SIZE : RASTER_TILE_SIZE;
+    for (;; y += y_step) {
+        for (gint x = range.first_x; x <= range.last_x;
+             x += RASTER_TILE_SIZE) {
+            RenderKey key = {
+                .page = page,
+                .scale_key = plan.scale_key,
+                .tile_x = x,
+                .tile_y = y,
+                .whole_page = FALSE
+            };
+            if (render_cache_lookup(self, &key) ||
+                render_key_failed(self, &key))
+                continue;
+            *request = (PageRenderRequest){
+                .key = key,
+                .render_scale = plan.scale,
+                .tile_width = MIN(RASTER_TILE_SIZE,
+                                  plan.full_width - x),
+                .tile_height = MIN(RASTER_TILE_SIZE,
+                                   plan.full_height - y),
+                .prefetch = prefetch
+            };
+            return TRUE;
+        }
+        if (y == y_end)
+            break;
+    }
+    return FALSE;
 }
 
 static gboolean
 visible_page_is_missing(PdfvDocumentView* self)
 {
+    PageRenderRequest request;
     for (gint page = self->render_visible_first;
          page <= self->render_visible_last; page++) {
-        if (!render_cache_has_page(self, page) &&
-            !self->render_failed[page])
+        if (find_missing_for_page(self, page, FALSE, &request))
             return TRUE;
     }
     return FALSE;
@@ -701,17 +995,12 @@ page_is_wanted(PdfvDocumentView* self, gint page)
     if (page >= self->render_visible_first &&
         page <= self->render_visible_last)
         return TRUE;
-    gint visible_count = self->render_visible_last -
-        self->render_visible_first + 1;
-    gint prefetch_count = MIN(RENDER_PREFETCH_DISTANCE,
-                              RENDER_CACHE_LIMIT - visible_count);
-    if (prefetch_count <= 0)
-        return FALSE;
     if (self->render_direction < 0)
         return page < self->render_visible_first &&
-            page >= self->render_visible_first - prefetch_count;
+            page >= self->render_visible_first -
+                RENDER_PREFETCH_DISTANCE;
     return page > self->render_visible_last &&
-        page <= self->render_visible_last + prefetch_count;
+        page <= self->render_visible_last + RENDER_PREFETCH_DISTANCE;
 }
 
 static void
@@ -723,33 +1012,39 @@ on_page_rendered(GObject* source, GAsyncResult* result, gpointer user_data)
     GTask* task = G_TASK(result);
     PageRenderRequest* request = g_task_get_task_data(task);
     GError* error = NULL;
-    GskRenderNode* node = g_task_propagate_pointer(task, &error);
+    GdkTexture* texture = g_task_propagate_pointer(task, &error);
+    gboolean fallback_created = FALSE;
     gboolean current_document = request->generation ==
         self->render_generation && self->document == PHI_DOCUMENT(source);
 
     /* Stream-only API users have no independent source to reopen. Preserve
      * their existing rendering support outside snapshot(); application PDFs
      * are file-backed and always take the worker path above. */
-    if (current_document && !node && error &&
+    if (current_document && !texture && error &&
         g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)) {
         g_clear_error(&error);
         PhiPage* page = ensure_page_loaded_and_update_layout(
-            self, request->page);
-        if (page)
-            node = phi_page_render_to_node(page, &error);
+            self, request->key.page);
+        if (page && request->key.page < self->fallback_length &&
+            !self->fallback_nodes[request->key.page]) {
+            self->fallback_nodes[request->key.page] =
+                phi_page_render_to_node(page, &error);
+            fallback_created = self->fallback_nodes[request->key.page] != NULL;
+        }
     }
 
-    if (current_document && node && page_is_wanted(self, request->page)) {
-        ensure_page_loaded_and_update_layout(self, request->page);
-        render_cache_store(self, request->page, node);
+    if (current_document && texture) {
+        ensure_page_loaded_and_update_layout(self, request->key.page);
+        render_cache_store(self, request, texture);
+        gtk_widget_queue_draw(GTK_WIDGET(self));
+    } else if (current_document && fallback_created) {
         gtk_widget_queue_draw(GTK_WIDGET(self));
     } else if (current_document && error &&
                !g_error_matches(error, G_IO_ERROR,
                                 G_IO_ERROR_CANCELLED)) {
-        if (request->page >= 0 &&
-            request->page < self->render_cache_length)
-            self->render_failed[request->page] = TRUE;
-        g_warning("Failed to render page %d: %s", request->page + 1,
+        render_key_mark_failed(self, &request->key);
+        g_warning("Failed to rasterize page %d: %s",
+                  request->key.page + 1,
                   error->message);
     }
 
@@ -759,52 +1054,44 @@ on_page_rendered(GObject* source, GAsyncResult* result, gpointer user_data)
         self->render_job_serial = 0;
         self->render_job_prefetch = FALSE;
     }
-    g_clear_pointer(&node, gsk_render_node_unref);
+    g_clear_object(&texture);
     g_clear_error(&error);
     if (current_document)
         start_next_page_render(self);
     g_object_unref(self);
 }
 
-static gint
-find_next_page_to_render(PdfvDocumentView* self, gboolean* prefetch)
+static gboolean
+find_next_page_to_render(PdfvDocumentView* self,
+                         PageRenderRequest* request)
 {
-    *prefetch = FALSE;
     if (self->render_direction < 0) {
         for (gint page = self->render_visible_last;
              page >= self->render_visible_first; page--) {
-            if (!render_cache_has_page(self, page) &&
-                !self->render_failed[page])
-                return page;
+            if (find_missing_for_page(self, page, FALSE, request))
+                return TRUE;
         }
     } else {
         for (gint page = self->render_visible_first;
              page <= self->render_visible_last; page++) {
-            if (!render_cache_has_page(self, page) &&
-                !self->render_failed[page])
-                return page;
+            if (find_missing_for_page(self, page, FALSE, request))
+                return TRUE;
         }
     }
 
-    gint visible_count = self->render_visible_last -
-        self->render_visible_first + 1;
-    gint prefetch_count = MIN(RENDER_PREFETCH_DISTANCE,
-                              RENDER_CACHE_LIMIT - visible_count);
     gint page_count = self->document
         ? phi_document_get_n_pages(self->document) : 0;
-    for (gint distance = 1; distance <= prefetch_count; distance++) {
+    for (gint distance = 1; distance <= RENDER_PREFETCH_DISTANCE;
+         distance++) {
         gint page = self->render_direction < 0
             ? self->render_visible_first - distance
             : self->render_visible_last + distance;
         if (page < 0 || page >= page_count)
             break;
-        if (!render_cache_has_page(self, page) &&
-            !self->render_failed[page]) {
-            *prefetch = TRUE;
-            return page;
-        }
+        if (find_missing_for_page(self, page, TRUE, request))
+            return TRUE;
     }
-    return -1;
+    return FALSE;
 }
 
 static void
@@ -814,25 +1101,26 @@ start_next_page_render(PdfvDocumentView* self)
         !self->render_cache || self->render_visible_first < 0)
         return;
 
-    gboolean prefetch = FALSE;
-    gint page = find_next_page_to_render(self, &prefetch);
-    if (page < 0)
+    PageRenderRequest* request = g_new0(PageRenderRequest, 1);
+    if (!find_next_page_to_render(self, request)) {
+        g_free(request);
         return;
+    }
 
     self->render_cancellable = g_cancellable_new();
-    self->render_job_page = page;
-    self->render_job_prefetch = prefetch;
+    self->render_job_page = request->key.page;
+    self->render_job_prefetch = request->prefetch;
+    self->render_job_key = request->key;
     self->render_job_serial = ++self->render_next_serial;
 
-    PageRenderRequest* request = g_new0(PageRenderRequest, 1);
-    request->page = page;
     request->generation = self->render_generation;
     request->serial = self->render_job_serial;
     GTask* task = g_task_new(self->document, self->render_cancellable,
                             on_page_rendered,
                             page_render_callback_new(self));
     g_task_set_task_data(task, request, g_free);
-    g_task_set_priority(task, prefetch ? G_PRIORITY_LOW : G_PRIORITY_DEFAULT);
+    g_task_set_priority(task, request->prefetch
+        ? G_PRIORITY_LOW : G_PRIORITY_DEFAULT);
     g_task_run_in_thread(task, render_page_worker);
     g_object_unref(task);
 }
@@ -853,22 +1141,60 @@ update_render_range(PdfvDocumentView* self, gint first_page, gint last_page)
             ? 1 : -1;
     self->render_observed_first = first_page;
 
-    /* At exceptionally small zoom levels more than ten pages may intersect
-     * the viewport. Keep the leading ten so the fixed cache cannot churn. */
-    if (last_page - first_page + 1 > RENDER_CACHE_LIMIT) {
-        if (!had_observation || self->render_direction < 0)
-            last_page = first_page + RENDER_CACHE_LIMIT - 1;
-        else
-            first_page = last_page - RENDER_CACHE_LIMIT + 1;
-    }
     self->render_visible_first = first_page;
     self->render_visible_last = last_page;
 
     if (self->render_job_page >= 0 &&
         (!page_is_wanted(self, self->render_job_page) ||
+         !render_key_matches_page(self, &self->render_job_key,
+                                  self->render_job_prefetch) ||
          (self->render_job_prefetch && visible_page_is_missing(self))))
         cancel_page_render(self, FALSE);
     start_next_page_render(self);
+}
+
+static guint
+render_cache_best_stale_scale(PdfvDocumentView* self, gint page,
+                              guint target_scale)
+{
+    GHashTableIter iter;
+    gpointer value = NULL;
+    guint best_scale = 0;
+    guint best_distance = G_MAXUINT;
+    g_hash_table_iter_init(&iter, self->render_cache);
+    while (g_hash_table_iter_next(&iter, NULL, &value)) {
+        RenderCacheEntry* entry = value;
+        if (entry->key.page != page ||
+            entry->key.scale_key == target_scale)
+            continue;
+        guint distance = entry->key.scale_key > target_scale
+            ? entry->key.scale_key - target_scale
+            : target_scale - entry->key.scale_key;
+        if (distance < best_distance) {
+            best_distance = distance;
+            best_scale = entry->key.scale_key;
+        }
+    }
+    return best_scale;
+}
+
+static void
+snapshot_cached_scale(PdfvDocumentView* self, GtkSnapshot* snapshot,
+                      gint page, guint scale_key)
+{
+    if (!scale_key)
+        return;
+    GHashTableIter iter;
+    gpointer value = NULL;
+    g_hash_table_iter_init(&iter, self->render_cache);
+    while (g_hash_table_iter_next(&iter, NULL, &value)) {
+        RenderCacheEntry* entry = value;
+        if (entry->key.page != page ||
+            entry->key.scale_key != scale_key)
+            continue;
+        gtk_snapshot_append_node(snapshot, entry->node);
+        render_cache_touch(entry, self);
+    }
 }
 
 static void
@@ -903,7 +1229,7 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CURRENT_PAGE]);
     }
     
-    /* Snapshot only consumes completed immutable scenes. Missing pages are
+    /* Snapshot only consumes completed immutable textures. Missing pages are
      * queued for the worker and keep their paper background in the meantime. */
     update_render_range(self, first_visible, last_visible);
     
@@ -965,59 +1291,62 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         gtk_snapshot_append_color(snapshot, page_bg,
             &GRAPHENE_RECT_INIT(x, y, pw, ph));
         
-        /* Render page content if its worker-built scene is ready. */
-        GskRenderNode* node = render_cache_has_page(self, i)
-            ? self->render_cache[i] : NULL;
-        if (node) {
-            PhiPage* page = g_ptr_array_index(self->pages, i);
-            render_cache_touch(self, i);
-            
-            gtk_snapshot_save(snapshot);
-            gtk_snapshot_translate(snapshot, &GRAPHENE_POINT_INIT(x, y));
-            
-            /* Apply zoom - cached nodes are at base resolution */
-            if (self->zoom != 1.0)
-                gtk_snapshot_scale(snapshot, self->zoom, self->zoom);
-            
-            /* Apply inversion with hue rotation if needed */
-            if (self->inverted) {
-                /* First push hue rotation 180° */
-                /* Hue rotation matrix for 180°:
-                 * Uses the standard formula with cos(180°)=-1, sin(180°)=0
-                 * With luminance preservation weights: R=0.213, G=0.715, B=0.072
-                 */
-                graphene_matrix_t hue_matrix;
-                graphene_vec4_t hue_offset;
-                graphene_matrix_init_from_float(&hue_matrix, (float[16]){
-                    -0.574f,  0.426f,  0.426f, 0,
-                     0.285f, -0.715f,  0.285f, 0,
-                     0.928f,  0.928f, -0.072f, 0,
-                     0,       0,       0,      1
-                });
-                graphene_vec4_init(&hue_offset, 0, 0, 0, 0);
-                gtk_snapshot_push_color_matrix(snapshot, &hue_matrix, &hue_offset);
-                
-                /* Then push invert */
-                graphene_matrix_t invert_matrix;
-                graphene_vec4_t invert_offset;
-                graphene_matrix_init_from_float(&invert_matrix, (float[16]){
-                    -1, 0, 0, 0,
-                    0, -1, 0, 0,
-                    0, 0, -1, 0,
-                    0, 0, 0, 1
-                });
-                graphene_vec4_init(&invert_offset, 1, 1, 1, 0);
-                gtk_snapshot_push_color_matrix(snapshot, &invert_matrix, &invert_offset);
-            }
-            
-            gtk_snapshot_append_node(snapshot, node);
-            
-            if (self->inverted) {
-                gtk_snapshot_pop(snapshot);  /* pop invert */
-                gtk_snapshot_pop(snapshot);  /* pop hue rotate */
-            }
-            
-            if (page) {
+        PhiPage* page = g_ptr_array_index(self->pages, i);
+        gtk_snapshot_save(snapshot);
+        gtk_snapshot_translate(snapshot, &GRAPHENE_POINT_INIT(x, y));
+
+        /* Cache nodes use unscaled page coordinates. A texture rendered for
+         * an older zoom therefore remains a valid, temporarily softer
+         * fallback while its replacement is being rasterized. */
+        if (self->zoom != 1.0)
+            gtk_snapshot_scale(snapshot, self->zoom, self->zoom);
+        gdouble base_width = pw / MAX(self->zoom, MIN_ZOOM);
+        gdouble base_height = ph / MAX(self->zoom, MIN_ZOOM);
+        gtk_snapshot_push_clip(snapshot, &GRAPHENE_RECT_INIT(
+            0, 0, base_width, base_height));
+
+        if (self->inverted) {
+            graphene_matrix_t hue_matrix;
+            graphene_vec4_t hue_offset;
+            graphene_matrix_init_from_float(&hue_matrix, (float[16]){
+                -0.574f,  0.426f,  0.426f, 0,
+                 0.285f, -0.715f,  0.285f, 0,
+                 0.928f,  0.928f, -0.072f, 0,
+                 0,       0,       0,      1
+            });
+            graphene_vec4_init(&hue_offset, 0, 0, 0, 0);
+            gtk_snapshot_push_color_matrix(snapshot, &hue_matrix,
+                                            &hue_offset);
+
+            graphene_matrix_t invert_matrix;
+            graphene_vec4_t invert_offset;
+            graphene_matrix_init_from_float(&invert_matrix, (float[16]){
+                -1, 0, 0, 0,
+                0, -1, 0, 0,
+                0, 0, -1, 0,
+                0, 0, 0, 1
+            });
+            graphene_vec4_init(&invert_offset, 1, 1, 1, 0);
+            gtk_snapshot_push_color_matrix(snapshot, &invert_matrix,
+                                            &invert_offset);
+        }
+
+        if (i < self->fallback_length && self->fallback_nodes[i]) {
+            gtk_snapshot_append_node(snapshot, self->fallback_nodes[i]);
+        } else {
+            guint target_scale = current_render_scale_key(self);
+            guint stale_scale = render_cache_best_stale_scale(
+                self, i, target_scale);
+            snapshot_cached_scale(self, snapshot, i, stale_scale);
+            snapshot_cached_scale(self, snapshot, i, target_scale);
+        }
+
+        if (self->inverted) {
+            gtk_snapshot_pop(snapshot);  /* pop invert */
+            gtk_snapshot_pop(snapshot);  /* pop hue rotate */
+        }
+
+        if (page) {
                 /* Get page bounds for coordinate offset */
                 gfloat bounds_x0, bounds_y0;
                 phi_page_get_bounds(page, &bounds_x0, &bounds_y0, NULL, NULL);
@@ -1062,10 +1391,10 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
                                                 max_y - min_y));
                     }
                 }
-            }
-            
-            gtk_snapshot_restore(snapshot);
         }
+
+        gtk_snapshot_pop(snapshot); /* page clip */
+        gtk_snapshot_restore(snapshot);
 
         if (!self->continuous)
             break;
@@ -1817,6 +2146,8 @@ pdfv_document_view_dispose(GObject* object)
     
     cancel_page_render(self, TRUE);
     clear_render_cache(self);
+    g_clear_pointer(&self->render_cache, g_hash_table_unref);
+    g_clear_pointer(&self->render_failed, g_hash_table_unref);
     g_clear_object(&self->document);
     g_clear_pointer(&self->pages, g_ptr_array_unref);
     g_clear_pointer(&self->page_widths, g_array_unref);
@@ -1924,6 +2255,12 @@ pdfv_document_view_init(PdfvDocumentView* self)
     self->render_visible_last = -1;
     self->render_observed_first = -1;
     self->render_direction = 1;
+
+    self->render_cache = g_hash_table_new_full(
+        render_key_hash, render_key_equal, NULL,
+        (GDestroyNotify)render_cache_entry_free);
+    self->render_failed = g_hash_table_new_full(
+        render_key_hash, render_key_equal, g_free, NULL);
     
     self->pages = g_ptr_array_new();  /* We don't own the pages, document does */
     self->page_widths = g_array_new(FALSE, TRUE, sizeof(gdouble));

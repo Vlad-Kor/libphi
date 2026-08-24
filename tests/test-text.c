@@ -125,6 +125,59 @@ static void test_page_node_render(void) {
 	g_clear_error(&result.error);
 }
 
+typedef struct {
+	PhiDocument* document;
+	GdkTexture* texture;
+	GError* error;
+} PageTextureResult;
+
+static gpointer render_page_texture_thread(gpointer user_data) {
+	PageTextureResult* result = user_data;
+	result->texture = phi_document_render_page_texture(
+		result->document, 0, 1.0, 0, 0, 0, 0, NULL,
+		&result->error);
+	return NULL;
+}
+
+static void test_page_texture_render(void) {
+	g_autoptr(PhiDocument) document = open_fixture();
+	PageTextureResult result = { .document = document };
+	GThread* worker = g_thread_new("page-texture-test",
+		render_page_texture_thread, &result);
+	g_thread_join(worker);
+
+	g_assert_no_error(result.error);
+	g_assert_nonnull(result.texture);
+	g_assert_cmpint(gdk_texture_get_width(result.texture), >, 64);
+	g_assert_cmpint(gdk_texture_get_height(result.texture), >, 48);
+	g_clear_object(&result.texture);
+
+	result.texture = phi_document_render_page_texture(
+		document, 0, 1.0, 0, 0, 64, 48, NULL, &result.error);
+	g_assert_no_error(result.error);
+	g_assert_nonnull(result.texture);
+	g_assert_cmpint(gdk_texture_get_width(result.texture), ==, 64);
+	g_assert_cmpint(gdk_texture_get_height(result.texture), ==, 48);
+	g_clear_object(&result.texture);
+
+	result.texture = phi_document_render_page_texture(
+		document, 0, 1.0, 64, 48, 64, 48, NULL, &result.error);
+	g_assert_no_error(result.error);
+	g_assert_nonnull(result.texture);
+	g_assert_cmpint(gdk_texture_get_width(result.texture), ==, 64);
+	g_assert_cmpint(gdk_texture_get_height(result.texture), ==, 48);
+	g_clear_object(&result.texture);
+
+	g_autoptr(GCancellable) cancellable = g_cancellable_new();
+	g_cancellable_cancel(cancellable);
+	result.texture = phi_document_render_page_texture(
+		document, 0, 1.0, 0, 0, 0, 0, cancellable,
+		&result.error);
+	g_assert_null(result.texture);
+	g_assert_error(result.error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+	g_clear_error(&result.error);
+}
+
 static void test_page_can_outlive_document(void) {
 	PhiDocument* document = open_fixture();
 	PhiPage* page = phi_document_get_page(document, 0, NULL);
@@ -156,6 +209,7 @@ int main(int argc, char** argv) {
 	g_test_add_func("/text/separate-diacritic", test_separate_diacritic_text);
 	g_test_add_func("/thumbnail/render", test_thumbnail_render);
 	g_test_add_func("/page-node/render", test_page_node_render);
+	g_test_add_func("/page-texture/render", test_page_texture_render);
 	g_test_add_func("/lifetime/page-outlives-document",
 		test_page_can_outlive_document);
 	g_test_add_func("/document/metadata", test_document_metadata);

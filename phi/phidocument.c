@@ -22,6 +22,8 @@
 #include "phi/phinodedeviceprivate.h"
 #include "phi/phipageprivate.h"
 
+#include <math.h>
+
 static void phi_document_list_model_iface_init(GListModelInterface *iface);
 G_DEFINE_FINAL_TYPE_WITH_CODE(PhiDocument, phi_document, G_TYPE_OBJECT,
 	G_IMPLEMENT_INTERFACE(G_TYPE_LIST_MODEL, phi_document_list_model_iface_init)
@@ -450,6 +452,110 @@ static void phi_document_cancel_render_cookie(GCancellable* cancellable,
 	(void)cancellable;
 	fz_cookie* cookie = user_data;
 	cookie->abort = 1;
+}
+
+GdkTexture* phi_document_render_page_texture(PhiDocument* self, gint pageno,
+		gdouble scale, gint tile_x, gint tile_y, gint tile_width,
+		gint tile_height, GCancellable* cancellable, GError** error) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
+	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
+	g_return_val_if_fail(isfinite(scale) && scale > 0, NULL);
+	g_return_val_if_fail(tile_x >= 0 && tile_y >= 0, NULL);
+
+	GBytes* bytes = NULL;
+	fz_page* page = NULL;
+	fz_pixmap* pixmap = NULL;
+	fz_device* device = NULL;
+	fz_cookie cookie = {0};
+	gulong cancelled_handler = 0;
+	gint pixel_width = 0;
+	gint pixel_height = 0;
+	gint stride = 0;
+
+	g_mutex_lock(&self->render_lock);
+	if ((cancellable &&
+		 g_cancellable_set_error_if_cancelled(cancellable, error)) ||
+		!phi_document_ensure_render_document(self, cancellable, error))
+		goto unlock;
+
+	if (cancellable)
+		cancelled_handler = g_cancellable_connect(
+			cancellable, G_CALLBACK(phi_document_cancel_render_cookie),
+			&cookie, NULL);
+
+	fz_try(self->render_ctx) {
+		page = fz_load_page(self->render_ctx, self->render_document, pageno);
+		fz_matrix transform = fz_scale((float)scale, (float)scale);
+		fz_irect page_box = fz_round_rect(fz_transform_rect(
+			fz_bound_page(self->render_ctx, page), transform));
+		gint full_width = page_box.x1 - page_box.x0;
+		gint full_height = page_box.y1 - page_box.y0;
+		if (full_width <= 0 || full_height <= 0)
+			fz_throw(self->render_ctx, FZ_ERROR_FORMAT,
+				"Page has invalid raster bounds");
+
+		fz_irect render_box = page_box;
+		if (tile_width > 0 && tile_height > 0) {
+			if (tile_x >= full_width || tile_y >= full_height)
+				fz_throw(self->render_ctx, FZ_ERROR_ARGUMENT,
+					"Raster tile is outside the page");
+			render_box.x0 = page_box.x0 + tile_x;
+			render_box.y0 = page_box.y0 + tile_y;
+			render_box.x1 = page_box.x0 +
+				fz_min(tile_x + tile_width, full_width);
+			render_box.y1 = page_box.y0 +
+				fz_min(tile_y + tile_height, full_height);
+		}
+
+		pixmap = fz_new_pixmap_with_bbox(self->render_ctx,
+			fz_device_rgb(self->render_ctx), render_box, NULL, 0);
+		fz_clear_pixmap_with_value(self->render_ctx, pixmap, 255);
+		device = fz_new_draw_device(self->render_ctx, transform, pixmap);
+		fz_run_page(self->render_ctx, page, device, fz_identity, &cookie);
+		fz_close_device(self->render_ctx, device);
+
+		if (!cancellable || !g_cancellable_is_cancelled(cancellable)) {
+			pixel_width = fz_pixmap_width(self->render_ctx, pixmap);
+			pixel_height = fz_pixmap_height(self->render_ctx, pixmap);
+			if (fz_pixmap_components(self->render_ctx, pixmap) != 3)
+				fz_throw(self->render_ctx, FZ_ERROR_FORMAT,
+					"Page raster did not produce RGB pixels");
+			stride = fz_pixmap_stride(self->render_ctx, pixmap);
+			gsize byte_count = (gsize)stride * pixel_height;
+			gpointer copy = g_memdup2(
+				fz_pixmap_samples(self->render_ctx, pixmap), byte_count);
+			bytes = g_bytes_new_take(copy, byte_count);
+		}
+	} fz_always(self->render_ctx) {
+		if (device)
+			fz_drop_device(self->render_ctx, device);
+		if (pixmap)
+			fz_drop_pixmap(self->render_ctx, pixmap);
+		if (page)
+			fz_drop_page(self->render_ctx, page);
+	} fz_catch(self->render_ctx) {
+		if (!cancellable || !g_cancellable_is_cancelled(cancellable))
+			g_set_error_literal(error, PHI_MU_ERROR,
+				fz_caught(self->render_ctx),
+				fz_caught_message(self->render_ctx));
+	}
+
+	if (cancelled_handler)
+		g_cancellable_disconnect(cancellable, cancelled_handler);
+	if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+		g_clear_pointer(&bytes, g_bytes_unref);
+		g_cancellable_set_error_if_cancelled(cancellable, error);
+	}
+
+unlock:
+	g_mutex_unlock(&self->render_lock);
+	if (!bytes)
+		return NULL;
+
+	GdkTexture* texture = gdk_memory_texture_new(
+		pixel_width, pixel_height, GDK_MEMORY_R8G8B8, bytes, stride);
+	g_bytes_unref(bytes);
+	return texture;
 }
 
 GskRenderNode* phi_document_render_page_node(PhiDocument* self, gint pageno,
