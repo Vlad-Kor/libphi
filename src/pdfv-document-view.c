@@ -49,6 +49,7 @@ struct _PdfvDocumentView {
     gboolean continuous;
     gboolean dual_page;
     gboolean inverted;
+    gboolean presentation_mode;
     
     gint current_page;
     gdouble scroll_x;
@@ -581,26 +582,29 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     /* Ensure every visible page is cached. */
     ensure_page_range_cached(self, first_visible, last_visible);
     
-    /* Match the surrounding window, empty tabs, and Markdown editor instead
-     * of maintaining a separate hard-coded PDF canvas color. */
-    AdwStyleManager* style_manager = adw_style_manager_get_default();
-    gboolean is_dark = adw_style_manager_get_dark(style_manager);
-    GdkRGBA background;
-    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-    gboolean found = gtk_style_context_lookup_color(
-        gtk_widget_get_style_context(widget), "window_bg_color", &background);
-    G_GNUC_END_IGNORE_DEPRECATIONS
-    gdouble luminance = found
-        ? 0.2126 * background.red + 0.7152 * background.green +
-              0.0722 * background.blue
-        : (is_dark ? 0.0 : 1.0);
-    if (!found || (is_dark && luminance > 0.5) ||
-        (!is_dark && luminance < 0.5))
-        background = is_dark
-            ? (GdkRGBA){.red = 0.141, .green = 0.141, .blue = 0.141,
-                        .alpha = 1.0}
-            : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980,
-                        .alpha = 1.0};
+    /* Match the surrounding window, empty tabs, and Markdown editor. A
+     * presentation deliberately uses a pitch-black screen surround. */
+    GdkRGBA background = {0, 0, 0, 1};
+    if (!self->presentation_mode) {
+        AdwStyleManager* style_manager = adw_style_manager_get_default();
+        gboolean is_dark = adw_style_manager_get_dark(style_manager);
+        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+        gboolean found = gtk_style_context_lookup_color(
+            gtk_widget_get_style_context(widget), "window_bg_color",
+            &background);
+        G_GNUC_END_IGNORE_DEPRECATIONS
+        gdouble luminance = found
+            ? 0.2126 * background.red + 0.7152 * background.green +
+                  0.0722 * background.blue
+            : (is_dark ? 0.0 : 1.0);
+        if (!found || (is_dark && luminance > 0.5) ||
+            (!is_dark && luminance < 0.5))
+            background = is_dark
+                ? (GdkRGBA){.red = 0.141, .green = 0.141, .blue = 0.141,
+                            .alpha = 1.0}
+                : (GdkRGBA){.red = 0.980, .green = 0.980, .blue = 0.980,
+                            .alpha = 1.0};
+    }
     gtk_snapshot_append_color(snapshot, &background,
         &GRAPHENE_RECT_INIT(0, 0, width, height));
     
@@ -1113,6 +1117,14 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
         zoom_at_point(self, self->zoom * factor, x, y);
         return TRUE;
     }
+
+    /* At the fitted presentation floor there is intentionally nowhere to
+     * pan. Consume smooth scrolling before GtkScrolledWindow can apply its
+     * elastic overshoot and expose empty space around the slide. Zoomed-in
+     * slides remain scrollable normally. */
+    if (self->presentation_mode &&
+        self->zoom <= self->minimum_zoom + 0.000001)
+        return TRUE;
     
     return FALSE; /* Let default scrolling happen */
 }
@@ -1563,6 +1575,7 @@ pdfv_document_view_init(PdfvDocumentView* self)
     self->continuous = TRUE;
     self->dual_page = FALSE;
     self->inverted = FALSE;
+    self->presentation_mode = FALSE;
     self->current_page = 0;
     
     self->pages = g_ptr_array_new();  /* We don't own the pages, document does */
@@ -1884,6 +1897,30 @@ pdfv_document_view_get_minimum_zoom(PdfvDocumentView* self)
 {
     g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), MIN_ZOOM);
     return self->minimum_zoom;
+}
+
+void
+pdfv_document_view_set_presentation_mode(PdfvDocumentView* self,
+                                         gboolean presentation)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+
+    presentation = !!presentation;
+    if (self->presentation_mode == presentation)
+        return;
+
+    self->presentation_mode = presentation;
+    if (presentation)
+        cancel_scroll_momentum(self);
+    update_adjustments(self);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+gboolean
+pdfv_document_view_get_presentation_mode(PdfvDocumentView* self)
+{
+    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), FALSE);
+    return self->presentation_mode;
 }
 
 void

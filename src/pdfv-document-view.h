@@ -37,6 +37,9 @@ void pdfv_document_view_zoom_fit_page_full(PdfvDocumentView* self);
 void pdfv_document_view_set_minimum_zoom(PdfvDocumentView* self,
                                          gdouble zoom);
 gdouble pdfv_document_view_get_minimum_zoom(PdfvDocumentView* self);
+void pdfv_document_view_set_presentation_mode(PdfvDocumentView* self,
+                                              gboolean presentation);
+gboolean pdfv_document_view_get_presentation_mode(PdfvDocumentView* self);
 
 /* Capture Ctrl+scroll pinch emulation before an enclosing scrolled window. */
 void pdfv_document_view_capture_zoom_scroll(PdfvDocumentView* self,

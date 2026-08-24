@@ -60,6 +60,10 @@ static void test_presentation_zoom_floor(void) {
   g_object_ref_sink(view);
   pdfv_document_view_set_document(view, document);
 
+  g_assert_false(pdfv_document_view_get_presentation_mode(view));
+  pdfv_document_view_set_presentation_mode(view, TRUE);
+  g_assert_true(pdfv_document_view_get_presentation_mode(view));
+
   g_assert_cmpfloat_with_epsilon(
       pdfv_document_view_get_minimum_zoom(view), 0.1, 0.001);
   pdfv_document_view_set_minimum_zoom(view, 1.5);
@@ -72,6 +76,9 @@ static void test_presentation_zoom_floor(void) {
   pdfv_document_view_set_minimum_zoom(view, 0.1);
   pdfv_document_view_zoom_out(view);
   g_assert_cmpfloat(pdfv_document_view_get_zoom(view), <, 1.5);
+
+  pdfv_document_view_set_presentation_mode(view, FALSE);
+  g_assert_false(pdfv_document_view_get_presentation_mode(view));
 
   g_object_unref(view);
   g_object_unref(document);

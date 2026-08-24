@@ -46,6 +46,7 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* zoom_out_accels[] = { "<Control>minus", NULL };
 	const char* zoom_reset_accels[] = { "<Control>0", NULL };
 	const char* fullscreen_accels[] = { "F11", NULL };
+	const char* presentation_accels[] = { "F5", NULL };
 	const char* find_accels[] = { "<Control>f", NULL };
 	const char* new_window_accels[] = { "<Control>n", NULL };
 	const char* workspace_find_accels[] = { "<Control><Shift>f", NULL };
@@ -67,6 +68,7 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-out", zoom_out_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-reset", zoom_reset_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.fullscreen", fullscreen_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.present", presentation_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.find", find_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.new-workspace-window", new_window_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.workspace-search", workspace_find_accels);
