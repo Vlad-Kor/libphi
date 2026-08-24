@@ -129,6 +129,30 @@ const expandManualSnippet: Command = (view) => {
   return match ? applyMatch(view, match, range.head) : false;
 };
 
+function expandVisualShortcut(view: EditorView, event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1)
+    return false;
+  const range = view.state.selection.main;
+  if (range.empty || view.state.selection.ranges.length !== 1)
+    return false;
+  const text = view.state.doc.toString();
+  for (const snippet of snippets) {
+    const visual = snippet.options.includes("v") ||
+      snippet.replacement.includes("${VISUAL}");
+    if (!visual || snippet.options.includes("r") ||
+        snippet.trigger !== event.key ||
+        !contextAllows(snippet, text, range.head)) continue;
+    return applyMatch(
+      view,
+      { snippet, from: range.from, captures: [] },
+      range.to,
+      view.state.sliceDoc(range.from, range.to),
+      true,
+    );
+  }
+  return false;
+}
+
 function currentEnvironment(text: string, position: number): string | null {
   const prefix = text.slice(Math.max(0, position - 3000), position);
   const openings = [...prefix.matchAll(/\\begin\{(matrix|pmatrix|bmatrix|vmatrix|Vmatrix|array|aligned|align|cases)\}/g)];
@@ -222,6 +246,23 @@ const automaticPlugin = ViewPlugin.fromClass(class {
 const indentList: Command = (view) => adjustListIndent(view, false);
 const outdentList: Command = (view) => adjustListIndent(view, true);
 
+const continueTaskList: Command = (view) => {
+  const range = view.state.selection.main;
+  if (!range.empty || view.state.selection.ranges.length !== 1)
+    return false;
+  const line = view.state.doc.lineAt(range.head);
+  const match = /^(\s*)([-+*])[ \t]+\[[^\]]\]([ \t]?)/.exec(line.text);
+  if (!match || range.head < line.from + match[0].length)
+    return false;
+  const prefix = `${match[1]}${match[2]} [ ] `;
+  view.dispatch({
+    changes: { from: range.head, insert: `\n${prefix}` },
+    selection: { anchor: range.head + prefix.length + 1 },
+    annotations: Transaction.userEvent.of("input.type"),
+  });
+  return true;
+};
+
 function adjustListIndent(view: EditorView, outdent: boolean): boolean {
   const lineNumbers = new Set<number>();
   for (const range of view.state.selection.ranges) {
@@ -233,8 +274,8 @@ function adjustListIndent(view: EditorView, outdent: boolean): boolean {
   if (!lines.length || !lines.every((line) => /^\s*(?:[-+*]|\d+[.)])\s+/.test(line.text)))
     return false;
   const changes = lines.flatMap((line) => {
-    if (!outdent) return [{ from: line.from, insert: "  " }];
-    const leading = /^(?: {1,2}|\t)/.exec(line.text)?.[0];
+    if (!outdent) return [{ from: line.from, insert: "    " }];
+    const leading = /^(?: {1,4}|\t)/.exec(line.text)?.[0];
     return leading ? [{ from: line.from, to: line.from + leading.length, insert: "" }] : [];
   });
   if (!changes.length) return false;
@@ -245,6 +286,12 @@ function adjustListIndent(view: EditorView, outdent: boolean): boolean {
 export const latexSuite = [
   tabstopState,
   automaticPlugin,
+  /* A native key event preserves the selection. Waiting for the browser's
+   * text-input transaction is unreliable in WebKit because it may collapse
+   * or replace that selection before visual snippets inspect it. */
+  Prec.high(EditorView.domEventHandlers({
+    keydown: (event, view) => expandVisualShortcut(view, event),
+  })),
   Prec.high(keymap.of([
     { key: "Tab", run: nextTabstop },
     { key: "Tab", run: expandManualSnippet },
@@ -255,6 +302,7 @@ export const latexSuite = [
     { key: "Shift-Tab", run: previousTabstop },
     { key: "Shift-Tab", run: outdentList },
     { key: "Shift-Tab", run: indentLess },
+    { key: "Enter", run: continueTaskList },
     { key: "Enter", run: matrixEnter },
     { key: "Shift-Enter", run: matrixShiftEnter },
   ])),

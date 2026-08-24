@@ -54,6 +54,12 @@ describe("Obsidian parser precedence", () => {
     expect(mathModeAt("$$\nx + y\n$$", 6)).toBe("display");
   });
 
+  it("recognizes horizontal rules without treating frontmatter fences as rules", () => {
+    const nodes = parseObsidian("---\ntitle: Test\n---\n\nBefore\n\n---\n\nAfter");
+    expect(nodes.filter((node) => node.kind === "frontmatter")).toHaveLength(1);
+    expect(nodes.filter((node) => node.kind === "horizontal-rule")).toHaveLength(1);
+  });
+
   it("parses spaced image sizes, list items, and multiline boxed math", () => {
     const source = `# Metrics
 - first item

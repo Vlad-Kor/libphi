@@ -14,6 +14,7 @@ struct _PdfvSettings {
   gboolean readable_line_width;
   gboolean allow_remote_images;
   gboolean latex_conceal;
+  gboolean pdf_inverted;
   gchar *latex_snippets;
   GKeyFile *file;
 };
@@ -63,6 +64,11 @@ PdfvSettings *pdfv_settings_new(void) {
     if (!error)
       self->latex_conceal = conceal;
     g_clear_error(&error);
+    gboolean inverted = g_key_file_get_boolean(
+        self->file, SETTINGS_GROUP, "pdf-inverted", &error);
+    if (!error)
+      self->pdf_inverted = inverted;
+    g_clear_error(&error);
     gchar *snippets = g_key_file_get_string(self->file, SETTINGS_GROUP,
                                              "latex-snippets", NULL);
     if (snippets) {
@@ -92,6 +98,8 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
                          self->allow_remote_images);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "latex-conceal",
                          self->latex_conceal);
+  g_key_file_set_boolean(self->file, SETTINGS_GROUP, "pdf-inverted",
+                         self->pdf_inverted);
   g_key_file_set_string(self->file, SETTINGS_GROUP, "latex-snippets",
                         self->latex_snippets);
   gsize length = 0;
@@ -152,6 +160,17 @@ void pdfv_settings_set_latex_conceal(PdfvSettings *self,
                                      gboolean enabled) {
   g_return_if_fail(self != NULL);
   self->latex_conceal = enabled;
+}
+
+gboolean pdfv_settings_get_pdf_inverted(PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, FALSE);
+  return self->pdf_inverted;
+}
+
+void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
+                                    gboolean inverted) {
+  g_return_if_fail(self != NULL);
+  self->pdf_inverted = inverted;
 }
 
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self) {
@@ -289,6 +308,7 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->readable_line_width = source->readable_line_width;
   destination->allow_remote_images = source->allow_remote_images;
   destination->latex_conceal = source->latex_conceal;
+  destination->pdf_inverted = source->pdf_inverted;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   gsize length = 0;
   gchar *data = g_key_file_to_data(source->file, &length, NULL);

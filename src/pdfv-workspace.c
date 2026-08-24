@@ -438,7 +438,9 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
                               guint *pdf_count, GError **error) {
   guint descendant_pdf_count = 0;
   GFileEnumerator *enumerator = g_file_enumerate_children(
-      folder, G_FILE_ATTRIBUTE_STANDARD_NAME "," G_FILE_ATTRIBUTE_STANDARD_TYPE,
+      folder, G_FILE_ATTRIBUTE_STANDARD_NAME ","
+              G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+              G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN,
       G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, cancellable, error);
   if (!enumerator)
     return NULL;
@@ -452,14 +454,14 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
 
     const gchar *name = g_file_info_get_name(info);
     GFileType type = g_file_info_get_file_type(info);
+    gboolean hidden_folder = type == G_FILE_TYPE_DIRECTORY &&
+        (g_file_info_get_is_hidden(info) || name[0] == '.');
     GFile *child_file = g_file_get_child(folder, name);
     gchar *relative = parent_path && *parent_path
                           ? g_build_filename(parent_path, name, NULL)
                           : g_strdup(name);
 
-    if (type == G_FILE_TYPE_DIRECTORY &&
-        !g_str_equal(name, ".obsidian") && !g_str_equal(name, ".git") &&
-        !g_str_equal(name, ".trash")) {
+    if (type == G_FILE_TYPE_DIRECTORY && !hidden_folder) {
       GError *child_error = NULL;
       guint nested_pdf_count = 0;
       GPtrArray *nested = scan_folder(child_file, relative, result, cancellable,

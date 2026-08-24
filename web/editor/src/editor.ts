@@ -2,12 +2,13 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { findNext, findPrevious, openSearchPanel, searchKeymap } from "@codemirror/search";
 import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap, rectangularSelection } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { parseDocument } from "yaml";
 import { acceptNativeResponse, requestNative, reportError, sendNative } from "./bridge";
+import { clipboardHtmlToMarkdown, markdownClipboardHtml } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
@@ -127,6 +128,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
           queueMicrotask(() => this.enhanceSearchPanel());
         }),
         EditorView.domEventHandlers({
+          copy: (event, view) => this.handleCopy(event, view),
           paste: (event, view) => this.handlePaste(event, view),
         }),
       ],
@@ -251,6 +253,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       replaceAll,
     );
     panel.replaceChildren(grid);
+    /* Moving CodeMirror's focused input into our custom grid makes WebKit
+     * drop focus. Restore it explicitly so Ctrl+F is immediately typable. */
+    search.focus({ preventScroll: true });
   }
 
   private documentChanged(): void {
@@ -305,6 +310,18 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     this.sendSnapshot("document/save");
   }
 
+  private handleCopy(event: ClipboardEvent, view: EditorView): boolean {
+    if (!event.clipboardData || view.state.selection.ranges.every((range) => range.empty))
+      return false;
+    const markdown = view.state.selection.ranges
+      .map((range) => view.state.sliceDoc(range.from, range.to))
+      .join("\n");
+    event.clipboardData.setData("text/plain", markdown);
+    event.clipboardData.setData("text/html", markdownClipboardHtml(markdown));
+    event.preventDefault();
+    return true;
+  }
+
   private handlePaste(event: ClipboardEvent, view: EditorView): boolean {
     const image = [...(event.clipboardData?.items ?? [])].find((item) => item.type.startsWith("image/"));
     if (image) {
@@ -332,6 +349,21 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       const label = view.state.sliceDoc(selection.from, selection.to);
       view.dispatch({ changes: { from: selection.from, to: selection.to, insert: `[${label}](${plain})` }, userEvent: "input.paste" });
       return true;
+    }
+    const html = event.clipboardData?.getData("text/html") ?? "";
+    if (html) {
+      const markdown = clipboardHtmlToMarkdown(html);
+      if (markdown) {
+        event.preventDefault();
+        view.dispatch({
+          changes: view.state.changeByRange((range) => ({
+            changes: { from: range.from, to: range.to, insert: markdown },
+            range: EditorSelection.cursor(range.from + markdown.length),
+          })).changes,
+          userEvent: "input.paste",
+        });
+        return true;
+      }
     }
     return false;
   }

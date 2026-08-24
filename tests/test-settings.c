@@ -17,6 +17,7 @@ static void test_workspace_attachment_policy(void) {
   PdfvSettings *settings = pdfv_settings_new();
   g_assert_true(pdfv_settings_get_readable_line_width(settings));
   g_assert_false(pdfv_settings_get_latex_conceal(settings));
+  g_assert_false(pdfv_settings_get_pdf_inverted(settings));
   pdfv_settings_set_workspace_attachment_policy(
       settings, workspace_a, TRUE, folder_uri);
   pdfv_settings_set_workspace_attachment_policy(
@@ -30,6 +31,7 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_markdown_font_scale(settings, 1.25);
   pdfv_settings_set_readable_line_width(settings, FALSE);
   pdfv_settings_set_latex_conceal(settings, TRUE);
+  pdfv_settings_set_pdf_inverted(settings, TRUE);
   GError *error = NULL;
   g_assert_true(pdfv_settings_save(settings, &error));
   g_assert_no_error(error);
@@ -47,6 +49,7 @@ static void test_workspace_attachment_policy(void) {
                     1.25);
   g_assert_false(pdfv_settings_get_readable_line_width(settings));
   g_assert_true(pdfv_settings_get_latex_conceal(settings));
+  g_assert_true(pdfv_settings_get_pdf_inverted(settings));
   gsize tab_count = 0;
   gchar **restored_tabs = pdfv_settings_dup_workspace_open_tabs(
       settings, workspace_a, &tab_count);

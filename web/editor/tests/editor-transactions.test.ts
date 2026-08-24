@@ -212,6 +212,45 @@ $$`;
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
+  it("gives list lines a hanging indent and uses four-space nesting", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "list-layout",
+      path: "list-layout.md",
+      text: "- A long item that wraps beneath its content",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: editor.view.state.doc.length } });
+    const line = parent.querySelector<HTMLElement>(".cm-line");
+    expect(line?.classList.contains("cm-live-list-item")).toBe(true);
+    expect(line?.style.getPropertyValue("--phi-list-content-indent")).toBe("1.1em");
+
+    editor.view.dispatch({ selection: { anchor: 8 } });
+    expect(key(editor.view, "Tab")).toBe(true);
+    expect(editor.getDocument()).toBe("    - A long item that wraps beneath its content");
+    expect(key(editor.view, "Tab", true)).toBe(true);
+    expect(editor.getDocument()).toBe("- A long item that wraps beneath its content");
+  });
+
+  it("renders a standalone triple-dash line as a horizontal rule", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "horizontal-rule",
+      path: "horizontal-rule.md",
+      text: "Before\n\n---\n\nAfter",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    expect(parent.querySelector("hr.horizontal-rule-widget")).not.toBeNull();
+  });
+
   it("keeps standalone images in line geometry and remeasures after loading", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -331,6 +370,7 @@ $$`;
       .toEqual(["prev", "next"]);
     expect(grid?.querySelectorAll(".phi-symbolic-icon").length).toBeGreaterThanOrEqual(6);
     expect(panel?.querySelector(':scope > label')).toBeNull();
+    expect(document.activeElement).toBe(search);
 
     const optionsButton = grid?.querySelector<HTMLButtonElement>(".phi-search-options-button");
     const options = grid?.querySelector<HTMLElement>(".phi-search-options-popover");
@@ -409,9 +449,20 @@ $$`;
     });
     editor.view.dispatch({ selection: { anchor: 11 } });
     expect(key(editor.view, "Tab")).toBe(true);
-    expect(editor.view.state.doc.toString()).toBe("- parent\n  - child");
+    expect(editor.view.state.doc.toString()).toBe("- parent\n    - child");
     expect(key(editor.view, "Tab", true)).toBe(true);
     expect(editor.view.state.doc.toString()).toBe("- parent\n- child");
+  });
+
+  it("continues task items even when text touches the closing bracket", () => {
+    const compact = viewFor("- [ ]word", 9, 9, latexSuite);
+    expect(key(compact, "Enter")).toBe(true);
+    expect(compact.state.doc.toString()).toBe("- [ ]word\n- [ ] ");
+
+    const spaced = viewFor("    - [x] finished", 18, 18, latexSuite);
+    expect(key(spaced, "Enter")).toBe(true);
+    expect(spaced.state.doc.toString())
+      .toBe("    - [x] finished\n    - [ ] ");
   });
 });
 
@@ -450,6 +501,19 @@ describe("LaTeX Suite transactions", () => {
     visual.dispatch({ changes: { from: 1, to: 2, insert: "C" }, selection: { anchor: 2 }, userEvent: "input.type" });
     await settle();
     expect(visual.state.doc.toString()).toBe("$\\cancel{x}$");
+  });
+
+  it("runs visual snippets directly from shifted character shortcuts", () => {
+    const selected = "${VISUAL}";
+    setCustomSnippets(String.raw`[
+      {trigger: "B", replacement: "<span style='color:blue'>${selected}</span>", options: "tA"}
+    ]`);
+    const visual = viewFor("blue text", 0, 9, latexSuite);
+    visual.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "B", shiftKey: true, bubbles: true, cancelable: true,
+    }));
+    expect(visual.state.doc.toString())
+      .toBe("<span style='color:blue'>blue text</span>");
   });
 
   it("uses matrix-aware Tab/Enter and logical tab-out", () => {

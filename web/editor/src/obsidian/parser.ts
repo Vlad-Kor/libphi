@@ -21,6 +21,7 @@ export type ObsidianNodeKind =
   | "mermaid"
   | "code-block"
   | "html"
+  | "horizontal-rule"
   | "list-item"
   | "tag"
   | "block-id";
@@ -170,6 +171,7 @@ export function parseObsidian(text: string): ObsidianNode[] {
     if (end) {
       const to = lineEnd(text, end.index);
       nodes.push({ kind: "frontmatter", from: 0, to, text: text.slice(0, to) });
+      protectedRanges.push({ from: 0, to });
     }
   }
 
@@ -333,6 +335,12 @@ export function parseObsidian(text: string): ObsidianNode[] {
       nodes.push({ kind: "table", from: match.index, to: match.index + match[1].trimEnd().length, text: match[1].trimEnd() });
   }
 
+  for (const match of text.matchAll(/^ {0,3}(?:-[ \t]*){3,}$/gm)) {
+    if (!inside(match.index, protectedRanges))
+      nodes.push({ kind: "horizontal-rule", from: match.index,
+        to: match.index + match[0].length, text: match[0] });
+  }
+
   for (const match of text.matchAll(/^(#{1,6})[ \t]+(.+)$/gm)) {
     if (!inside(match.index, protectedRanges)) {
       nodes.push({
@@ -358,6 +366,11 @@ export function parseObsidian(text: string): ObsidianNode[] {
       text: match[2],
       meta: {
         markerFrom,
+        indentColumns: [...match[1]].reduce(
+          (columns, character) => character === "\t"
+            ? columns + (4 - columns % 4) : columns + 1,
+          0,
+        ),
         task: /^\s*\[[^\]]\]/.test(text.slice(markerFrom + 1, to)),
       },
     });

@@ -6,6 +6,7 @@ import {
   BulletWidget,
   FootnoteWidget,
   HiddenWidget,
+  HorizontalRuleWidget,
   HtmlPreviewWidget,
   LinkWidget,
   MarkdownLinkWidget,
@@ -52,6 +53,7 @@ function targetIsImage(target: string): boolean {
 function blockReplacement(node: ObsidianNode, state: EditorState): Decoration | undefined {
   switch (node.kind) {
     case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from), block: true });
+    case "horizontal-rule": return Decoration.replace({ widget: new HorizontalRuleWidget(), block: true });
     case "math": return Decoration.replace({ widget: new MathWidget(node.text, false, node.from) });
     case "display-math": return Decoration.replace({ widget: new MathWidget(node.text, true, node.from), block: true });
     case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
@@ -151,6 +153,15 @@ function buildDecorations(state: EditorState): DecorationSet {
         break;
       }
       case "list-item": {
+        const indentColumns = Number(node.meta?.indentColumns ?? 0);
+        const contentIndent = indentColumns * 0.25 +
+          (node.meta?.task ? 2.05 : 1.1);
+        builder.add(node.from, node.from, Decoration.line({
+          attributes: {
+            class: "cm-live-list-item",
+            style: `--phi-list-content-indent:${contentIndent}em`,
+          },
+        }));
         if (!isActive) {
           const markerFrom = Number(node.meta?.markerFrom ?? node.from);
           const marker = node.meta?.task

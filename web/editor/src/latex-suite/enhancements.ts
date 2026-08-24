@@ -630,7 +630,10 @@ const latexSyntaxPlugin = ViewPlugin.fromClass(class {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged || update.selectionSet)
+    /* These ranges cover the document and do not depend on which lines are
+     * currently visible. Rebuilding them on every kinetic-scroll viewport
+     * update reparses the entire note and stalls WebKit's scroll animation. */
+    if (update.docChanged || update.selectionSet)
       this.decorations = Decoration.set(syntaxRanges(update.view), true);
   }
 }, { decorations: (plugin) => plugin.decorations });
@@ -645,7 +648,7 @@ const latexConcealPlugin = ViewPlugin.fromClass(class {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged || update.selectionSet) {
+    if (update.docChanged || update.selectionSet) {
       ({ decorations: this.decorations, atomicRanges: this.atomicRanges } =
         concealPresentation(update.view));
     }

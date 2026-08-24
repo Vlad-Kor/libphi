@@ -250,7 +250,9 @@ static void test_workspace_search(void) {
   state.deep_empty = g_file_get_child(state.empty, "Still Empty");
   g_assert_true(g_file_make_directory(state.deep_empty, NULL, &error));
   g_assert_no_error(error);
-  state.trash = g_file_get_child(state.root, ".trash");
+  /* A generic dot-folder verifies this is not a special-case exclusion for
+   * .git, .obsidian, or .trash. */
+  state.trash = g_file_get_child(state.root, ".hidden-notes");
   g_assert_true(g_file_make_directory(state.trash, NULL, &error));
   g_assert_no_error(error);
   state.trashed_note = g_file_get_child(state.trash, "deleted.md");

@@ -793,6 +793,227 @@ static void on_bridge_error(PdfvMarkdownEditorBridge *bridge,
   emit_error(self, message);
 }
 
+static GFile *vault_image_file_for_uri(PdfvMarkdownEditor *self,
+                                       const gchar *uri) {
+  if (!uri || !g_str_has_prefix(uri, "vault:///"))
+    return NULL;
+  GError *error = NULL;
+  GUri *parsed = g_uri_parse(uri, G_URI_FLAGS_NONE, &error);
+  if (!parsed) {
+    g_clear_error(&error);
+    return NULL;
+  }
+  const gchar *host = g_uri_get_host(parsed);
+  const gchar *path = g_uri_get_path(parsed);
+  while (path && *path == '/')
+    path++;
+  GFile *file = (!host || !*host) && path && *path
+                    ? pdfv_markdown_vault_adapter_resolve(self->vault, path,
+                                                          NULL)
+                    : NULL;
+  g_uri_unref(parsed);
+  return file;
+}
+
+static GFile *image_action_file(GSimpleAction *action) {
+  return g_object_get_data(G_OBJECT(action), "phi-image-file");
+}
+
+static void on_copy_vault_image(GSimpleAction *action, GVariant *parameter,
+                                gpointer user_data) {
+  (void)parameter;
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  GFile *file = image_action_file(action);
+  GError *error = NULL;
+  GdkTexture *texture = file ? gdk_texture_new_from_file(file, &error) : NULL;
+  if (!texture) {
+    emit_error(self, error ? error->message : "Could not copy the image");
+    g_clear_error(&error);
+    return;
+  }
+  GdkClipboard *clipboard =
+      gtk_widget_get_clipboard(GTK_WIDGET(self->web_view));
+  gdk_clipboard_set_texture(clipboard, texture);
+  g_object_unref(texture);
+}
+
+static void on_copy_vault_image_address(GSimpleAction *action,
+                                        GVariant *parameter,
+                                        gpointer user_data) {
+  (void)parameter;
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  GFile *file = image_action_file(action);
+  gchar *location = file ? g_file_get_path(file) : NULL;
+  if (!location && file)
+    location = g_file_get_uri(file);
+  if (!location) {
+    emit_error(self, "Could not resolve the image path");
+    return;
+  }
+  GdkClipboard *clipboard =
+      gtk_widget_get_clipboard(GTK_WIDGET(self->web_view));
+  gdk_clipboard_set_text(clipboard, location);
+  g_free(location);
+}
+
+static void on_vault_image_launched(GObject *source, GAsyncResult *result,
+                                    gpointer user_data) {
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  GError *error = NULL;
+  if (!gtk_file_launcher_launch_finish(GTK_FILE_LAUNCHER(source), result,
+                                       &error))
+    emit_error(self, error ? error->message : "Could not open the image");
+  g_clear_error(&error);
+  g_object_unref(self);
+}
+
+static void on_open_vault_image(GSimpleAction *action, GVariant *parameter,
+                                gpointer user_data) {
+  (void)parameter;
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  GFile *file = image_action_file(action);
+  if (!file)
+    return;
+  GtkRoot *root = gtk_widget_get_root(GTK_WIDGET(self));
+  GtkFileLauncher *launcher = gtk_file_launcher_new(file);
+  gtk_file_launcher_launch(launcher, GTK_IS_WINDOW(root) ? GTK_WINDOW(root)
+                                                         : NULL,
+                           NULL, on_vault_image_launched,
+                           g_object_ref(self));
+  g_object_unref(launcher);
+}
+
+typedef struct {
+  PdfvMarkdownEditor *editor;
+  GFile *source;
+} SaveImageRequest;
+
+static void save_image_request_free(SaveImageRequest *request) {
+  g_clear_object(&request->editor);
+  g_clear_object(&request->source);
+  g_free(request);
+}
+
+static void on_vault_image_saved(GObject *source, GAsyncResult *result,
+                                 gpointer user_data) {
+  SaveImageRequest *request = user_data;
+  GError *error = NULL;
+  if (!g_file_copy_finish(G_FILE(source), result, &error))
+    emit_error(request->editor,
+               error ? error->message : "Could not save the image");
+  g_clear_error(&error);
+  save_image_request_free(request);
+}
+
+static void on_vault_image_save_location(GObject *source,
+                                         GAsyncResult *result,
+                                         gpointer user_data) {
+  SaveImageRequest *request = user_data;
+  GError *error = NULL;
+  GFile *destination = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source),
+                                                   result, &error);
+  if (!destination) {
+    if (error && !g_error_matches(error, GTK_DIALOG_ERROR,
+                                  GTK_DIALOG_ERROR_DISMISSED))
+      emit_error(request->editor, error->message);
+    g_clear_error(&error);
+    save_image_request_free(request);
+    return;
+  }
+  g_file_copy_async(request->source, destination, G_FILE_COPY_OVERWRITE,
+                    G_PRIORITY_DEFAULT, NULL, NULL, NULL,
+                    on_vault_image_saved, request);
+  g_object_unref(destination);
+}
+
+static void on_save_vault_image(GSimpleAction *action, GVariant *parameter,
+                                gpointer user_data) {
+  (void)parameter;
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  GFile *file = image_action_file(action);
+  if (!file)
+    return;
+  GtkFileDialog *dialog = gtk_file_dialog_new();
+  gtk_file_dialog_set_title(dialog, "Save Image As");
+  gchar *basename = g_file_get_basename(file);
+  gtk_file_dialog_set_initial_name(dialog, basename);
+  g_free(basename);
+  SaveImageRequest *request = g_new0(SaveImageRequest, 1);
+  request->editor = g_object_ref(self);
+  request->source = g_object_ref(file);
+  GtkRoot *root = gtk_widget_get_root(GTK_WIDGET(self));
+  gtk_file_dialog_save(dialog,
+                       GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL,
+                       NULL, on_vault_image_save_location, request);
+}
+
+static WebKitContextMenuItem *vault_image_menu_item(
+    PdfvMarkdownEditor *self, GFile *file, const gchar *name,
+    const gchar *label, GCallback callback) {
+  GSimpleAction *action = g_simple_action_new(name, NULL);
+  g_object_set_data_full(G_OBJECT(action), "phi-image-file",
+                         g_object_ref(file), g_object_unref);
+  g_signal_connect_object(action, "activate", callback, self, 0);
+  WebKitContextMenuItem *item = webkit_context_menu_item_new_from_gaction(
+      G_ACTION(action), label, NULL);
+  g_object_unref(action);
+  return item;
+}
+
+static gboolean on_context_menu(WebKitWebView *view, WebKitContextMenu *menu,
+                                WebKitHitTestResult *hit,
+                                PdfvMarkdownEditor *self) {
+  (void)view;
+  if (!webkit_hit_test_result_context_is_image(hit))
+    return FALSE;
+  GFile *file = vault_image_file_for_uri(
+      self, webkit_hit_test_result_get_image_uri(hit));
+  if (!file)
+    return FALSE;
+
+  GList *items = g_list_copy(webkit_context_menu_get_items(menu));
+  gint position = 0;
+  for (GList *at = items; at; at = at->next, position++) {
+    WebKitContextMenuItem *old_item = at->data;
+    WebKitContextMenuAction stock =
+        webkit_context_menu_item_get_stock_action(old_item);
+    const gchar *name = NULL;
+    const gchar *label = NULL;
+    GCallback callback = NULL;
+    switch (stock) {
+    case WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD:
+      name = "copy-vault-image";
+      label = "Copy Image";
+      callback = G_CALLBACK(on_copy_vault_image);
+      break;
+    case WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD:
+      name = "copy-vault-image-address";
+      label = "Copy Image Address";
+      callback = G_CALLBACK(on_copy_vault_image_address);
+      break;
+    case WEBKIT_CONTEXT_MENU_ACTION_OPEN_IMAGE_IN_NEW_WINDOW:
+      name = "open-vault-image";
+      label = "Open Image in New Window";
+      callback = G_CALLBACK(on_open_vault_image);
+      break;
+    case WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK:
+      name = "save-vault-image";
+      label = "Save Image As…";
+      callback = G_CALLBACK(on_save_vault_image);
+      break;
+    default:
+      continue;
+    }
+    WebKitContextMenuItem *replacement = vault_image_menu_item(
+        self, file, name, label, callback);
+    webkit_context_menu_remove(menu, old_item);
+    webkit_context_menu_insert(menu, replacement, position);
+  }
+  g_list_free(items);
+  g_object_unref(file);
+  return FALSE;
+}
+
 static gboolean on_decide_policy(WebKitWebView *view,
                                  WebKitPolicyDecision *decision,
                                  WebKitPolicyDecisionType type,
@@ -1462,6 +1683,8 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
                    G_CALLBACK(on_decide_policy), self);
   g_signal_connect(self->web_view, "permission-request",
                    G_CALLBACK(on_permission_request), self);
+  g_signal_connect(self->web_view, "context-menu",
+                   G_CALLBACK(on_context_menu), self);
   webkit_web_view_load_uri(self->web_view, "app://editor/index.html");
   return self;
 }

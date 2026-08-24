@@ -42,6 +42,9 @@ struct _PdfvWindow {
   GtkButton *back_button;
   GtkButton *forward_button;
   GtkToggleButton *sidebar_button;
+  GtkWidget *page_selector;
+  GtkEntry *page_entry;
+  GtkLabel *page_count_label;
   GtkMenuButton *menu_button;
   GMenu *file_menu_section;
   GMenu *workspace_menu_section;
@@ -128,6 +131,9 @@ struct _PdfvWindow {
   PdfvMarkdownEditor *current_editor;
   AdwTabPage *window_title_page;
   gboolean closing_window;
+  gboolean fullscreen_chrome_active;
+  gboolean fullscreen_sidebar_was_visible;
+  guint fullscreen_hide_timeout_id;
 
   /* One initialized editor removes WebKit/CodeMirror startup from the next
    * new Markdown tab without retaining a document or its contents. */
@@ -228,6 +234,21 @@ static void apply_preferences_to_editor(PdfvWindow *self,
   g_clear_object(&attachment_folder);
 }
 
+static void apply_pdf_preferences(PdfvWindow *self) {
+  if (!self->tab_view)
+    return;
+  gboolean inverted = pdfv_settings_get_pdf_inverted(self->settings);
+  guint pages = adw_tab_view_get_n_pages(self->tab_view);
+  for (guint i = 0; i < pages; i++) {
+    AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
+    GtkWidget *stack = adw_tab_page_get_child(page);
+    PdfvDocumentView *view = GTK_IS_STACK(stack)
+        ? g_object_get_data(G_OBJECT(stack), "document-view") : NULL;
+    if (view)
+      pdfv_document_view_set_inverted(view, inverted);
+  }
+}
+
 static void apply_markdown_preferences(PdfvWindow *self) {
   if (self->tab_view) {
     guint pages = adw_tab_view_get_n_pages(self->tab_view);
@@ -250,6 +271,7 @@ static void apply_markdown_preferences(PdfvWindow *self) {
         G_SIMPLE_ACTION(remote),
         g_variant_new_boolean(
             pdfv_settings_get_allow_remote_images(self->settings)));
+  apply_pdf_preferences(self);
 }
 
 static void propagate_markdown_preferences(PdfvWindow *source) {
@@ -314,6 +336,73 @@ static void update_zoom_info(PdfvWindow *self) {
   g_free(text);
 }
 
+static void update_page_selector(PdfvWindow *self) {
+  PhiDocument *document = self->current_view
+      ? pdfv_document_view_get_document(self->current_view) : NULL;
+  gboolean visible = document != NULL;
+  gtk_widget_set_visible(self->page_selector, visible);
+  if (!visible)
+    return;
+
+  gint page = pdfv_document_view_get_current_page(self->current_view);
+  gint pages = phi_document_get_n_pages(document);
+  gchar *page_text = g_strdup_printf("%d", page + 1);
+  gchar *count_text = g_strdup_printf("of %d", pages);
+  gtk_editable_set_text(GTK_EDITABLE(self->page_entry), page_text);
+  gtk_editable_set_position(GTK_EDITABLE(self->page_entry), -1);
+  gtk_label_set_text(self->page_count_label, count_text);
+
+  gchar total_text[32];
+  g_snprintf(total_text, sizeof(total_text), "%d", pages);
+  gint page_chars = MAX(3, (gint)strlen(total_text));
+  gint count_chars = MAX(5, (gint)strlen(count_text));
+  gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), page_chars);
+  gtk_label_set_width_chars(self->page_count_label, count_chars);
+  g_free(count_text);
+  g_free(page_text);
+}
+
+static void on_page_entry_activated(GtkEntry *entry, PdfvWindow *self) {
+  if (!self->current_view)
+    return;
+  PhiDocument *document = pdfv_document_view_get_document(self->current_view);
+  if (!document)
+    return;
+
+  gchar *normalized = g_utf8_normalize(
+      gtk_editable_get_text(GTK_EDITABLE(entry)), -1, G_NORMALIZE_ALL);
+  gchar *end = NULL;
+  gint64 requested = g_ascii_strtoll(normalized, &end, 10);
+  while (end && g_ascii_isspace(*end))
+    end++;
+  gint pages = phi_document_get_n_pages(document);
+  if (normalized && end && end != normalized && *end == '\0' &&
+      requested >= 1 && requested <= pages)
+    pdfv_document_view_go_to_page(self->current_view,
+                                  (gint)requested - 1);
+  update_page_selector(self);
+  g_free(normalized);
+}
+
+static void on_page_entry_focus_leave(GtkEventControllerFocus *controller,
+                                      PdfvWindow *self) {
+  (void)controller;
+  update_page_selector(self);
+}
+
+static gboolean on_page_entry_scroll(GtkEventControllerScroll *controller,
+                                     gdouble dx, gdouble dy,
+                                     PdfvWindow *self) {
+  (void)controller;
+  (void)dx;
+  if (!self->current_view || dy == 0)
+    return GDK_EVENT_PROPAGATE;
+  gint page = pdfv_document_view_get_current_page(self->current_view);
+  pdfv_document_view_go_to_page(self->current_view,
+                                page + (dy > 0 ? 1 : -1));
+  return GDK_EVENT_STOP;
+}
+
 static void update_sidebar_button(PdfvWindow *self) {
   gboolean has_document = FALSE;
 
@@ -342,7 +431,8 @@ static void update_sidebar_button(PdfvWindow *self) {
   }
 
   /* Hide floating zoom controls when no document */
-  gtk_widget_set_visible(self->zoom_box, has_document);
+  gtk_widget_set_visible(self->zoom_box,
+                         has_document && !self->fullscreen_chrome_active);
   if (self->pages_sidebar_page)
     adw_view_stack_page_set_visible(self->pages_sidebar_page, has_document);
   if (!has_document && self->workspace_sidebar_page && self->workspace &&
@@ -350,6 +440,7 @@ static void update_sidebar_button(PdfvWindow *self) {
     adw_view_stack_set_visible_child_name(self->sidebar_stack, "workspace");
   if (!has_document && !self->workspace)
     adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+  update_page_selector(self);
   rebuild_main_menu(self);
 }
 
@@ -400,7 +491,6 @@ static void rebuild_main_menu(PdfvWindow *self) {
 
 static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
                            PdfvWindow *self) {
-  (void)view;
   const gchar *name = g_param_spec_get_name(pspec);
 
   if (g_strcmp0(name, "can-go-back") == 0 ||
@@ -408,6 +498,9 @@ static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
     update_navigation_buttons(self);
   } else if (g_strcmp0(name, "zoom") == 0) {
     update_zoom_info(self);
+  } else if (g_strcmp0(name, "current-page") == 0 &&
+             view == self->current_view) {
+    update_page_selector(self);
   }
 }
 
@@ -2511,12 +2604,21 @@ static GtkWidget *create_empty_state(PdfvWindow *self) {
   adw_status_page_set_description(ADW_STATUS_PAGE(status),
                                   "Open a PDF or Markdown file");
 
-  GtkWidget *button = gtk_button_new_with_label("Open File…");
-  gtk_widget_add_css_class(button, "pill");
-  gtk_widget_add_css_class(button, "suggested-action");
-  gtk_actionable_set_action_name(GTK_ACTIONABLE(button), "win.open");
-  gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
-  adw_status_page_set_child(ADW_STATUS_PAGE(status), button);
+  GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_widget_set_halign(actions, GTK_ALIGN_CENTER);
+
+  GtkWidget *open_file = gtk_button_new_with_label("Open File…");
+  gtk_widget_add_css_class(open_file, "pill");
+  gtk_widget_add_css_class(open_file, "suggested-action");
+  gtk_actionable_set_action_name(GTK_ACTIONABLE(open_file), "win.open");
+  gtk_box_append(GTK_BOX(actions), open_file);
+
+  GtkWidget *open_folder = gtk_button_new_with_label("Open Folder…");
+  gtk_widget_add_css_class(open_folder, "pill");
+  gtk_actionable_set_action_name(GTK_ACTIONABLE(open_folder),
+                                 "win.open-folder");
+  gtk_box_append(GTK_BOX(actions), open_folder);
+  adw_status_page_set_child(ADW_STATUS_PAGE(status), actions);
 
   (void)self;
   return status;
@@ -2543,6 +2645,8 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
 
   /* Document view */
   PdfvDocumentView *view = pdfv_document_view_new();
+  pdfv_document_view_set_inverted(
+      view, pdfv_settings_get_pdf_inverted(self->settings));
   setup_document_view_signals(self, view);
 
   GtkWidget *scrolled = gtk_scrolled_window_new();
@@ -2695,6 +2799,9 @@ static gboolean finish_document_load_idle(gpointer user_data) {
       update_navigation_buttons(self);
       update_zoom_info(self);
       update_sidebar_button(self);
+      if (!gtk_widget_get_visible(self->workspace_search_overlay) &&
+          !gtk_search_bar_get_search_mode(self->search_bar))
+        gtk_widget_grab_focus(GTK_WIDGET(view));
     }
   } else if (error &&
              !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED) &&
@@ -3001,6 +3108,9 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
     PhiDocument *doc = pdfv_document_view_get_document(self->current_view);
     if (doc) {
       populate_thumbnails(self, doc);
+      if (!gtk_widget_get_visible(self->workspace_search_overlay) &&
+          !gtk_search_bar_get_search_mode(self->search_bar))
+        gtk_widget_grab_focus(GTK_WIDGET(self->current_view));
     } else {
       if (!self->workspace)
         adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
@@ -5226,15 +5336,124 @@ static void action_zoom_fit_page(GSimpleAction *action, GVariant *parameter,
     pdfv_document_view_zoom_fit_page(self->current_view);
 }
 
+static gboolean fullscreen_top_bar_has_focus(PdfvWindow *self) {
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(self));
+  return focus &&
+      (gtk_widget_is_ancestor(focus, GTK_WIDGET(self->header_bar)) ||
+       gtk_widget_is_ancestor(focus, GTK_WIDGET(self->tab_bar)) ||
+       gtk_widget_is_ancestor(focus, GTK_WIDGET(self->search_bar)));
+}
+
+static gboolean fullscreen_hide_top_bars(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (!self->fullscreen_chrome_active) {
+    self->fullscreen_hide_timeout_id = 0;
+    return G_SOURCE_REMOVE;
+  }
+  if (fullscreen_top_bar_has_focus(self) ||
+      gtk_menu_button_get_active(self->menu_button))
+    return G_SOURCE_CONTINUE;
+
+  self->fullscreen_hide_timeout_id = 0;
+  adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, FALSE);
+  return G_SOURCE_REMOVE;
+}
+
+static void fullscreen_cancel_hide(PdfvWindow *self) {
+  if (!self->fullscreen_hide_timeout_id)
+    return;
+  g_source_remove(self->fullscreen_hide_timeout_id);
+  self->fullscreen_hide_timeout_id = 0;
+}
+
+static void fullscreen_schedule_hide(PdfvWindow *self) {
+  if (self->fullscreen_hide_timeout_id)
+    return;
+  self->fullscreen_hide_timeout_id = g_timeout_add_full(
+      G_PRIORITY_DEFAULT, 550, fullscreen_hide_top_bars,
+      g_object_ref(self), g_object_unref);
+}
+
+static void on_fullscreen_pointer_motion(GtkEventControllerMotion *controller,
+                                         gdouble x, gdouble y,
+                                         PdfvWindow *self) {
+  (void)controller;
+  (void)x;
+  if (!self->fullscreen_chrome_active)
+    return;
+
+  gboolean revealed = adw_toolbar_view_get_reveal_top_bars(
+      self->toolbar_view);
+  gint bar_height = gtk_widget_get_height(GTK_WIDGET(self->header_bar));
+  if (gtk_widget_get_visible(GTK_WIDGET(self->tab_bar)))
+    bar_height += gtk_widget_get_height(GTK_WIDGET(self->tab_bar));
+  if (gtk_widget_get_visible(GTK_WIDGET(self->search_bar)))
+    bar_height += gtk_widget_get_height(GTK_WIDGET(self->search_bar));
+  gint hot_zone = revealed ? MAX(4, bar_height) : 4;
+  if (y <= hot_zone) {
+    fullscreen_cancel_hide(self);
+    adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, TRUE);
+  } else if (revealed) {
+    fullscreen_schedule_hide(self);
+  }
+}
+
+static void set_fullscreen_chrome(PdfvWindow *self, gboolean fullscreen) {
+  if (self->fullscreen_chrome_active == fullscreen)
+    return;
+  self->fullscreen_chrome_active = fullscreen;
+
+  if (fullscreen) {
+    self->fullscreen_sidebar_was_visible =
+        adw_overlay_split_view_get_show_sidebar(self->split_view);
+    adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
+    workspace_search_close(self, FALSE);
+    gtk_search_bar_set_search_mode(self->search_bar, FALSE);
+    adw_header_bar_set_show_start_title_buttons(self->header_bar, FALSE);
+    adw_header_bar_set_show_end_title_buttons(self->header_bar, FALSE);
+    adw_toolbar_view_set_top_bar_style(self->toolbar_view,
+                                       ADW_TOOLBAR_RAISED);
+    adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, TRUE);
+    adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, FALSE);
+    gtk_widget_set_visible(self->zoom_box, FALSE);
+    return;
+  }
+
+  fullscreen_cancel_hide(self);
+  adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, TRUE);
+  adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, FALSE);
+  adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_FLAT);
+  adw_header_bar_set_show_start_title_buttons(self->header_bar, TRUE);
+  adw_header_bar_set_show_end_title_buttons(self->header_bar, TRUE);
+  if (self->fullscreen_sidebar_was_visible &&
+      (self->workspace || (self->current_view &&
+       pdfv_document_view_get_document(self->current_view))))
+    adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
+  update_sidebar_button(self);
+}
+
+static void on_window_fullscreen_changed(PdfvWindow *self,
+                                         GParamSpec *pspec,
+                                         gpointer user_data) {
+  (void)pspec;
+  (void)user_data;
+  set_fullscreen_chrome(
+      self, gtk_window_is_fullscreen(GTK_WINDOW(self)));
+}
+
 static void action_fullscreen(GSimpleAction *action, GVariant *parameter,
                               gpointer user_data) {
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
-  if (gtk_window_is_fullscreen(GTK_WINDOW(self)))
+  if (gtk_window_is_fullscreen(GTK_WINDOW(self)) ||
+      self->fullscreen_chrome_active) {
+    set_fullscreen_chrome(self, FALSE);
     gtk_window_unfullscreen(GTK_WINDOW(self));
-  else
+  } else {
+    set_fullscreen_chrome(self, TRUE);
     gtk_window_fullscreen(GTK_WINDOW(self));
+  }
 }
 
 static void action_toggle_sidebar(GSimpleAction *action, GVariant *parameter,
@@ -5258,10 +5477,11 @@ static void action_invert_colors(GSimpleAction *action, GVariant *parameter,
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
-  if (self->current_view) {
-    gboolean inverted = pdfv_document_view_get_inverted(self->current_view);
-    pdfv_document_view_set_inverted(self->current_view, !inverted);
-  }
+  if (!self->current_view)
+    return;
+  gboolean inverted = !pdfv_settings_get_pdf_inverted(self->settings);
+  pdfv_settings_set_pdf_inverted(self->settings, inverted);
+  propagate_markdown_preferences(self);
 }
 
 static void action_page_next(GSimpleAction *action, GVariant *parameter,
@@ -5526,6 +5746,7 @@ static void pdfv_window_dispose(GObject *object) {
     g_source_remove(self->settings_update_timeout_id);
     self->settings_update_timeout_id = 0;
   }
+  fullscreen_cancel_hide(self);
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
     self->workspace_search_debounce_id = 0;
@@ -5611,6 +5832,8 @@ static void pdfv_window_init(PdfvWindow *self) {
   update_markdown_actions(self);
   g_signal_connect(self, "close-request", G_CALLBACK(on_window_close_request),
                    self);
+  g_signal_connect(self, "notify::fullscreened",
+                   G_CALLBACK(on_window_fullscreen_changed), NULL);
   g_signal_connect(adw_style_manager_get_default(), "notify::dark",
                    G_CALLBACK(on_style_dark_changed), self);
 
@@ -5662,6 +5885,10 @@ static void pdfv_window_init(PdfvWindow *self) {
                               GTK_WIDGET(self->split_view));
   adw_application_window_set_content(ADW_APPLICATION_WINDOW(self),
                                      GTK_WIDGET(self->toast_overlay));
+  GtkEventController *fullscreen_motion = gtk_event_controller_motion_new();
+  g_signal_connect(fullscreen_motion, "motion",
+                   G_CALLBACK(on_fullscreen_pointer_motion), self);
+  gtk_widget_add_controller(GTK_WIDGET(self), fullscreen_motion);
 
   /* Main toolbar view - must be set AFTER tab_overview has a parent */
   self->toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
@@ -5724,6 +5951,40 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_widget_set_tooltip_text(GTK_WIDGET(self->menu_button), "Main Menu");
   gtk_menu_button_set_primary(self->menu_button, TRUE);
 
+  /* Match Papers' compact, editable "page of total" selector. */
+  self->page_selector = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_add_css_class(self->page_selector, "numeric");
+  gtk_widget_set_tooltip_text(self->page_selector, "Page Count");
+  gtk_widget_set_visible(self->page_selector, FALSE);
+
+  self->page_entry = GTK_ENTRY(gtk_entry_new());
+  gtk_widget_set_direction(GTK_WIDGET(self->page_entry), GTK_TEXT_DIR_LTR);
+  gtk_entry_set_alignment(self->page_entry, 0.9f);
+  gtk_entry_set_max_length(self->page_entry, 12);
+  gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), 3);
+  gtk_accessible_update_property(
+      GTK_ACCESSIBLE(self->page_entry), GTK_ACCESSIBLE_PROPERTY_LABEL,
+      "Select page", -1);
+  g_signal_connect(self->page_entry, "activate",
+                   G_CALLBACK(on_page_entry_activated), self);
+  GtkEventController *page_focus = gtk_event_controller_focus_new();
+  g_signal_connect(page_focus, "leave",
+                   G_CALLBACK(on_page_entry_focus_leave), self);
+  gtk_widget_add_controller(GTK_WIDGET(self->page_entry), page_focus);
+  GtkEventController *page_scroll = gtk_event_controller_scroll_new(
+      GTK_EVENT_CONTROLLER_SCROLL_VERTICAL |
+      GTK_EVENT_CONTROLLER_SCROLL_DISCRETE);
+  g_signal_connect(page_scroll, "scroll",
+                   G_CALLBACK(on_page_entry_scroll), self);
+  gtk_widget_add_controller(GTK_WIDGET(self->page_entry), page_scroll);
+  gtk_box_append(GTK_BOX(self->page_selector), GTK_WIDGET(self->page_entry));
+
+  self->page_count_label = GTK_LABEL(gtk_label_new("of 0"));
+  gtk_label_set_width_chars(self->page_count_label, 5);
+  gtk_widget_set_sensitive(GTK_WIDGET(self->page_count_label), FALSE);
+  gtk_box_append(GTK_BOX(self->page_selector),
+                 GTK_WIDGET(self->page_count_label));
+
   GMenu *menu = g_menu_new();
   self->file_menu_section = g_menu_new();
   g_menu_append_section(menu, NULL, G_MENU_MODEL(self->file_menu_section));
@@ -5745,6 +6006,7 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   gtk_menu_button_set_menu_model(self->menu_button, G_MENU_MODEL(menu));
   adw_header_bar_pack_end(self->header_bar, GTK_WIDGET(self->menu_button));
+  adw_header_bar_pack_end(self->header_bar, self->page_selector);
 
   g_object_unref(about_section);
   g_object_unref(menu);
@@ -5788,6 +6050,8 @@ static void pdfv_window_init(PdfvWindow *self) {
   /* Connect search signals */
   g_signal_connect(self->search_entry, "search-changed",
                    G_CALLBACK(on_search_changed), self);
+  g_signal_connect(self->search_entry, "activate",
+                   G_CALLBACK(on_search_next_match), self);
   g_signal_connect(self->search_entry, "next-match",
                    G_CALLBACK(on_search_next_match), self);
   g_signal_connect(self->search_entry, "previous-match",

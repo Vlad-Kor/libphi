@@ -27,6 +27,9 @@ void pdfv_settings_set_allow_remote_images(PdfvSettings *self,
 gboolean pdfv_settings_get_latex_conceal(PdfvSettings *self);
 void pdfv_settings_set_latex_conceal(PdfvSettings *self,
                                      gboolean enabled);
+gboolean pdfv_settings_get_pdf_inverted(PdfvSettings *self);
+void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
+                                    gboolean inverted);
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self);
 void pdfv_settings_set_latex_snippets(PdfvSettings *self,
                                       const gchar *snippets);

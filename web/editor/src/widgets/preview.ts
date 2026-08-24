@@ -11,6 +11,7 @@ import {
   wireRenderedContent,
 } from "../obsidian/markdown";
 import { remoteImagesAllowed } from "../settings";
+import { calloutIcon } from "../obsidian/callout-icons";
 
 let mermaidSequence = 0;
 interface MermaidApi {
@@ -84,6 +85,15 @@ export class BulletWidget extends WidgetType {
     bullet.textContent = "•";
     bullet.setAttribute("aria-hidden", "true");
     return bullet;
+  }
+}
+
+export class HorizontalRuleWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const rule = document.createElement("hr");
+    rule.className = "horizontal-rule-widget";
+    rule.setAttribute("aria-label", "Horizontal rule");
+    return rule;
   }
 }
 
@@ -536,7 +546,9 @@ export class CalloutWidget extends WidgetType {
     details.open = this.fold !== "-";
     const title = document.createElement("summary");
     title.className = "callout-title";
-    title.textContent = this.title || this.type.replace(/(^|-)(\p{L})/gu, (_m, prefix, letter) => `${prefix ? " " : ""}${letter.toUpperCase()}`);
+    const label = this.title || this.type.replace(/(^|-)(\p{L})/gu,
+      (_m, prefix, letter) => `${prefix ? " " : ""}${letter.toUpperCase()}`);
+    title.append(calloutIcon(this.type), document.createTextNode(label));
     const body = document.createElement("div");
     body.className = "callout-content";
     body.innerHTML = renderMarkdown(this.body);

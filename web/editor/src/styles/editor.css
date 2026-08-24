@@ -52,6 +52,11 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   margin-inline: 0 !important;
 }
 .cm-line { font-family: inherit; }
+.cm-line.cm-live-list-item {
+  box-sizing: border-box;
+  padding-inline-start: calc(2px + var(--phi-list-content-indent)) !important;
+  text-indent: calc(-1 * var(--phi-list-content-indent));
+}
 .cm-gutters { display: none; }
 .cm-activeLine, .cm-activeLineGutter { background: transparent !important; }
 .cm-selectionBackground, .cm-content ::selection { background: var(--editor-selection) !important; }
@@ -347,6 +352,14 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
 .cm-tooltip.math-preview-bubble .math-edit-preview { margin: 0; opacity: 1; }
 .cm-tooltip.math-preview-bubble .math-display { width: auto; padding: 0; }
 .list-bullet { display: inline-block; min-width: .85em; color: var(--editor-fg); font-weight: 700; }
+.horizontal-rule-widget {
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin: .8em 0;
+  border: 0;
+  background: var(--editor-border);
+}
 .task-checkbox { margin: 0 .4em 0 0; transform: translateY(3px); }
 .footnote-reference { border: 0; background: transparent; color: var(--editor-link); font-size: .72em; vertical-align: super; cursor: pointer; padding: 0 .12em; }
 .footnote-definition { display: grid; grid-template-columns: auto 1fr; gap: .55em; border-top: 1px solid var(--editor-border); color: var(--editor-muted); padding: .4em 0; font-size: .9em; }
@@ -366,7 +379,17 @@ pre code { padding: 0; background: transparent; }
 .callout[data-callout="warning"], .callout[data-callout="caution"], .callout[data-callout="attention"] { --callout-color: #e5a50a; }
 .callout[data-callout="danger"], .callout[data-callout="error"], .callout[data-callout="failure"] { --callout-color: #e01b24; }
 .callout[data-callout="success"], .callout[data-callout="check"], .callout[data-callout="done"] { --callout-color: #33d17a; }
-.callout-title { cursor: pointer; font-weight: 700; text-transform: capitalize; }
+.callout-title {
+  display: flex;
+  align-items: center;
+  gap: .45em;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+  text-transform: capitalize;
+}
+.callout-title::-webkit-details-marker { display: none; }
+.callout-icon { width: 1em; height: 1em; flex: 0 0 auto; color: var(--callout-color, var(--editor-accent)); }
 .callout-content > :last-child { margin-bottom: .2em; }
 .note-embed { display: block; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
 .embed-title { border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }

@@ -2,6 +2,7 @@ import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
 import footnote from "markdown-it-footnote";
 import taskLists from "markdown-it-task-lists";
+import { calloutIcon } from "./callout-icons";
 import Prism from "prismjs";
 import "prismjs/components/prism-bash";
 import "prismjs/components/prism-c";
@@ -232,7 +233,9 @@ function wireRenderedCallouts(root: HTMLElement): void {
     details.open = marker[2] !== "-";
     const summary = document.createElement("summary");
     summary.className = "callout-title";
-    summary.textContent = marker[3]?.trim() || calloutTitle(type);
+    summary.append(calloutIcon(type), document.createTextNode(
+      marker[3]?.trim() || calloutTitle(type),
+    ));
     const content = document.createElement("div");
     content.className = "callout-content";
     while (blockquote.firstChild) content.append(blockquote.firstChild);

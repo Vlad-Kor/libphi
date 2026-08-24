@@ -110,6 +110,8 @@ describe("rendering security", () => {
     );
     wireRenderedContent(root);
     expect(root.querySelectorAll("details.callout")).toHaveLength(2);
+    expect(root.querySelector('[data-callout="question"] [data-callout-icon="question"]')).not.toBeNull();
+    expect(root.querySelector('[data-callout="tip"] [data-callout-icon="tip"]')).not.toBeNull();
     expect(root.querySelector('[data-callout="tip"]')?.hasAttribute("open")).toBe(false);
     expect(root.querySelectorAll(".math-widget")).toHaveLength(1);
     expect(root.querySelector("[data-phi-raw-html]")?.textContent).toBe("$not-math$");

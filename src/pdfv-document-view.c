@@ -808,6 +808,7 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
                  PdfvDocumentView* self)
 {
     (void)gesture;
+    gtk_widget_grab_focus(GTK_WIDGET(self));
     
     /* Double-click: select word */
     if (n_press == 2) {
@@ -856,6 +857,66 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
             self->selection_end_page = -1;
             gtk_widget_queue_draw(GTK_WIDGET(self));
         }
+    }
+}
+
+static void
+scroll_adjustment(GtkAdjustment* adjustment, gdouble delta)
+{
+    if (!adjustment)
+        return;
+    gdouble lower = gtk_adjustment_get_lower(adjustment);
+    gdouble upper = gtk_adjustment_get_upper(adjustment) -
+        gtk_adjustment_get_page_size(adjustment);
+    gtk_adjustment_set_value(adjustment, CLAMP(
+        gtk_adjustment_get_value(adjustment) + delta, lower,
+        MAX(lower, upper)));
+}
+
+static gboolean
+on_key_pressed(GtkEventControllerKey* controller, guint keyval, guint keycode,
+               GdkModifierType state, PdfvDocumentView* self)
+{
+    (void)controller;
+    (void)keycode;
+    if (!self->document ||
+        (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK)))
+        return GDK_EVENT_PROPAGATE;
+
+    switch (keyval) {
+    case GDK_KEY_Up:
+    case GDK_KEY_KP_Up:
+        scroll_adjustment(self->vadjustment,
+                          -gtk_adjustment_get_step_increment(
+                              self->vadjustment));
+        return GDK_EVENT_STOP;
+    case GDK_KEY_Down:
+    case GDK_KEY_KP_Down:
+        scroll_adjustment(self->vadjustment,
+                          gtk_adjustment_get_step_increment(
+                              self->vadjustment));
+        return GDK_EVENT_STOP;
+    case GDK_KEY_Left:
+    case GDK_KEY_KP_Left:
+        scroll_adjustment(self->hadjustment,
+                          -gtk_adjustment_get_step_increment(
+                              self->hadjustment));
+        return GDK_EVENT_STOP;
+    case GDK_KEY_Right:
+    case GDK_KEY_KP_Right:
+        scroll_adjustment(self->hadjustment,
+                          gtk_adjustment_get_step_increment(
+                              self->hadjustment));
+        return GDK_EVENT_STOP;
+    case GDK_KEY_space: {
+        gdouble distance = gtk_adjustment_get_page_increment(
+            self->vadjustment);
+        scroll_adjustment(self->vadjustment,
+                          state & GDK_SHIFT_MASK ? -distance : distance);
+        return GDK_EVENT_STOP;
+    }
+    default:
+        return GDK_EVENT_PROPAGATE;
     }
 }
 
@@ -1527,6 +1588,11 @@ pdfv_document_view_init(PdfvDocumentView* self)
     g_signal_connect(self->motion_controller, "motion", G_CALLBACK(on_motion), self);
     g_signal_connect(self->motion_controller, "leave", G_CALLBACK(on_motion_leave), self);
     gtk_widget_add_controller(GTK_WIDGET(self), self->motion_controller);
+
+    GtkEventController* key_controller = gtk_event_controller_key_new();
+    g_signal_connect(key_controller, "key-pressed",
+        G_CALLBACK(on_key_pressed), self);
+    gtk_widget_add_controller(GTK_WIDGET(self), key_controller);
     
     gtk_widget_set_focusable(GTK_WIDGET(self), TRUE);
 }
