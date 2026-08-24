@@ -185,6 +185,15 @@ describe("CodeMirror document transactions", () => {
     };
     const parent = document.createElement("div");
     document.body.append(parent);
+    let attachmentRequest: { type: string; payload?: Record<string, unknown> } | undefined;
+    const captureRequest = (event: Event) => {
+      const message = (event as CustomEvent).detail as {
+        type: string;
+        payload?: Record<string, unknown>;
+      };
+      if (message.type === "attachment/resolve") attachmentRequest = message;
+    };
+    window.addEventListener("phi-native-message", captureRequest);
     const editor = new PhiMarkdownEditor(parent);
     views.push(editor.view);
     const text = `# Speech Processing
@@ -204,6 +213,11 @@ $$`;
       revision: 1,
       lineEnding: "LF",
     })).not.toThrow();
+    window.removeEventListener("phi-native-message", captureRequest);
+    expect(attachmentRequest?.payload).toMatchObject({
+      target: "Pasted image.png",
+      relative: true,
+    });
     expect(parent.querySelectorAll(".list-bullet").length).toBeGreaterThanOrEqual(3);
     const image = parent.querySelector<HTMLElement>(".image-widget");
     expect(image).not.toBeNull();

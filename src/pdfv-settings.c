@@ -15,6 +15,7 @@ struct _PdfvSettings {
   gboolean allow_remote_images;
   gboolean latex_conceal;
   gboolean pdf_inverted;
+  gboolean fullscreen_single_page;
   gchar *latex_snippets;
   GKeyFile *file;
 };
@@ -39,6 +40,7 @@ PdfvSettings *pdfv_settings_new(void) {
   PdfvSettings *self = g_new0(PdfvSettings, 1);
   self->markdown_font_scale = 1.0;
   self->readable_line_width = TRUE;
+  self->fullscreen_single_page = TRUE;
   self->latex_snippets = g_strdup("");
   self->file = g_key_file_new();
 
@@ -68,6 +70,11 @@ PdfvSettings *pdfv_settings_new(void) {
         self->file, SETTINGS_GROUP, "pdf-inverted", &error);
     if (!error)
       self->pdf_inverted = inverted;
+    g_clear_error(&error);
+    gboolean fullscreen_single_page = g_key_file_get_boolean(
+        self->file, SETTINGS_GROUP, "fullscreen-single-page", &error);
+    if (!error)
+      self->fullscreen_single_page = fullscreen_single_page;
     g_clear_error(&error);
     gchar *snippets = g_key_file_get_string(self->file, SETTINGS_GROUP,
                                              "latex-snippets", NULL);
@@ -100,6 +107,9 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
                          self->latex_conceal);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "pdf-inverted",
                          self->pdf_inverted);
+  g_key_file_set_boolean(self->file, SETTINGS_GROUP,
+                         "fullscreen-single-page",
+                         self->fullscreen_single_page);
   g_key_file_set_string(self->file, SETTINGS_GROUP, "latex-snippets",
                         self->latex_snippets);
   gsize length = 0;
@@ -171,6 +181,17 @@ void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
                                     gboolean inverted) {
   g_return_if_fail(self != NULL);
   self->pdf_inverted = inverted;
+}
+
+gboolean pdfv_settings_get_fullscreen_single_page(PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, TRUE);
+  return self->fullscreen_single_page;
+}
+
+void pdfv_settings_set_fullscreen_single_page(PdfvSettings *self,
+                                              gboolean enabled) {
+  g_return_if_fail(self != NULL);
+  self->fullscreen_single_page = enabled;
 }
 
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self) {
@@ -309,6 +330,7 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->allow_remote_images = source->allow_remote_images;
   destination->latex_conceal = source->latex_conceal;
   destination->pdf_inverted = source->pdf_inverted;
+  destination->fullscreen_single_page = source->fullscreen_single_page;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   gsize length = 0;
   gchar *data = g_key_file_to_data(source->file, &length, NULL);

@@ -15,6 +15,7 @@ typedef struct {
   GFile *root;
   GFile *overview;
   GFile *nested;
+  GFile *relative_assets;
   GFile *assets;
   PdfvMarkdownVaultAdapter *vault;
 } VaultFixture;
@@ -52,6 +53,19 @@ static void vault_fixture_setup(VaultFixture *fixture, gconstpointer data) {
   g_free(other_path);
   g_object_unref(other);
 
+  fixture->relative_assets = g_file_get_child(fixture->nested, "Images");
+  g_assert_true(g_file_make_directory(fixture->relative_assets, NULL,
+                                      &error));
+  g_assert_no_error(error);
+  GFile *relative_image = g_file_get_child(
+      fixture->relative_assets, "Relative image.png");
+  gchar *relative_image_path = g_file_get_path(relative_image);
+  g_assert_true(g_file_set_contents(relative_image_path, "relative-image",
+                                    -1, &error));
+  g_assert_no_error(error);
+  g_free(relative_image_path);
+  g_object_unref(relative_image);
+
   fixture->assets = g_file_get_child(fixture->root, "~Images");
   g_assert_true(g_file_make_directory(fixture->assets, NULL, &error));
   g_assert_no_error(error);
@@ -72,11 +86,17 @@ static void vault_fixture_teardown(VaultFixture *fixture,
   GError *error = NULL;
   GFile *other = g_file_get_child(fixture->nested, "Other.md");
   GFile *image = g_file_get_child(fixture->assets, "Diagram.png");
+  GFile *relative_image = g_file_get_child(
+      fixture->relative_assets, "Relative image.png");
   g_assert_true(g_file_delete(image, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(fixture->assets, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(other, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(relative_image, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(fixture->relative_assets, NULL, &error));
   g_assert_no_error(error);
   g_assert_true(g_file_delete(fixture->overview, NULL, &error));
   g_assert_no_error(error);
@@ -86,8 +106,10 @@ static void vault_fixture_teardown(VaultFixture *fixture,
   g_assert_no_error(error);
   g_object_unref(other);
   g_object_unref(image);
+  g_object_unref(relative_image);
   g_object_unref(fixture->vault);
   g_object_unref(fixture->nested);
+  g_object_unref(fixture->relative_assets);
   g_object_unref(fixture->assets);
   g_object_unref(fixture->overview);
   g_object_unref(fixture->root);
@@ -202,6 +224,27 @@ static void test_note_metadata(VaultFixture *fixture, gconstpointer data) {
   g_assert_no_error(error);
   g_assert_nonnull(image);
   g_object_unref(image);
+
+  image = pdfv_markdown_vault_adapter_resolve_attachment(
+      fixture->vault, "Nested/Other.md", "Images/Relative image.png", TRUE,
+      &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(image);
+  relative = pdfv_markdown_vault_adapter_relative_path(fixture->vault, image);
+  g_assert_cmpstr(relative, ==, "Nested/Images/Relative image.png");
+  g_free(relative);
+  g_object_unref(image);
+
+  /* Opening a note without a workspace roots the adapter beside that note.
+   * The same relative request must still resolve its sibling image folder. */
+  PdfvMarkdownVaultAdapter *standalone =
+      pdfv_markdown_vault_adapter_new(fixture->nested);
+  image = pdfv_markdown_vault_adapter_resolve_attachment(
+      standalone, "Other.md", "Images/Relative image.png", TRUE, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(image);
+  g_object_unref(image);
+  g_object_unref(standalone);
 }
 
 static void test_byte_preserving_read(VaultFixture *fixture,

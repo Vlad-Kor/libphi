@@ -134,6 +134,10 @@ struct _PdfvWindow {
   gboolean fullscreen_chrome_active;
   gboolean fullscreen_sidebar_was_visible;
   guint fullscreen_hide_timeout_id;
+  PdfvDocumentView *fullscreen_document_view;
+  gboolean fullscreen_document_was_continuous;
+  gdouble fullscreen_document_zoom;
+  guint fullscreen_fit_generation;
 
   /* One initialized editor removes WebKit/CodeMirror startup from the next
    * new Markdown tab without retaining a document or its contents. */
@@ -166,6 +170,10 @@ static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file);
 static void workspace_search_close(PdfvWindow *self, gboolean commit);
 static void workspace_search_schedule(PdfvWindow *self, guint delay_ms);
 static void workspace_preview_cancel_load(PdfvWindow *self);
+static void fullscreen_schedule_fit_page(PdfvWindow *self,
+                                         PdfvDocumentView *view);
+static void fullscreen_refresh_document_mode(PdfvWindow *self);
+static void fullscreen_restore_document_mode(PdfvWindow *self);
 static void on_markdown_error(PdfvMarkdownEditor *editor,
                               const gchar *message, PdfvWindow *self);
 static void on_markdown_ready(PdfvMarkdownEditor *editor, PdfvWindow *self);
@@ -272,6 +280,8 @@ static void apply_markdown_preferences(PdfvWindow *self) {
         g_variant_new_boolean(
             pdfv_settings_get_allow_remote_images(self->settings)));
   apply_pdf_preferences(self);
+  if (self->fullscreen_chrome_active)
+    fullscreen_refresh_document_mode(self);
 }
 
 static void propagate_markdown_preferences(PdfvWindow *source) {
@@ -354,9 +364,11 @@ static void update_page_selector(PdfvWindow *self) {
 
   gchar total_text[32];
   g_snprintf(total_text, sizeof(total_text), "%d", pages);
-  gint page_chars = MAX(3, (gint)strlen(total_text));
+  gint page_chars = MAX(1, (gint)strlen(total_text));
   gint count_chars = MAX(5, (gint)strlen(count_text));
   gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), page_chars);
+  gtk_editable_set_max_width_chars(GTK_EDITABLE(self->page_entry),
+                                   page_chars);
   gtk_label_set_width_chars(self->page_count_label, count_chars);
   g_free(count_text);
   g_free(page_text);
@@ -501,6 +513,8 @@ static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
   } else if (g_strcmp0(name, "current-page") == 0 &&
              view == self->current_view) {
     update_page_selector(self);
+    if (view == self->fullscreen_document_view)
+      fullscreen_schedule_fit_page(self, view);
   }
 }
 
@@ -2795,6 +2809,8 @@ static gboolean finish_document_load_idle(gpointer user_data) {
 
     if (adw_tab_view_get_selected_page(self->tab_view) == request->page) {
       self->current_view = view;
+      if (self->fullscreen_chrome_active)
+        fullscreen_refresh_document_mode(self);
       populate_thumbnails(self, document);
       update_navigation_buttons(self);
       update_zoom_info(self);
@@ -3082,6 +3098,8 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
   if (!page) {
     self->current_view = NULL;
     self->current_editor = NULL;
+    if (self->fullscreen_chrome_active)
+      fullscreen_refresh_document_mode(self);
     update_navigation_buttons(self);
     update_zoom_info(self);
     update_sidebar_button(self);
@@ -3098,6 +3116,8 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
       g_object_get_data(G_OBJECT(stack), "markdown-editor");
   if (self->current_editor)
     self->current_view = NULL;
+  if (self->fullscreen_chrome_active)
+    fullscreen_refresh_document_mode(self);
 
   update_navigation_buttons(self);
   update_zoom_info(self);
@@ -4904,6 +4924,14 @@ static void on_preferences_remote_changed(AdwSwitchRow *row,
   schedule_preferences_update(self, 80);
 }
 
+static void on_preferences_fullscreen_single_page_changed(
+    AdwSwitchRow *row, GParamSpec *pspec, PdfvWindow *self) {
+  (void)pspec;
+  pdfv_settings_set_fullscreen_single_page(
+      self->settings, adw_switch_row_get_active(row));
+  schedule_preferences_update(self, 40);
+}
+
 static void on_preferences_latex_conceal_changed(AdwSwitchRow *row,
                                                  GParamSpec *pspec,
                                                  PdfvWindow *self) {
@@ -5152,6 +5180,25 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   g_signal_connect_object(remote, "notify::active",
                           G_CALLBACK(on_preferences_remote_changed), self, 0);
 
+  AdwPreferencesGroup *pdf = ADW_PREFERENCES_GROUP(
+      adw_preferences_group_new());
+  adw_preferences_group_set_title(pdf, "PDF viewing");
+  adw_preferences_page_add(page, pdf);
+
+  AdwSwitchRow *fullscreen_page = ADW_SWITCH_ROW(adw_switch_row_new());
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(fullscreen_page),
+                                "Single page in fullscreen");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(fullscreen_page),
+      "Fit only the current page to the fullscreen window");
+  adw_switch_row_set_active(
+      fullscreen_page,
+      pdfv_settings_get_fullscreen_single_page(self->settings));
+  adw_preferences_group_add(pdf, GTK_WIDGET(fullscreen_page));
+  g_signal_connect_object(
+      fullscreen_page, "notify::active",
+      G_CALLBACK(on_preferences_fullscreen_single_page_changed), self, 0);
+
   AdwPreferencesGroup *attachments = ADW_PREFERENCES_GROUP(
       adw_preferences_group_new());
   adw_preferences_group_set_title(attachments, "Pasted images");
@@ -5336,6 +5383,70 @@ static void action_zoom_fit_page(GSimpleAction *action, GVariant *parameter,
     pdfv_document_view_zoom_fit_page(self->current_view);
 }
 
+typedef struct {
+  guint generation;
+  guint settled_frames;
+} FullscreenFitRequest;
+
+static gboolean fullscreen_fit_page_after_allocate(
+    GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data) {
+  (void)frame_clock;
+  FullscreenFitRequest *request = user_data;
+  guint generation = GPOINTER_TO_UINT(g_object_get_data(
+      G_OBJECT(widget), "fullscreen-fit-generation"));
+  if (generation != request->generation)
+    return G_SOURCE_REMOVE;
+  if (!gtk_widget_get_mapped(widget) || gtk_widget_get_width(widget) <= 1 ||
+      gtk_widget_get_height(widget) <= 1)
+    return G_SOURCE_CONTINUE;
+  if (request->settled_frames++ == 0)
+    return G_SOURCE_CONTINUE;
+  pdfv_document_view_zoom_fit_page(PDFV_DOCUMENT_VIEW(widget));
+  return G_SOURCE_REMOVE;
+}
+
+static void fullscreen_schedule_fit_page(PdfvWindow *self,
+                                         PdfvDocumentView *view) {
+  if (!view || view != self->fullscreen_document_view)
+    return;
+  FullscreenFitRequest *request = g_new0(FullscreenFitRequest, 1);
+  request->generation = ++self->fullscreen_fit_generation;
+  g_object_set_data(G_OBJECT(view), "fullscreen-fit-generation",
+                    GUINT_TO_POINTER(request->generation));
+  gtk_widget_add_tick_callback(GTK_WIDGET(view),
+                               fullscreen_fit_page_after_allocate,
+                               request, g_free);
+}
+
+static void fullscreen_restore_document_mode(PdfvWindow *self) {
+  if (!self->fullscreen_document_view)
+    return;
+  PdfvDocumentView *view = self->fullscreen_document_view;
+  g_object_set_data(G_OBJECT(view), "fullscreen-fit-generation",
+                    GUINT_TO_POINTER(++self->fullscreen_fit_generation));
+  pdfv_document_view_set_continuous(
+      view, self->fullscreen_document_was_continuous);
+  pdfv_document_view_set_zoom(view, self->fullscreen_document_zoom);
+  g_clear_object(&self->fullscreen_document_view);
+}
+
+static void fullscreen_refresh_document_mode(PdfvWindow *self) {
+  fullscreen_restore_document_mode(self);
+  if (!self->fullscreen_chrome_active ||
+      !pdfv_settings_get_fullscreen_single_page(self->settings) ||
+      !self->current_view ||
+      !pdfv_document_view_get_document(self->current_view))
+    return;
+
+  self->fullscreen_document_view = g_object_ref(self->current_view);
+  self->fullscreen_document_was_continuous =
+      pdfv_document_view_get_continuous(self->current_view);
+  self->fullscreen_document_zoom =
+      pdfv_document_view_get_zoom(self->current_view);
+  pdfv_document_view_set_continuous(self->current_view, FALSE);
+  fullscreen_schedule_fit_page(self, self->current_view);
+}
+
 static gboolean fullscreen_top_bar_has_focus(PdfvWindow *self) {
   GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(self));
   return focus &&
@@ -5416,10 +5527,12 @@ static void set_fullscreen_chrome(PdfvWindow *self, gboolean fullscreen) {
     adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, TRUE);
     adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, FALSE);
     gtk_widget_set_visible(self->zoom_box, FALSE);
+    fullscreen_refresh_document_mode(self);
     return;
   }
 
   fullscreen_cancel_hide(self);
+  fullscreen_restore_document_mode(self);
   adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, TRUE);
   adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, FALSE);
   adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_FLAT);
@@ -5747,6 +5860,12 @@ static void pdfv_window_dispose(GObject *object) {
     self->settings_update_timeout_id = 0;
   }
   fullscreen_cancel_hide(self);
+  if (self->fullscreen_document_view) {
+    g_object_set_data(G_OBJECT(self->fullscreen_document_view),
+                      "fullscreen-fit-generation",
+                      GUINT_TO_POINTER(++self->fullscreen_fit_generation));
+    g_clear_object(&self->fullscreen_document_view);
+  }
   if (self->workspace_search_debounce_id) {
     g_source_remove(self->workspace_search_debounce_id);
     self->workspace_search_debounce_id = 0;
@@ -5954,6 +6073,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   /* Match Papers' compact, editable "page of total" selector. */
   self->page_selector = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_widget_add_css_class(self->page_selector, "numeric");
+  gtk_widget_add_css_class(self->page_selector, "pdfv-page-selector");
   gtk_widget_set_tooltip_text(self->page_selector, "Page Count");
   gtk_widget_set_visible(self->page_selector, FALSE);
 
@@ -5961,7 +6081,9 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_widget_set_direction(GTK_WIDGET(self->page_entry), GTK_TEXT_DIR_LTR);
   gtk_entry_set_alignment(self->page_entry, 0.9f);
   gtk_entry_set_max_length(self->page_entry, 12);
-  gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), 3);
+  gtk_editable_set_width_chars(GTK_EDITABLE(self->page_entry), 1);
+  gtk_editable_set_max_width_chars(GTK_EDITABLE(self->page_entry), 1);
+  gtk_widget_set_hexpand(GTK_WIDGET(self->page_entry), FALSE);
   gtk_accessible_update_property(
       GTK_ACCESSIBLE(self->page_entry), GTK_ACCESSIBLE_PROPERTY_LABEL,
       "Select page", -1);
@@ -6006,7 +6128,6 @@ static void pdfv_window_init(PdfvWindow *self) {
 
   gtk_menu_button_set_menu_model(self->menu_button, G_MENU_MODEL(menu));
   adw_header_bar_pack_end(self->header_bar, GTK_WIDGET(self->menu_button));
-  adw_header_bar_pack_end(self->header_bar, self->page_selector);
 
   g_object_unref(about_section);
   g_object_unref(menu);
@@ -6252,6 +6373,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   g_signal_connect(tab_overview_btn, "clicked",
                    G_CALLBACK(on_tab_overview_button_clicked), self);
   adw_header_bar_pack_end(self->header_bar, tab_overview_btn);
+  adw_header_bar_pack_end(self->header_bar, self->page_selector);
 
   g_signal_connect(self->tab_view, "notify::selected-page",
                    G_CALLBACK(on_tab_selected), self);
@@ -6343,6 +6465,11 @@ static void pdfv_window_init(PdfvWindow *self) {
       "}"
       ".pdfv-split-view > .sidebar-pane {"
       "  box-shadow: none;"
+      "}"
+      ".pdfv-page-selector entry {"
+      "  min-width: 0;"
+      "  padding-left: 6px;"
+      "  padding-right: 6px;"
       "}"
       ".workspace-search-results {"
       "  background-color: alpha(@window_fg_color, 0.025);"

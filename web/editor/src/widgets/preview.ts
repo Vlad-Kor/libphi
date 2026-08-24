@@ -276,7 +276,10 @@ export class LinkWidget extends WidgetType {
         if (size[2]) image.height = Number(size[2]);
       }
       image.classList.add("dimmed");
-      requestNative<{ path?: string }>("attachment/resolve", { target: path })
+      requestNative<{ path?: string }>("attachment/resolve", {
+        target: path,
+        relative: true,
+      })
         .then((result) => {
           if (!result.path) throw new Error("Image was not found in the vault");
           image.src = vaultUri(result.path);
