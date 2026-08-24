@@ -102,6 +102,16 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	const char* developers[] = { "Vlad Korsakov", NULL };
 	const char* acknowledgements[] = {
 		"artisticat1 and the Obsidian LaTeX Suite contributors",
+		"Karl Yngve Lervåg and the VimTeX contributors",
+		NULL,
+	};
+	const char* technology_acknowledgements[] = {
+		"Artifex Software and the MuPDF contributors",
+		"The MathJax Consortium and contributors",
+		"Knut Sveidqvist and the Mermaid contributors",
+		"Marijn Haverbeke and the CodeMirror and Lezer contributors",
+		"The Independent JPEG Group",
+		"The authors of the bundled Markdown editor dependencies",
 		NULL,
 	};
 	AdwAboutDialog* about = ADW_ABOUT_DIALOG(adw_about_dialog_new());
@@ -109,6 +119,10 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	adw_about_dialog_set_application_icon(about, "ai.korsakov.Phi");
 	adw_about_dialog_set_version(about, "0.1");
 	adw_about_dialog_set_developers(about, developers);
+	adw_about_dialog_set_copyright(
+		about,
+		"Copyright © 2026 Vlad Korsakov\n"
+		"libphi Copyright © 2025 Florian \"sp1rit\"");
 	adw_about_dialog_set_license_type(about, GTK_LICENSE_AGPL_3_0);
 	adw_about_dialog_set_comments(
 		about,
@@ -119,9 +133,25 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 		"https://github.com/artisticat1/obsidian-latex-suite");
 	adw_about_dialog_add_acknowledgement_section(
 		about, "LaTeX snippet defaults", acknowledgements);
+	adw_about_dialog_add_acknowledgement_section(
+		about, "Third-party technology", technology_acknowledgements);
 	adw_about_dialog_add_legal_section(
 		about, "Obsidian LaTeX Suite snippet defaults",
 		"Copyright © 2022 artisticat1", GTK_LICENSE_MIT_X11, NULL);
+	adw_about_dialog_add_legal_section(
+		about, "VimTeX-derived conceal mappings",
+		"Copyright © 2025 Karl Yngve Lervåg", GTK_LICENSE_MIT_X11,
+		NULL);
+	adw_about_dialog_add_legal_section(
+		about, "Mermaid", "Copyright © 2014–2022 Knut Sveidqvist",
+		GTK_LICENSE_MIT_X11, NULL);
+	adw_about_dialog_add_legal_section(
+		about, "CodeMirror",
+		"Copyright © 2018–2021 Marijn Haverbeke and others",
+		GTK_LICENSE_MIT_X11, NULL);
+	adw_about_dialog_add_legal_section(
+		about, "MathJax", "The MathJax Consortium and contributors",
+		GTK_LICENSE_APACHE_2_0, NULL);
 	adw_dialog_present(ADW_DIALOG(about), GTK_WIDGET(window));
 }
 

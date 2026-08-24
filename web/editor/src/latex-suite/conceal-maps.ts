@@ -1,23 +1,19 @@
 /*
- * LaTeX conceal mappings adapted from Obsidian LaTeX Suite.
- * Upstream: https://github.com/artisticat1/obsidian-latex-suite
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * LaTeX conceal mappings adapted and modified for Phi in 2026.
+ *
+ * Portions are derived from Obsidian LaTeX Suite and VimTeX under the MIT
+ * License, and from MathJax under the Apache License 2.0. Their upstream
+ * locations and full license texts are listed in THIRD_PARTY_LICENSES.txt,
+ * which is distributed with the editor assets.
+ *
+ * Source material:
+ * - https://github.com/artisticat1/obsidian-latex-suite
+ * - https://github.com/lervag/vimtex/blob/master/autoload/vimtex/syntax/core.vim
+ * - https://github.com/mathjax/MathJax-src/tree/master/ts/input/tex
+ *
+ * Phi adaptations Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-// Taken from vimtex
-// https://github.com/lervag/vimtex/blob/master/autoload/vimtex/syntax/core.vim
-//
-// Taken from Mathjax, specifically the following files:
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/ams/AmsMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/amscd/AmsCdMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/base/BaseMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/braket/BraketMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/bussproofs/BussproofsMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/physics/PhysicsMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/textcomp/TextcompMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/mathtools/MathtoolsMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/textmacros/TextMacrosMappings.ts
-// https://github.com/mathjax/MathJax-src/blob/master/ts/input/tex/newcommand/NewcommandMappings.ts
-
 
 export const cmd_symbols:{[name:string]: string} =
 {
@@ -1212,4 +1208,3 @@ export const mathfrak = {
 	"Y": "𝔜",
 	"Z": "ℨ",
 }
-

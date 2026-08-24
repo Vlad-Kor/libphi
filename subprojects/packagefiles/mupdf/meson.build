@@ -10,6 +10,38 @@ project('mupdf', 'c', 'cpp',
 )
 version_split = meson.project_version().split('.')
 
+# These files accompany the optional bundled fallback. A system MuPDF is
+# preferred by Phi and remains the system distributor's responsibility.
+mupdf_license_dir = get_option('datadir') / 'doc' / 'phi' / 'licenses' / 'mupdf'
+install_data('COPYING',
+	rename: 'mupdf-AGPL-3.0.txt',
+	install_dir: mupdf_license_dir)
+
+mupdf_license_files = {
+	'thirdparty/brotli/LICENSE': 'brotli-LICENSE.txt',
+	'thirdparty/extract/COPYING': 'extract-COPYING.txt',
+	'thirdparty/freetype/LICENSE.TXT': 'freetype-LICENSE.txt',
+	'thirdparty/gumbo-parser/COPYING': 'gumbo-parser-COPYING.txt',
+	'thirdparty/harfbuzz/COPYING': 'harfbuzz-COPYING.txt',
+	'thirdparty/jbig2dec/COPYING': 'jbig2dec-COPYING.txt',
+	'thirdparty/jbig2dec/LICENSE': 'jbig2dec-LICENSE.txt',
+	'thirdparty/lcms2/LICENSE': 'lcms2-LICENSE.txt',
+	'thirdparty/libjpeg/README': 'libjpeg-README-and-LICENSE.txt',
+	'thirdparty/mujs/COPYING': 'mujs-COPYING.txt',
+	'thirdparty/openjpeg/LICENSE': 'openjpeg-LICENSE.txt',
+	'thirdparty/zlib/LICENSE': 'zlib-LICENSE.txt',
+	'resources/fonts/han/LICENSE.txt': 'source-han-serif-OFL.txt',
+	'resources/fonts/han/README.txt': 'source-han-serif-README.txt',
+	'resources/fonts/noto/COPYING': 'noto-OFL.txt',
+	'resources/fonts/sil/OFL.txt': 'charis-sil-OFL.txt',
+	'resources/fonts/urw/OFL.txt': 'urw-base35-OFL.txt',
+}
+foreach source_path, installed_name : mupdf_license_files
+	install_data(source_path,
+		rename: installed_name,
+		install_dir: mupdf_license_dir)
+endforeach
+
 hexdump_gen = generator(find_program('bash'),
 	arguments: [meson.current_source_dir() / 'scripts' / 'hexdump.sh', '@INPUT@'],
 	capture: true,
