@@ -18,8 +18,9 @@
 
 #include "phi/phidocumentprivate.h"
 
-#include "phi/phipageprivate.h"
 #include "phi/phigiostreamprivate.h"
+#include "phi/phinodedeviceprivate.h"
+#include "phi/phipageprivate.h"
 
 static void phi_document_list_model_iface_init(GListModelInterface *iface);
 G_DEFINE_FINAL_TYPE_WITH_CODE(PhiDocument, phi_document, G_TYPE_OBJECT,
@@ -28,6 +29,10 @@ G_DEFINE_FINAL_TYPE_WITH_CODE(PhiDocument, phi_document, G_TYPE_OBJECT,
 
 static void phi_document_object_finalize(GObject* object) {
 	PhiDocument* self = PHI_DOCUMENT(object);
+	if (self->render_document)
+		fz_drop_document(self->render_ctx, self->render_document);
+	if (self->render_ctx)
+		fz_drop_context(self->render_ctx);
 	if (self->thumbnail_document)
 		fz_drop_document(self->thumbnail_ctx, self->thumbnail_document);
 	if (self->thumbnail_ctx)
@@ -37,6 +42,8 @@ static void phi_document_object_finalize(GObject* object) {
 	if (self->ctx)
 		fz_drop_context(self->ctx);
 	g_clear_object(&self->source_file);
+	g_clear_pointer(&self->source_magic, g_free);
+	g_mutex_clear(&self->render_lock);
 	g_mutex_clear(&self->thumbnail_lock);
 	for (gsize i = 0; i < G_N_ELEMENTS(self->ctx_locks); i++)
 		g_mutex_clear(&self->ctx_locks[i]);
@@ -68,12 +75,16 @@ static void phi_document_init(PhiDocument* self) {
 	for (gsize i = 0; i < G_N_ELEMENTS(self->ctx_locks); i++)
 		g_mutex_init(&self->ctx_locks[i]);
 	g_mutex_init(&self->thumbnail_lock);
+	g_mutex_init(&self->render_lock);
 	
 	self->ctx = NULL;
 	self->document = NULL;
 	self->source_file = NULL;
+	self->source_magic = NULL;
 	self->thumbnail_ctx = NULL;
 	self->thumbnail_document = NULL;
+	self->render_ctx = NULL;
+	self->render_document = NULL;
 	self->n_pages = 0;
 	self->pages = NULL;
 }
@@ -183,8 +194,10 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
 		return NULL;
 
 	PhiDocument* ret = phi_document_new_from_stream(G_INPUT_STREAM(stream), content_type, error);
-	if (ret)
+	if (ret) {
 		ret->source_file = g_object_ref(file);
+		ret->source_magic = g_strdup(content_type);
+	}
 
 	g_object_unref(stream);
 	if (info)
@@ -360,6 +373,135 @@ unlock:
 	g_mutex_unlock(&self->thumbnail_lock);
 	g_free(path);
 	return surface;
+}
+
+static gboolean phi_document_ensure_render_document(PhiDocument* self,
+		GCancellable* cancellable, GError** error) {
+	if (self->render_document)
+		return TRUE;
+	if (!self->source_file) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+			"Background page rendering requires a file-backed document");
+		return FALSE;
+	}
+
+	/* Image nodes retain cloned contexts until their immutable texture bytes
+	 * are released, potentially on the GTK thread. MuPDF requires real lock
+	 * callbacks whenever a context may be cloned or used across threads. */
+	fz_locks_context locks = {
+		.user = self,
+		.lock = phi_document_ctx_lock_lock,
+		.unlock = phi_document_ctx_lock_unlock
+	};
+	self->render_ctx = fz_new_context(NULL, &locks, FZ_STORE_DEFAULT);
+	if (!self->render_ctx) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+			"Could not create MuPDF page-rendering context");
+		return FALSE;
+	}
+	fz_register_document_handlers(self->render_ctx);
+	fz_set_error_callback(self->render_ctx, phi_document_error_handler, NULL);
+	fz_set_warning_callback(self->render_ctx, phi_document_warn_handler, NULL);
+
+	gchar* path = g_file_get_path(self->source_file);
+	GFileInputStream* input = NULL;
+	fz_stream* wrapped = NULL;
+	if (!path) {
+		input = g_file_read(self->source_file, cancellable, error);
+		if (!input)
+			goto fail;
+	}
+
+	fz_try(self->render_ctx) {
+		if (path) {
+			self->render_document = fz_open_document(self->render_ctx, path);
+		} else {
+			wrapped = phi_gio_stream_wrap(self->render_ctx,
+				G_INPUT_STREAM(input));
+			self->render_document = fz_open_document_with_stream(
+				self->render_ctx, self->source_magic, wrapped);
+		}
+	} fz_always(self->render_ctx) {
+		if (wrapped)
+			fz_drop_stream(self->render_ctx, wrapped);
+	} fz_catch(self->render_ctx) {
+		g_set_error_literal(error, PHI_MU_ERROR,
+			fz_caught(self->render_ctx),
+			fz_caught_message(self->render_ctx));
+	}
+
+	g_clear_object(&input);
+	g_clear_pointer(&path, g_free);
+	if (self->render_document)
+		return TRUE;
+
+fail:
+	g_clear_object(&input);
+	g_clear_pointer(&path, g_free);
+	if (self->render_ctx) {
+		fz_drop_context(self->render_ctx);
+		self->render_ctx = NULL;
+	}
+	return FALSE;
+}
+
+static void phi_document_cancel_render_cookie(GCancellable* cancellable,
+		gpointer user_data) {
+	(void)cancellable;
+	fz_cookie* cookie = user_data;
+	cookie->abort = 1;
+}
+
+GskRenderNode* phi_document_render_page_node(PhiDocument* self, gint pageno,
+		GCancellable* cancellable, GError** error) {
+	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
+	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
+
+	GskRenderNode* node = NULL;
+	fz_page* page = NULL;
+	fz_device* device = NULL;
+	fz_cookie cookie = {0};
+	gulong cancelled_handler = 0;
+
+	g_mutex_lock(&self->render_lock);
+	if ((cancellable &&
+		 g_cancellable_set_error_if_cancelled(cancellable, error)) ||
+		!phi_document_ensure_render_document(self, cancellable, error))
+		goto unlock;
+
+	if (cancellable)
+		cancelled_handler = g_cancellable_connect(
+			cancellable, G_CALLBACK(phi_document_cancel_render_cookie),
+			&cookie, NULL);
+
+	fz_try(self->render_ctx) {
+		page = fz_load_page(self->render_ctx, self->render_document, pageno);
+		device = phi_node_device_new(self->render_ctx, G_OBJECT(self));
+		fz_run_page(self->render_ctx, page, device, fz_identity, &cookie);
+		if (!cancellable || !g_cancellable_is_cancelled(cancellable))
+			node = phi_node_device_pop_root(device);
+	} fz_always(self->render_ctx) {
+		if (device)
+			fz_drop_device(self->render_ctx, device);
+		if (page)
+			fz_drop_page(self->render_ctx, page);
+	} fz_catch(self->render_ctx) {
+		if (!cancellable || !g_cancellable_is_cancelled(cancellable))
+			g_set_error_literal(error, PHI_MU_ERROR,
+				fz_caught(self->render_ctx),
+				fz_caught_message(self->render_ctx));
+	}
+
+	if (cancelled_handler)
+		g_cancellable_disconnect(cancellable, cancelled_handler);
+	if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+		g_clear_pointer(&node, gsk_render_node_unref);
+		g_cancellable_set_error_if_cancelled(cancellable, error);
+	}
+
+unlock:
+	g_mutex_unlock(&self->render_lock);
+	return node;
 }
 
 static PhiOutlineItem* phi_outline_convert(fz_context* ctx, fz_outline* outline) {

@@ -63,6 +63,12 @@ gchar* phi_document_dup_metadata(PhiDocument* self,
 cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 	gint max_width, gint max_height, GError** error);
 
+/* Build an immutable page scene graph using a file-backed MuPDF context that
+ * is independent from the document's interactive context. This function is
+ * safe to call from a worker thread; calls for one document are serialized. */
+GskRenderNode* phi_document_render_page_node(PhiDocument* self, gint pageno,
+	GCancellable* cancellable, GError** error);
+
 /* Outline (Table of Contents) */
 typedef struct _PhiOutlineItem PhiOutlineItem;
 struct _PhiOutlineItem {

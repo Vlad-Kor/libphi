@@ -36,8 +36,14 @@ struct _PhiDocument {
 	/* Independent, serialized renderer used only by the thumbnail worker. */
 	GMutex thumbnail_lock;
 	GFile* source_file;
+	gchar* source_magic;
 	fz_context* thumbnail_ctx;
 	fz_document* thumbnail_document;
+
+	/* Independent renderer for asynchronous full-page scene graphs. */
+	GMutex render_lock;
+	fz_context* render_ctx;
+	fz_document* render_document;
 	
 	gint n_pages;
 	PhiPage** pages;
