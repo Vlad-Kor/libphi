@@ -54,9 +54,34 @@ static void test_internal_link_history(void) {
   g_object_unref(document);
 }
 
+static void test_presentation_zoom_floor(void) {
+  PhiDocument *document = open_fixture();
+  PdfvDocumentView *view = pdfv_document_view_new();
+  g_object_ref_sink(view);
+  pdfv_document_view_set_document(view, document);
+
+  g_assert_cmpfloat_with_epsilon(
+      pdfv_document_view_get_minimum_zoom(view), 0.1, 0.001);
+  pdfv_document_view_set_minimum_zoom(view, 1.5);
+  g_assert_cmpfloat_with_epsilon(pdfv_document_view_get_zoom(view), 1.5,
+                                 0.001);
+  pdfv_document_view_zoom_out(view);
+  g_assert_cmpfloat_with_epsilon(pdfv_document_view_get_zoom(view), 1.5,
+                                 0.001);
+
+  pdfv_document_view_set_minimum_zoom(view, 0.1);
+  pdfv_document_view_zoom_out(view);
+  g_assert_cmpfloat(pdfv_document_view_get_zoom(view), <, 1.5);
+
+  g_object_unref(view);
+  g_object_unref(document);
+}
+
 int main(int argc, char **argv) {
   gtk_test_init(&argc, &argv, NULL);
   g_test_add_func("/document-view/internal-link-history",
                   test_internal_link_history);
+  g_test_add_func("/document-view/presentation-zoom-floor",
+                  test_presentation_zoom_floor);
   return g_test_run();
 }

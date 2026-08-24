@@ -45,6 +45,7 @@ struct _PdfvDocumentView {
     GPtrArray* pages; /* PhiPage* array, lazily populated */
     
     gdouble zoom;
+    gdouble minimum_zoom;
     gboolean continuous;
     gboolean dual_page;
     gboolean inverted;
@@ -934,23 +935,15 @@ on_key_pressed(GtkEventControllerKey* controller, guint keyval, guint keycode,
         return GDK_EVENT_STOP;
     case GDK_KEY_Left:
     case GDK_KEY_KP_Left:
-        scroll_adjustment(self->hadjustment,
-                          -gtk_adjustment_get_step_increment(
-                              self->hadjustment));
+        pdfv_document_view_go_to_page(self, self->current_page - 1);
         return GDK_EVENT_STOP;
     case GDK_KEY_Right:
     case GDK_KEY_KP_Right:
-        scroll_adjustment(self->hadjustment,
-                          gtk_adjustment_get_step_increment(
-                              self->hadjustment));
+        pdfv_document_view_go_to_page(self, self->current_page + 1);
         return GDK_EVENT_STOP;
-    case GDK_KEY_space: {
-        gdouble distance = gtk_adjustment_get_page_increment(
-            self->vadjustment);
-        scroll_adjustment(self->vadjustment,
-                          state & GDK_SHIFT_MASK ? -distance : distance);
+    case GDK_KEY_space:
+        pdfv_document_view_go_to_page(self, self->current_page + 1);
         return GDK_EVENT_STOP;
-    }
     default:
         return GDK_EVENT_PROPAGATE;
     }
@@ -1566,6 +1559,7 @@ static void
 pdfv_document_view_init(PdfvDocumentView* self)
 {
     self->zoom = 1.0;
+    self->minimum_zoom = MIN_ZOOM;
     self->continuous = TRUE;
     self->dual_page = FALSE;
     self->inverted = FALSE;
@@ -1693,9 +1687,9 @@ pdfv_document_view_go_to_page(PdfvDocumentView* self, gint page)
     
     gint n_pages = phi_document_get_n_pages(self->document);
     page = CLAMP(page, 0, n_pages - 1);
+    gboolean changed = self->current_page != page;
 
     if (!self->continuous) {
-        gboolean changed = self->current_page != page;
         self->current_page = page;
         self->scroll_x = 0;
         self->scroll_y = 0;
@@ -1707,13 +1701,16 @@ pdfv_document_view_go_to_page(PdfvDocumentView* self, gint page)
                                      props[PROP_CURRENT_PAGE]);
         return;
     }
-    
+
+    self->current_page = page;
     self->scroll_y = get_page_offset(self, page);
     
     if (self->vadjustment)
         gtk_adjustment_set_value(self->vadjustment, self->scroll_y);
-    
+
     gtk_widget_queue_draw(GTK_WIDGET(self));
+    if (changed)
+        g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CURRENT_PAGE]);
 }
 
 gint
@@ -1740,7 +1737,7 @@ zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom, gdouble anchor_x,
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
 
-    new_zoom = CLAMP(new_zoom, MIN_ZOOM, MAX_ZOOM);
+    new_zoom = CLAMP(new_zoom, self->minimum_zoom, MAX_ZOOM);
     if (!isfinite(new_zoom) || new_zoom == self->zoom)
         return;
 
@@ -1851,6 +1848,42 @@ pdfv_document_view_zoom_fit_page(PdfvDocumentView* self)
     gdouble zoom_h = (height - 40) / ph;
     
     pdfv_document_view_set_zoom(self, MIN(zoom_w, zoom_h));
+}
+
+void
+pdfv_document_view_zoom_fit_page_full(PdfvDocumentView* self)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+
+    if (!self->document)
+        return;
+
+    PhiPage* page = g_ptr_array_index(self->pages, self->current_page);
+    if (!page)
+        return;
+
+    gfloat pw, ph;
+    phi_page_get_size(page, &pw, &ph);
+    gint width = gtk_widget_get_width(GTK_WIDGET(self));
+    gint height = gtk_widget_get_height(GTK_WIDGET(self));
+    pdfv_document_view_set_zoom(self, MIN(width / pw, height / ph));
+}
+
+void
+pdfv_document_view_set_minimum_zoom(PdfvDocumentView* self, gdouble zoom)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+
+    self->minimum_zoom = CLAMP(zoom, MIN_ZOOM, MAX_ZOOM);
+    if (self->zoom < self->minimum_zoom)
+        pdfv_document_view_set_zoom(self, self->minimum_zoom);
+}
+
+gdouble
+pdfv_document_view_get_minimum_zoom(PdfvDocumentView* self)
+{
+    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), MIN_ZOOM);
+    return self->minimum_zoom;
 }
 
 void

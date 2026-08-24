@@ -46,6 +46,7 @@ struct _PdfvWindow {
   GtkEntry *page_entry;
   GtkLabel *page_count_label;
   GtkMenuButton *menu_button;
+  GtkButton *presentation_exit_button;
   GMenu *file_menu_section;
   GMenu *workspace_menu_section;
   GMenu *zoom_menu_section;
@@ -90,6 +91,7 @@ struct _PdfvWindow {
 
   /* Floating workspace search */
   GtkWidget *content_overlay;
+  GtkWidget *presentation_end_overlay;
   GtkWidget *workspace_search_overlay;
   GtkWidget *workspace_search_card;
   GtkSearchEntry *workspace_search_entry;
@@ -137,6 +139,7 @@ struct _PdfvWindow {
   PdfvDocumentView *fullscreen_document_view;
   gboolean fullscreen_document_was_continuous;
   gdouble fullscreen_document_zoom;
+  gdouble fullscreen_document_minimum_zoom;
   guint fullscreen_fit_generation;
 
   /* One initialized editor removes WebKit/CodeMirror startup from the next
@@ -174,6 +177,12 @@ static void fullscreen_schedule_fit_page(PdfvWindow *self,
                                          PdfvDocumentView *view);
 static void fullscreen_refresh_document_mode(PdfvWindow *self);
 static void fullscreen_restore_document_mode(PdfvWindow *self);
+static gboolean presentation_is_active(PdfvWindow *self);
+static void presentation_set_end_visible(PdfvWindow *self,
+                                         gboolean visible);
+static void presentation_next(PdfvWindow *self);
+static void presentation_previous(PdfvWindow *self);
+static void leave_fullscreen(PdfvWindow *self);
 static void on_markdown_error(PdfvMarkdownEditor *editor,
                               const gchar *message, PdfvWindow *self);
 static void on_markdown_ready(PdfvMarkdownEditor *editor, PdfvWindow *self);
@@ -498,7 +507,8 @@ static void rebuild_main_menu(PdfvWindow *self) {
   if (has_pdf)
     g_menu_append(self->view_menu_section, "Invert Colors",
                   "win.invert-colors");
-  g_menu_append(self->view_menu_section, "Fullscreen", "win.fullscreen");
+  g_menu_append(self->view_menu_section, "Present as Slideshow",
+                "win.fullscreen");
 }
 
 static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
@@ -512,6 +522,7 @@ static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
     update_zoom_info(self);
   } else if (g_strcmp0(name, "current-page") == 0 &&
              view == self->current_view) {
+    presentation_set_end_visible(self, FALSE);
     update_page_selector(self);
     if (view == self->fullscreen_document_view)
       fullscreen_schedule_fit_page(self, view);
@@ -5187,10 +5198,10 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
 
   AdwSwitchRow *fullscreen_page = ADW_SWITCH_ROW(adw_switch_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(fullscreen_page),
-                                "Single page in fullscreen");
+                                "Single page in slideshow");
   adw_action_row_set_subtitle(
       ADW_ACTION_ROW(fullscreen_page),
-      "Fit only the current page to the fullscreen window");
+      "Fit each slide to the screen and use presentation controls");
   adw_switch_row_set_active(
       fullscreen_page,
       pdfv_settings_get_fullscreen_single_page(self->settings));
@@ -5401,7 +5412,10 @@ static gboolean fullscreen_fit_page_after_allocate(
     return G_SOURCE_CONTINUE;
   if (request->settled_frames++ == 0)
     return G_SOURCE_CONTINUE;
-  pdfv_document_view_zoom_fit_page(PDFV_DOCUMENT_VIEW(widget));
+  PdfvDocumentView *view = PDFV_DOCUMENT_VIEW(widget);
+  pdfv_document_view_zoom_fit_page_full(view);
+  pdfv_document_view_set_minimum_zoom(
+      view, pdfv_document_view_get_zoom(view));
   return G_SOURCE_REMOVE;
 }
 
@@ -5409,6 +5423,7 @@ static void fullscreen_schedule_fit_page(PdfvWindow *self,
                                          PdfvDocumentView *view) {
   if (!view || view != self->fullscreen_document_view)
     return;
+  pdfv_document_view_set_minimum_zoom(view, 0.0);
   FullscreenFitRequest *request = g_new0(FullscreenFitRequest, 1);
   request->generation = ++self->fullscreen_fit_generation;
   g_object_set_data(G_OBJECT(view), "fullscreen-fit-generation",
@@ -5424,6 +5439,8 @@ static void fullscreen_restore_document_mode(PdfvWindow *self) {
   PdfvDocumentView *view = self->fullscreen_document_view;
   g_object_set_data(G_OBJECT(view), "fullscreen-fit-generation",
                     GUINT_TO_POINTER(++self->fullscreen_fit_generation));
+  pdfv_document_view_set_minimum_zoom(
+      view, self->fullscreen_document_minimum_zoom);
   pdfv_document_view_set_continuous(
       view, self->fullscreen_document_was_continuous);
   pdfv_document_view_set_zoom(view, self->fullscreen_document_zoom);
@@ -5431,6 +5448,7 @@ static void fullscreen_restore_document_mode(PdfvWindow *self) {
 }
 
 static void fullscreen_refresh_document_mode(PdfvWindow *self) {
+  presentation_set_end_visible(self, FALSE);
   fullscreen_restore_document_mode(self);
   if (!self->fullscreen_chrome_active ||
       !pdfv_settings_get_fullscreen_single_page(self->settings) ||
@@ -5443,8 +5461,99 @@ static void fullscreen_refresh_document_mode(PdfvWindow *self) {
       pdfv_document_view_get_continuous(self->current_view);
   self->fullscreen_document_zoom =
       pdfv_document_view_get_zoom(self->current_view);
+  self->fullscreen_document_minimum_zoom =
+      pdfv_document_view_get_minimum_zoom(self->current_view);
+  pdfv_document_view_set_minimum_zoom(self->current_view, 0.0);
   pdfv_document_view_set_continuous(self->current_view, FALSE);
   fullscreen_schedule_fit_page(self, self->current_view);
+}
+
+static gboolean presentation_is_active(PdfvWindow *self) {
+  return self->fullscreen_chrome_active &&
+      pdfv_settings_get_fullscreen_single_page(self->settings) &&
+      self->current_view &&
+      self->current_view == self->fullscreen_document_view &&
+      pdfv_document_view_get_document(self->current_view);
+}
+
+static void presentation_set_end_visible(PdfvWindow *self,
+                                         gboolean visible) {
+  if (!self->presentation_end_overlay)
+    return;
+  visible = visible && presentation_is_active(self);
+  gtk_widget_set_visible(self->presentation_end_overlay, visible);
+  if (visible)
+    adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, FALSE);
+}
+
+static void presentation_next(PdfvWindow *self) {
+  if (!presentation_is_active(self))
+    return;
+  if (gtk_widget_get_visible(self->presentation_end_overlay))
+    return;
+  PhiDocument *document =
+      pdfv_document_view_get_document(self->current_view);
+  gint page = pdfv_document_view_get_current_page(self->current_view);
+  if (page + 1 >= phi_document_get_n_pages(document)) {
+    presentation_set_end_visible(self, TRUE);
+    return;
+  }
+  pdfv_document_view_go_to_page(self->current_view, page + 1);
+}
+
+static void presentation_previous(PdfvWindow *self) {
+  if (!presentation_is_active(self))
+    return;
+  if (gtk_widget_get_visible(self->presentation_end_overlay)) {
+    presentation_set_end_visible(self, FALSE);
+    return;
+  }
+  gint page = pdfv_document_view_get_current_page(self->current_view);
+  pdfv_document_view_go_to_page(self->current_view, page - 1);
+}
+
+static gboolean on_presentation_key_pressed(
+    GtkEventControllerKey *controller, guint keyval, guint keycode,
+    GdkModifierType state, PdfvWindow *self) {
+  (void)controller;
+  (void)keycode;
+  if (!self->fullscreen_chrome_active)
+    return GDK_EVENT_PROPAGATE;
+  if (keyval == GDK_KEY_Escape) {
+    leave_fullscreen(self);
+    return GDK_EVENT_STOP;
+  }
+  if (!presentation_is_active(self) ||
+      (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK)))
+    return GDK_EVENT_PROPAGATE;
+
+  switch (keyval) {
+  case GDK_KEY_Left:
+  case GDK_KEY_KP_Left:
+    presentation_previous(self);
+    return GDK_EVENT_STOP;
+  case GDK_KEY_Right:
+  case GDK_KEY_KP_Right:
+  case GDK_KEY_space:
+    presentation_next(self);
+    return GDK_EVENT_STOP;
+  default:
+    return GDK_EVENT_PROPAGATE;
+  }
+}
+
+static void on_presentation_surface_pressed(GtkGestureClick *gesture,
+                                            gint n_press, gdouble x,
+                                            gdouble y, PdfvWindow *self) {
+  (void)x;
+  (void)y;
+  if (n_press != 1 || !presentation_is_active(self))
+    return;
+  gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+  if (gtk_widget_get_visible(self->presentation_end_overlay))
+    leave_fullscreen(self);
+  else
+    presentation_next(self);
 }
 
 static gboolean fullscreen_top_bar_has_focus(PdfvWindow *self) {
@@ -5527,22 +5636,30 @@ static void set_fullscreen_chrome(PdfvWindow *self, gboolean fullscreen) {
     adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, TRUE);
     adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, FALSE);
     gtk_widget_set_visible(self->zoom_box, FALSE);
+    gtk_widget_set_visible(GTK_WIDGET(self->presentation_exit_button), TRUE);
     fullscreen_refresh_document_mode(self);
     return;
   }
 
   fullscreen_cancel_hide(self);
+  presentation_set_end_visible(self, FALSE);
   fullscreen_restore_document_mode(self);
   adw_toolbar_view_set_reveal_top_bars(self->toolbar_view, TRUE);
   adw_toolbar_view_set_extend_content_to_top_edge(self->toolbar_view, FALSE);
   adw_toolbar_view_set_top_bar_style(self->toolbar_view, ADW_TOOLBAR_FLAT);
   adw_header_bar_set_show_start_title_buttons(self->header_bar, TRUE);
   adw_header_bar_set_show_end_title_buttons(self->header_bar, TRUE);
+  gtk_widget_set_visible(GTK_WIDGET(self->presentation_exit_button), FALSE);
   if (self->fullscreen_sidebar_was_visible &&
       (self->workspace || (self->current_view &&
        pdfv_document_view_get_document(self->current_view))))
     adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
   update_sidebar_button(self);
+}
+
+static void leave_fullscreen(PdfvWindow *self) {
+  set_fullscreen_chrome(self, FALSE);
+  gtk_window_unfullscreen(GTK_WINDOW(self));
 }
 
 static void on_window_fullscreen_changed(PdfvWindow *self,
@@ -5561,8 +5678,7 @@ static void action_fullscreen(GSimpleAction *action, GVariant *parameter,
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (gtk_window_is_fullscreen(GTK_WINDOW(self)) ||
       self->fullscreen_chrome_active) {
-    set_fullscreen_chrome(self, FALSE);
-    gtk_window_unfullscreen(GTK_WINDOW(self));
+    leave_fullscreen(self);
   } else {
     set_fullscreen_chrome(self, TRUE);
     gtk_window_fullscreen(GTK_WINDOW(self));
@@ -5602,6 +5718,10 @@ static void action_page_next(GSimpleAction *action, GVariant *parameter,
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (presentation_is_active(self)) {
+    presentation_next(self);
+    return;
+  }
   if (self->current_view) {
     gint page = pdfv_document_view_get_current_page(self->current_view);
     pdfv_document_view_go_to_page(self->current_view, page + 1);
@@ -5613,6 +5733,10 @@ static void action_page_prev(GSimpleAction *action, GVariant *parameter,
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (presentation_is_active(self)) {
+    presentation_previous(self);
+    return;
+  }
   if (self->current_view) {
     gint page = pdfv_document_view_get_current_page(self->current_view);
     pdfv_document_view_go_to_page(self->current_view, page - 1);
@@ -6008,6 +6132,12 @@ static void pdfv_window_init(PdfvWindow *self) {
   g_signal_connect(fullscreen_motion, "motion",
                    G_CALLBACK(on_fullscreen_pointer_motion), self);
   gtk_widget_add_controller(GTK_WIDGET(self), fullscreen_motion);
+  GtkEventController *presentation_keys = gtk_event_controller_key_new();
+  gtk_event_controller_set_propagation_phase(presentation_keys,
+                                             GTK_PHASE_CAPTURE);
+  g_signal_connect(presentation_keys, "key-pressed",
+                   G_CALLBACK(on_presentation_key_pressed), self);
+  gtk_widget_add_controller(GTK_WIDGET(self), presentation_keys);
 
   /* Main toolbar view - must be set AFTER tab_overview has a parent */
   self->toolbar_view = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
@@ -6127,6 +6257,15 @@ static void pdfv_window_init(PdfvWindow *self) {
   g_menu_append_section(menu, NULL, G_MENU_MODEL(about_section));
 
   gtk_menu_button_set_menu_model(self->menu_button, G_MENU_MODEL(menu));
+  self->presentation_exit_button = GTK_BUTTON(
+      gtk_button_new_from_icon_name("view-restore-symbolic"));
+  gtk_widget_set_tooltip_text(GTK_WIDGET(self->presentation_exit_button),
+                              "Exit Slideshow (Esc)");
+  gtk_actionable_set_action_name(
+      GTK_ACTIONABLE(self->presentation_exit_button), "win.fullscreen");
+  gtk_widget_set_visible(GTK_WIDGET(self->presentation_exit_button), FALSE);
+  adw_header_bar_pack_end(self->header_bar,
+                          GTK_WIDGET(self->presentation_exit_button));
   adw_header_bar_pack_end(self->header_bar, GTK_WIDGET(self->menu_button));
 
   g_object_unref(about_section);
@@ -6385,6 +6524,43 @@ static void pdfv_window_init(PdfvWindow *self) {
   gtk_overlay_set_child(GTK_OVERLAY(self->content_overlay),
                         GTK_WIDGET(self->tab_view));
   adw_toolbar_view_set_content(self->toolbar_view, self->content_overlay);
+  GtkGesture *presentation_click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(presentation_click),
+                                GDK_BUTTON_PRIMARY);
+  gtk_event_controller_set_propagation_phase(
+      GTK_EVENT_CONTROLLER(presentation_click), GTK_PHASE_CAPTURE);
+  g_signal_connect(presentation_click, "pressed",
+                   G_CALLBACK(on_presentation_surface_pressed), self);
+  gtk_widget_add_controller(self->content_overlay,
+                            GTK_EVENT_CONTROLLER(presentation_click));
+
+  self->presentation_end_overlay =
+      gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+  gtk_widget_add_css_class(self->presentation_end_overlay,
+                           "presentation-end");
+  gtk_widget_set_halign(self->presentation_end_overlay, GTK_ALIGN_FILL);
+  gtk_widget_set_valign(self->presentation_end_overlay, GTK_ALIGN_FILL);
+  gtk_widget_set_hexpand(self->presentation_end_overlay, TRUE);
+  gtk_widget_set_vexpand(self->presentation_end_overlay, TRUE);
+  gtk_widget_set_cursor_from_name(self->presentation_end_overlay, "pointer");
+  GtkWidget *presentation_end_title =
+      gtk_label_new("End of presentation");
+  gtk_widget_add_css_class(presentation_end_title, "title-1");
+  gtk_widget_set_valign(presentation_end_title, GTK_ALIGN_END);
+  gtk_widget_set_vexpand(presentation_end_title, TRUE);
+  gtk_box_append(GTK_BOX(self->presentation_end_overlay),
+                 presentation_end_title);
+  GtkWidget *presentation_end_hint =
+      gtk_label_new("Press Esc or click to exit");
+  gtk_widget_add_css_class(presentation_end_hint,
+                           "presentation-end-hint");
+  gtk_widget_set_valign(presentation_end_hint, GTK_ALIGN_START);
+  gtk_widget_set_vexpand(presentation_end_hint, TRUE);
+  gtk_box_append(GTK_BOX(self->presentation_end_overlay),
+                 presentation_end_hint);
+  gtk_widget_set_visible(self->presentation_end_overlay, FALSE);
+  gtk_overlay_add_overlay(GTK_OVERLAY(self->content_overlay),
+                          self->presentation_end_overlay);
   GtkGesture *workspace_search_surface = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(workspace_search_surface),
                                 GDK_BUTTON_PRIMARY);
@@ -6470,6 +6646,14 @@ static void pdfv_window_init(PdfvWindow *self) {
       "  min-width: 0;"
       "  padding-left: 6px;"
       "  padding-right: 6px;"
+      "}"
+      ".presentation-end {"
+      "  background: #000000;"
+      "  color: #ffffff;"
+      "}"
+      ".presentation-end-hint {"
+      "  color: alpha(#ffffff, 0.72);"
+      "  font-size: 1.1em;"
       "}"
       ".workspace-search-results {"
       "  background-color: alpha(@window_fg_color, 0.025);"
