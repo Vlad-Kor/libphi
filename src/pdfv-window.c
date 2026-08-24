@@ -4801,6 +4801,7 @@ static GtkWidget *create_latex_source_box(
                                  GTK_POLICY_AUTOMATIC);
   gtk_widget_set_size_request(scroll, -1, height);
   gtk_widget_add_css_class(scroll, "card");
+  gtk_widget_set_overflow(scroll, GTK_OVERFLOW_HIDDEN);
   GtkWidget *view = gtk_text_view_new();
   gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
   gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view), GTK_WRAP_NONE);
