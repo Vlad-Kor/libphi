@@ -2,7 +2,7 @@
 Name=Phi Document Viewer
 Comment=View PDFs and edit Markdown notes
 GenericName=Document Viewer
-Exec=pdfv %U
+Exec=@PDFV_EXECUTABLE@ %U
 Icon=ai.korsakov.Phi
 Terminal=false
 Type=Application

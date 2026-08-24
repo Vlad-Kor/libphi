@@ -1,8 +1,18 @@
 # Data files for Phi PDF Viewer
 
-# Desktop file
-install_data(
-  'ai.korsakov.Phi.desktop',
+# Use the executable from this installation prefix. A bare `pdfv` would be
+# resolved through the desktop session's PATH and could launch another copy
+# installed under a different prefix.
+desktop_configuration = configuration_data()
+desktop_configuration.set(
+  'PDFV_EXECUTABLE',
+  get_option('prefix') / get_option('bindir') / 'pdfv'
+)
+configure_file(
+  input: 'ai.korsakov.Phi.desktop.in',
+  output: 'ai.korsakov.Phi.desktop',
+  configuration: desktop_configuration,
+  install: true,
   install_dir: get_option('datadir') / 'applications'
 )
 

@@ -469,6 +469,7 @@ static void phi_node_device_clip_image_mask(fz_context* ctx, fz_device* dev, fz_
 
 static void phi_node_device_fill_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params color_params) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)color_params;
 	
 	/* Get image as alpha mask */
 	GskRenderNode* mask = phi_node_device_node_from_image(ctx, img, ctm,
@@ -523,6 +524,7 @@ static GskPath* phi_node_device_text_to_path(fz_context* ctx, const fz_text* tex
 
 static void phi_node_device_fill_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params color_params) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)color_params;
 	
 	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
 	
@@ -549,6 +551,7 @@ static void phi_node_device_fill_text(fz_context* ctx, fz_device* dev, const fz_
 
 static void phi_node_device_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text, const fz_stroke_state* ss, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params color_params) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)color_params;
 	
 	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
 	
@@ -855,6 +858,7 @@ static void phi_node_device_fill_shade(fz_context* ctx, fz_device* dev, fz_shade
 /* Transparency groups */
 static void phi_node_device_begin_group(fz_context* ctx, fz_device* dev, fz_rect area, fz_colorspace* cs, int isolated, int knockout, int blendmode, float alpha) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)ctx;
 	(void)cs; /* We ignore colorspace for now, render in device RGB */
 	
 	PhiRenderContext new;
@@ -961,6 +965,7 @@ static void phi_node_device_end_group(fz_context* ctx, fz_device* dev) {
 /* Tiling patterns */
 static int phi_node_device_begin_tile(fz_context* ctx, fz_device* dev, fz_rect area, fz_rect view, float xstep, float ystep, fz_matrix ctm, int id, int doc_id) {
 	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+	(void)ctx;
 	(void)doc_id;
 	
 	PhiRenderContext new;

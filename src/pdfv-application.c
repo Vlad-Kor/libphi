@@ -99,7 +99,11 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	
 	GtkWindow* window = gtk_application_get_active_window(GTK_APPLICATION(app));
 	
-	const char* developers[] = { "Vlad Korsakov", NULL };
+	const char* developers[] = {
+		"Vlad Korsakov",
+		"Florian \"sp1rit\"",
+		NULL,
+	};
 	const char* acknowledgements[] = {
 		"artisticat1 and the Obsidian LaTeX Suite contributors",
 		"Karl Yngve Lervåg and the VimTeX contributors",
@@ -128,9 +132,6 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 		about,
 		"A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK");
 	adw_about_dialog_set_website(about, "https://github.com/Vlad-Kor/libphi");
-	adw_about_dialog_add_link(
-		about, "Obsidian LaTeX Suite",
-		"https://github.com/artisticat1/obsidian-latex-suite");
 	adw_about_dialog_add_acknowledgement_section(
 		about, "LaTeX snippet defaults", acknowledgements);
 	adw_about_dialog_add_acknowledgement_section(
