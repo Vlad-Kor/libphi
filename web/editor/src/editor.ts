@@ -401,7 +401,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     this.lineEnding = document.lineEnding;
     updatePreamble(document.preamble ?? "");
     this.applyDocumentClasses(document.text);
-    setCustomSnippets(this.settings.snippets);
+    setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
     this.view.setState(this.createState(document.text));
     this.view.focus();
     sendNative("document/state", { documentId: this.documentId, dirty: false, editorRevision: 0 });
@@ -422,8 +422,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       ));
     if (previous.allowRemoteImages !== this.settings.allowRemoteImages)
       effects.push(refreshLivePreview.of(null));
-    if (previous.snippets !== this.settings.snippets)
-      setCustomSnippets(this.settings.snippets);
+    if (previous.snippets !== this.settings.snippets ||
+        previous.snippetVariables !== this.settings.snippetVariables)
+      setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
     if (effects.length) this.view.dispatch({ effects });
     document.body.classList.toggle("source-mode", this.settings.sourceMode);
   }

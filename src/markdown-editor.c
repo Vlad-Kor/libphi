@@ -64,6 +64,7 @@ struct _PdfvMarkdownEditor {
   gboolean latex_conceal;
   gdouble font_scale;
   gchar *snippets;
+  gchar *snippet_variables;
   gchar *theme_background;
   gchar *theme_foreground;
   gchar *theme_toolbar;
@@ -192,6 +193,9 @@ static void send_settings(PdfvMarkdownEditor *self) {
                                  self->latex_conceal);
   json_object_set_string_member(payload, "snippets",
                                 self->snippets ? self->snippets : "");
+  json_object_set_string_member(
+      payload, "snippetVariables",
+      self->snippet_variables ? self->snippet_variables : "");
   pdfv_markdown_editor_bridge_send(self->bridge, "settings/update", NULL,
                                    payload);
   json_object_unref(payload);
@@ -1487,6 +1491,15 @@ void pdfv_markdown_editor_set_snippets(PdfvMarkdownEditor *self,
   send_settings(self);
 }
 
+void pdfv_markdown_editor_set_snippet_variables(
+    PdfvMarkdownEditor *self, const gchar *variables) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  g_free(self->snippet_variables);
+  self->snippet_variables = g_strdup(variables ? variables : "");
+  self->settings_set = TRUE;
+  send_settings(self);
+}
+
 void pdfv_markdown_editor_set_attachment_folder(
     PdfvMarkdownEditor *self, GFile *folder) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
@@ -1569,6 +1582,7 @@ static void pdfv_markdown_editor_finalize(GObject *object) {
   g_free(self->persisted_text);
   g_free(self->etag);
   g_free(self->snippets);
+  g_free(self->snippet_variables);
   g_free(self->theme_background);
   g_free(self->theme_foreground);
   g_free(self->theme_toolbar);
@@ -1618,6 +1632,7 @@ static void pdfv_markdown_editor_init(PdfvMarkdownEditor *self) {
   g_queue_init(&self->save_queue);
   self->font_scale = 1.0;
   self->snippets = g_strdup("");
+  self->snippet_variables = g_strdup("");
   self->flush_tasks = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                             (GDestroyNotify)flush_pending_free);
 }

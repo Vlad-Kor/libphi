@@ -1,10 +1,17 @@
 import { Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
 import { indentLess, indentMore } from "@codemirror/commands";
-import defaultSnippets from "./default-snippets.txt";
+import defaultSnippets from "./default-snippets.txt?raw";
+import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
 import { codeModeAt, mathModeAt } from "../obsidian/parser";
 import { reportError } from "../bridge";
-import { expandReplacement, parseSnippetFile, type LatexSnippet } from "./snippet-parser";
+import {
+  expandReplacement,
+  parseSnippetFile,
+  parseSnippetVariables,
+  type ExpandedSnippet,
+  type LatexSnippet,
+} from "./snippet-parser";
 
 interface Tabstop { index: number; from: number; to: number }
 interface TabstopState { stops: Tabstop[]; active: number }
@@ -25,70 +32,172 @@ const tabstopState = StateField.define<TabstopState | null>({
   },
 });
 
-let snippets: LatexSnippet[] = [];
-try {
-  snippets = parseSnippetFile(defaultSnippets);
-} catch (error) {
-  reportError(error, "latex-suite/snippets");
-}
+interface RuntimeSnippet extends LatexSnippet { expression?: RegExp }
 
-export function setCustomSnippets(source?: string): void {
-  try { snippets = parseSnippetFile(source?.trim() ? source : defaultSnippets); }
-  catch (error) { reportError(error, "latex-suite/snippets"); }
-}
-
-const snippetVariables: Record<string, string> = {
-  GREEK: "alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega",
-  SYMBOL: "times|cdot|pm|mp|to|mapsto|in|notin|subset|subseteq|supset|supseteq|cup|cap|leq|geq|neq|sim|approx|infty|partial|nabla",
-  SHORT_SYMBOL: "sin|cos|tan|log|ln|exp|det|dim|ker",
-};
+let snippets: RuntimeSnippet[] = [];
+let snippetVariables: Record<string, string> = {};
 
 function expandTriggerVariables(trigger: string): string {
   return trigger.replace(/\$\{([A-Z_]+)\}/g, (_match, name: string) =>
     snippetVariables[name] ? `(?:${snippetVariables[name]})` : "(?!)");
 }
 
-function contextAllows(snippet: LatexSnippet, text: string, position: number): boolean {
-  const math = mathModeAt(text, position);
-  const code = codeModeAt(text, position);
-  if (snippet.options.includes("c") && code !== "block") return false;
-  if (snippet.options.includes("C") && code !== "inline") return false;
-  if (snippet.options.includes("t") && (math !== "none" || code !== "none")) return false;
-  if (snippet.options.includes("M") && math !== "display") return false;
-  if (snippet.options.includes("n") && math !== "inline") return false;
-  if (snippet.options.includes("m") && math === "none") return false;
+function compileSnippets(parsed: LatexSnippet[]): RuntimeSnippet[] {
+  return parsed.flatMap((snippet) => {
+    if (!snippet.options.includes("r")) return [snippet];
+    try {
+      const flags = (snippet.flags ?? "").replace(/[gy]/g, "");
+      return [{
+        ...snippet,
+        expression: new RegExp(`(?:${expandTriggerVariables(snippet.trigger)})$`, flags),
+      }];
+    } catch (error) {
+      reportError(error, "latex-suite/regex");
+      return [];
+    }
+  });
+}
+
+export function setCustomSnippets(source?: string, variableSource?: string): void {
+  try {
+    const variables = parseSnippetVariables(
+      variableSource?.trim() ? variableSource : defaultSnippetVariables,
+    );
+    const parsed = parseSnippetFile(source?.trim() ? source : defaultSnippets);
+    snippetVariables = variables;
+    snippets = compileSnippets(parsed);
+  } catch (error) {
+    reportError(error, "latex-suite/snippets");
+  }
+}
+
+setCustomSnippets();
+
+function activeMacros(text: string, position: number): Set<string> {
+  const start = Math.max(0, position - 4000);
+  const stack: (string | null)[] = [];
+  for (let index = start; index < position; index++) {
+    if (text[index] === "\\") {
+      const match = /^\\([A-Za-z]+)\s*\{/.exec(text.slice(index, position));
+      if (match) {
+        stack.push(match[1]);
+        index += match[0].length - 1;
+        continue;
+      }
+      index++;
+      continue;
+    }
+    if (text[index] === "{") stack.push(null);
+    else if (text[index] === "}") stack.pop();
+  }
+  return new Set(stack.filter((name): name is string => Boolean(name)));
+}
+
+interface SnippetContext {
+  math: ReturnType<typeof mathModeAt>;
+  code: ReturnType<typeof codeModeAt>;
+}
+
+function contextAllows(snippet: LatexSnippet, context: SnippetContext,
+                       macros?: Set<string>): boolean {
+  if (snippet.options.includes("c") && context.code !== "block") return false;
+  if (snippet.options.includes("C") && context.code !== "inline") return false;
+  if (snippet.options.includes("t") &&
+      (context.math !== "none" || context.code !== "none")) return false;
+  if (snippet.options.includes("M") && context.math !== "display") return false;
+  if (snippet.options.includes("n") && context.math !== "inline") return false;
+  if (snippet.options.includes("m") && context.math === "none") return false;
+  if (snippet.excludedMacros?.some((macro) => macros?.has(macro))) return false;
+  if (snippet.includedMacros?.length &&
+      !snippet.includedMacros.some((macro) => macros?.has(macro))) return false;
   return true;
 }
 
-interface Match { snippet: LatexSnippet; from: number; captures: string[] }
+interface Match {
+  snippet: RuntimeSnippet;
+  from: number;
+  captures: string[];
+  groups?: Record<string, string>;
+  matchedText: string;
+}
 
 function findMatch(text: string, position: number, automatic: boolean): Match | null {
   const start = Math.max(0, position - 512);
   const before = text.slice(start, position);
+  const context = {
+    math: mathModeAt(text, position),
+    code: codeModeAt(text, position),
+  };
+  let macros: Set<string> | undefined;
   for (const snippet of snippets) {
     if (automatic !== snippet.options.includes("A")) continue;
-    if (!contextAllows(snippet, text, position)) continue;
+    if ((snippet.excludedMacros?.length || snippet.includedMacros?.length) && !macros)
+      macros = activeMacros(text, position);
+    if (!contextAllows(snippet, context, macros)) continue;
     if (snippet.options.includes("r")) {
-      try {
-        const flags = (snippet.flags ?? "").replace(/[gy]/g, "");
-        const expression = new RegExp(`(?:${expandTriggerVariables(snippet.trigger)})$`, flags);
-        const match = expression.exec(before);
-        if (match) return { snippet, from: start + match.index, captures: match.slice(1) };
-      } catch (error) {
-        reportError(error, "latex-suite/regex");
-      }
+      const match = snippet.expression?.exec(before);
+      if (match) return {
+        snippet,
+        from: start + match.index,
+        captures: match.slice(1),
+        groups: match.groups,
+        matchedText: match[0],
+      };
     } else if (before.endsWith(snippet.trigger)) {
       const from = position - snippet.trigger.length;
       if (snippet.options.includes("w") && from > 0 && /[\p{L}\p{N}_]/u.test(text[from - 1])) continue;
-      return { snippet, from, captures: [] };
+      return { snippet, from, captures: [], matchedText: snippet.trigger };
     }
   }
   return null;
 }
 
+function handledReplacement(match: Match): string | null {
+  switch (match.snippet.handler) {
+    case "space-after-symbol": {
+      const withoutLetter = expandTriggerVariables(match.snippet.trigger)
+        .replace("([A-Za-z])", "");
+      if (new RegExp(withoutLetter).test(match.matchedText))
+        return match.matchedText;
+      return `\\${match.captures[0]} ${match.captures[1]}`;
+    }
+    case "protect-macro-prefix": {
+      const macro = match.captures[0] ?? "";
+      const candidates = expandTriggerVariables(match.snippet.trigger)
+        .replace("\\\\([A-Za-z]+)", "");
+      return new RegExp(`\\b${macro}`).test(candidates)
+        ? match.matchedText : null;
+    }
+    case "identity-matrix": {
+      const size = Number(match.captures[0]);
+      if (!Number.isInteger(size) || size < 1 || size > 9) return null;
+      const rows = Array.from({ length: size }, (_row, row) =>
+        Array.from({ length: size }, (_column, column) =>
+          row === column ? "1" : "0").join(" & "));
+      return `\\begin{pmatrix}\n${rows.join(" \\\\\n")}\n\\end{pmatrix}`;
+    }
+    case "display-math-list": {
+      const groups = match.groups;
+      if (!groups) return null;
+      const firstLine = groups.marker + groups.whitespace + groups.text;
+      const indent = " ".repeat(groups.marker.length) + groups.whitespace;
+      return `${groups.positive_lookbehind}${firstLine}\n${indent}$$\n${indent}$0\n${indent}$$`;
+    }
+    default:
+      return match.snippet.replacement;
+  }
+}
+
+function expandMatch(match: Match, visual: string): ExpandedSnippet | null {
+  const replacement = handledReplacement(match);
+  return replacement === null
+    ? null : expandReplacement(replacement, match.captures, visual);
+}
+
 function applyMatch(view: EditorView, match: Match, to: number, visual = "",
                     automatic = false): boolean {
-  const expanded = expandReplacement(match.snippet.replacement, match.captures, visual);
+  const expanded = expandMatch(match, visual);
+  if (!expanded) return true;
   const stops = expanded.tabstops.map((stop) => ({ ...stop, from: match.from + stop.from, to: match.from + stop.to }));
   const first = stops[0] ?? { from: match.from + expanded.text.length, to: match.from + expanded.text.length };
   view.dispatch({
@@ -136,15 +245,19 @@ function expandVisualShortcut(view: EditorView, event: KeyboardEvent): boolean {
   if (range.empty || view.state.selection.ranges.length !== 1)
     return false;
   const text = view.state.doc.toString();
+  const context = {
+    math: mathModeAt(text, range.head),
+    code: codeModeAt(text, range.head),
+  };
   for (const snippet of snippets) {
     const visual = snippet.options.includes("v") ||
       snippet.replacement.includes("${VISUAL}");
     if (!visual || snippet.options.includes("r") ||
         snippet.trigger !== event.key ||
-        !contextAllows(snippet, text, range.head)) continue;
+        !contextAllows(snippet, context)) continue;
     return applyMatch(
       view,
-      { snippet, from: range.from, captures: [] },
+      { snippet, from: range.from, captures: [], matchedText: event.key },
       range.to,
       view.state.sliceDoc(range.from, range.to),
       true,

@@ -8,6 +8,7 @@ export const defaultSettings: Required<EditorSettings> = {
   allowRemoteImages: false,
   executableSnippets: false,
   snippets: "",
+  snippetVariables: "",
 };
 
 let runtimeSettings: Required<EditorSettings> = { ...defaultSettings };

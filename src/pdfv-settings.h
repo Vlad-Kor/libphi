@@ -33,6 +33,10 @@ void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self);
 void pdfv_settings_set_latex_snippets(PdfvSettings *self,
                                       const gchar *snippets);
+const gchar *pdfv_settings_get_latex_snippet_variables(
+    PdfvSettings *self);
+void pdfv_settings_set_latex_snippet_variables(
+    PdfvSettings *self, const gchar *variables);
 gboolean pdfv_settings_get_workspace_attachment_fixed(
     PdfvSettings *self, GFile *workspace);
 gchar *pdfv_settings_dup_workspace_attachment_folder_uri(

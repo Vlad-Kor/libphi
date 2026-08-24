@@ -32,6 +32,9 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_readable_line_width(settings, FALSE);
   pdfv_settings_set_latex_conceal(settings, TRUE);
   pdfv_settings_set_pdf_inverted(settings, TRUE);
+  pdfv_settings_set_latex_snippets(settings, "[{trigger:'x'}]");
+  pdfv_settings_set_latex_snippet_variables(settings,
+                                             "{GREEK:'alpha'}");
   GError *error = NULL;
   g_assert_true(pdfv_settings_save(settings, &error));
   g_assert_no_error(error);
@@ -50,6 +53,10 @@ static void test_workspace_attachment_policy(void) {
   g_assert_false(pdfv_settings_get_readable_line_width(settings));
   g_assert_true(pdfv_settings_get_latex_conceal(settings));
   g_assert_true(pdfv_settings_get_pdf_inverted(settings));
+  g_assert_cmpstr(pdfv_settings_get_latex_snippets(settings), ==,
+                  "[{trigger:'x'}]");
+  g_assert_cmpstr(pdfv_settings_get_latex_snippet_variables(settings), ==,
+                  "{GREEK:'alpha'}");
   gsize tab_count = 0;
   gchar **restored_tabs = pdfv_settings_dup_workspace_open_tabs(
       settings, workspace_a, &tab_count);

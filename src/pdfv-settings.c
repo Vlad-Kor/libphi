@@ -16,6 +16,7 @@ struct _PdfvSettings {
   gboolean latex_conceal;
   gboolean pdf_inverted;
   gchar *latex_snippets;
+  gchar *latex_snippet_variables;
   GKeyFile *file;
 };
 
@@ -40,6 +41,7 @@ PdfvSettings *pdfv_settings_new(void) {
   self->markdown_font_scale = 1.0;
   self->readable_line_width = TRUE;
   self->latex_snippets = g_strdup("");
+  self->latex_snippet_variables = g_strdup("");
   self->file = g_key_file_new();
 
   gchar *filename = settings_filename();
@@ -75,6 +77,12 @@ PdfvSettings *pdfv_settings_new(void) {
       g_free(self->latex_snippets);
       self->latex_snippets = snippets;
     }
+    gchar *variables = g_key_file_get_string(
+        self->file, SETTINGS_GROUP, "latex-snippet-variables", NULL);
+    if (variables) {
+      g_free(self->latex_snippet_variables);
+      self->latex_snippet_variables = variables;
+    }
   }
   g_free(filename);
   return self;
@@ -85,6 +93,7 @@ void pdfv_settings_free(PdfvSettings *self) {
     return;
   g_clear_pointer(&self->file, g_key_file_unref);
   g_free(self->latex_snippets);
+  g_free(self->latex_snippet_variables);
   g_free(self);
 }
 
@@ -107,6 +116,9 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
                         "fullscreen-single-page", NULL);
   g_key_file_set_string(self->file, SETTINGS_GROUP, "latex-snippets",
                         self->latex_snippets);
+  g_key_file_set_string(self->file, SETTINGS_GROUP,
+                        "latex-snippet-variables",
+                        self->latex_snippet_variables);
   gsize length = 0;
   gchar *contents = g_key_file_to_data(self->file, &length, error);
   gchar *filename = settings_filename();
@@ -188,6 +200,19 @@ void pdfv_settings_set_latex_snippets(PdfvSettings *self,
   g_return_if_fail(self != NULL);
   g_free(self->latex_snippets);
   self->latex_snippets = g_strdup(snippets ? snippets : "");
+}
+
+const gchar *pdfv_settings_get_latex_snippet_variables(
+    PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, "");
+  return self->latex_snippet_variables;
+}
+
+void pdfv_settings_set_latex_snippet_variables(
+    PdfvSettings *self, const gchar *variables) {
+  g_return_if_fail(self != NULL);
+  g_free(self->latex_snippet_variables);
+  self->latex_snippet_variables = g_strdup(variables ? variables : "");
 }
 
 gboolean pdfv_settings_get_workspace_attachment_fixed(
@@ -315,6 +340,8 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->latex_conceal = source->latex_conceal;
   destination->pdf_inverted = source->pdf_inverted;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
+  pdfv_settings_set_latex_snippet_variables(
+      destination, source->latex_snippet_variables);
   gsize length = 0;
   gchar *data = g_key_file_to_data(source->file, &length, NULL);
   GKeyFile *copy = g_key_file_new();

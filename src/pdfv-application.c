@@ -100,15 +100,29 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	GtkWindow* window = gtk_application_get_active_window(GTK_APPLICATION(app));
 	
 	const char* developers[] = { "sp1rit", "Vlad-Kor", NULL };
-	adw_show_about_dialog(GTK_WIDGET(window),
-		"application-name", "Phi Document Viewer",
-		"application-icon", "arpa.sp1rit.phi.viewer",
-		"version", "0.1",
-		"developers", developers,
-		"license-type", GTK_LICENSE_AGPL_3_0,
-		"comments", "A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK",
-		"website", "https://github.com/sp1ritCS/libphi",
-		NULL);
+	const char* acknowledgements[] = {
+		"artisticat1 and the Obsidian LaTeX Suite contributors",
+		NULL,
+	};
+	AdwAboutDialog* about = ADW_ABOUT_DIALOG(adw_about_dialog_new());
+	adw_about_dialog_set_application_name(about, "Phi Document Viewer");
+	adw_about_dialog_set_application_icon(about, "arpa.sp1rit.phi.viewer");
+	adw_about_dialog_set_version(about, "0.1");
+	adw_about_dialog_set_developers(about, developers);
+	adw_about_dialog_set_license_type(about, GTK_LICENSE_AGPL_3_0);
+	adw_about_dialog_set_comments(
+		about,
+		"A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK");
+	adw_about_dialog_set_website(about, "https://github.com/sp1ritCS/libphi");
+	adw_about_dialog_add_link(
+		about, "Obsidian LaTeX Suite",
+		"https://github.com/artisticat1/obsidian-latex-suite");
+	adw_about_dialog_add_acknowledgement_section(
+		about, "LaTeX snippet defaults", acknowledgements);
+	adw_about_dialog_add_legal_section(
+		about, "Obsidian LaTeX Suite snippet defaults",
+		"Copyright © 2022 artisticat1", GTK_LICENSE_MIT_X11, NULL);
+	adw_dialog_present(ADW_DIALOG(about), GTK_WIDGET(window));
 }
 
 static void pdfv_application_class_init(PdfvApplicationClass* klass) {

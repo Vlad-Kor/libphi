@@ -24,6 +24,8 @@ WebKitWebContext *pdfv_markdown_resource_scheme_get_context(
 void pdfv_markdown_resource_scheme_bind_web_view(
     PdfvMarkdownResourceScheme *self, WebKitWebView *web_view);
 gchar *pdfv_markdown_resource_scheme_load_default_snippets(GError **error);
+gchar *pdfv_markdown_resource_scheme_load_default_snippet_variables(
+    GError **error);
 
 G_END_DECLS
 

@@ -242,6 +242,9 @@ static void apply_preferences_to_editor(PdfvWindow *self,
       editor, pdfv_settings_get_latex_conceal(self->settings));
   pdfv_markdown_editor_set_snippets(
       editor, pdfv_settings_get_latex_snippets(self->settings));
+  pdfv_markdown_editor_set_snippet_variables(
+      editor,
+      pdfv_settings_get_latex_snippet_variables(self->settings));
   GFile *workspace_root = self->workspace
       ? pdfv_workspace_get_folder(self->workspace) : NULL;
   GFile *attachment_folder = NULL;
@@ -4689,9 +4692,26 @@ static void on_preferences_snippets_changed(GtkTextBuffer *buffer,
   schedule_preferences_update(self, 450);
 }
 
+static void on_preferences_snippet_variables_changed(
+    GtkTextBuffer *buffer, PdfvWindow *self) {
+  GtkTextIter start;
+  GtkTextIter end;
+  gtk_text_buffer_get_bounds(buffer, &start, &end);
+  gchar *text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+  pdfv_settings_set_latex_snippet_variables(self->settings, text);
+  g_free(text);
+  schedule_preferences_update(self, 450);
+}
+
+typedef enum {
+  SNIPPET_RESET_DEFINITIONS,
+  SNIPPET_RESET_VARIABLES,
+} SnippetResetKind;
+
 typedef struct {
   PdfvWindow *window;
   GtkTextBuffer *buffer;
+  SnippetResetKind kind;
 } SnippetResetData;
 
 static void snippet_reset_data_free(SnippetResetData *data) {
@@ -4708,19 +4728,29 @@ static void on_reset_snippets_confirmed(GObject *source,
       ADW_ALERT_DIALOG(source), result);
   if (g_strcmp0(response, "reset") == 0) {
     GError *error = NULL;
-    gchar *defaults =
-        pdfv_markdown_resource_scheme_load_default_snippets(&error);
+    gchar *defaults = data->kind == SNIPPET_RESET_VARIABLES
+        ? pdfv_markdown_resource_scheme_load_default_snippet_variables(
+              &error)
+        : pdfv_markdown_resource_scheme_load_default_snippets(&error);
     if (!defaults) {
-      on_markdown_error(NULL, error ? error->message
-                                    : "Could not load the default snippets",
-                        data->window);
+      on_markdown_error(
+          NULL, error ? error->message
+                      : "Could not load the default snippet settings",
+          data->window);
     } else {
-      g_signal_handlers_block_by_func(
-          data->buffer, on_preferences_snippets_changed, data->window);
+      GCallback changed = data->kind == SNIPPET_RESET_VARIABLES
+          ? G_CALLBACK(on_preferences_snippet_variables_changed)
+          : G_CALLBACK(on_preferences_snippets_changed);
+      g_signal_handlers_block_by_func(data->buffer, changed,
+                                      data->window);
       gtk_text_buffer_set_text(data->buffer, defaults, -1);
-      g_signal_handlers_unblock_by_func(
-          data->buffer, on_preferences_snippets_changed, data->window);
-      pdfv_settings_set_latex_snippets(data->window->settings, "");
+      g_signal_handlers_unblock_by_func(data->buffer, changed,
+                                        data->window);
+      if (data->kind == SNIPPET_RESET_VARIABLES)
+        pdfv_settings_set_latex_snippet_variables(
+            data->window->settings, "");
+      else
+        pdfv_settings_set_latex_snippets(data->window->settings, "");
       propagate_markdown_preferences(data->window);
     }
     g_free(defaults);
@@ -4735,9 +4765,16 @@ static void on_reset_snippets_clicked(GtkButton *button,
       g_object_get_data(G_OBJECT(button), "snippets-buffer");
   if (!buffer)
     return;
+  SnippetResetKind kind = GPOINTER_TO_INT(
+      g_object_get_data(G_OBJECT(button), "snippet-reset-kind"));
+  gboolean variables = kind == SNIPPET_RESET_VARIABLES;
   AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
-      "Reset LaTeX Snippets?",
-      "Your custom snippet set will be replaced by Phi’s built-in defaults."));
+      variables ? "Reset Snippet Variables?" : "Reset LaTeX Snippets?",
+      variables
+          ? "Your custom variables will be replaced by Phi’s bundled "
+            "Obsidian LaTeX Suite defaults."
+          : "Your custom snippet set will be replaced by Phi’s bundled "
+            "Obsidian LaTeX Suite defaults."));
   adw_alert_dialog_add_responses(dialog, "cancel", "Cancel", "reset",
                                  "Reset", NULL);
   adw_alert_dialog_set_response_appearance(dialog, "reset",
@@ -4747,8 +4784,46 @@ static void on_reset_snippets_clicked(GtkButton *button,
   SnippetResetData *data = g_new0(SnippetResetData, 1);
   data->window = g_object_ref(self);
   data->buffer = g_object_ref(buffer);
+  data->kind = kind;
   adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
                           on_reset_snippets_confirmed, data);
+}
+
+static GtkWidget *create_latex_source_box(
+    PdfvWindow *self, const gchar *text, gint height,
+    GCallback changed_callback, SnippetResetKind reset_kind) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  GtkWidget *scroll = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                 GTK_POLICY_AUTOMATIC,
+                                 GTK_POLICY_AUTOMATIC);
+  gtk_widget_set_size_request(scroll, -1, height);
+  gtk_widget_add_css_class(scroll, "card");
+  GtkWidget *view = gtk_text_view_new();
+  gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
+  gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view), GTK_WRAP_NONE);
+  gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view), 10);
+  gtk_text_view_set_right_margin(GTK_TEXT_VIEW(view), 10);
+  gtk_text_view_set_top_margin(GTK_TEXT_VIEW(view), 10);
+  gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(view), 10);
+  GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
+  gtk_text_buffer_set_text(buffer, text ? text : "", -1);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
+  gtk_box_append(GTK_BOX(box), scroll);
+
+  GtkWidget *reset = gtk_button_new_with_label("Reset to Defaults…");
+  gtk_widget_set_halign(reset, GTK_ALIGN_END);
+  gtk_widget_add_css_class(reset, "flat");
+  gtk_box_append(GTK_BOX(box), reset);
+  g_signal_connect_object(buffer, "changed", changed_callback, self, 0);
+  g_object_set_data(G_OBJECT(reset), "snippets-buffer", buffer);
+  g_object_set_data(G_OBJECT(reset), "snippet-reset-kind",
+                    GINT_TO_POINTER(reset_kind));
+  g_signal_connect(reset, "clicked",
+                   G_CALLBACK(on_reset_snippets_clicked), self);
+  return box;
 }
 
 static gchar *attachment_folder_label(GFile *workspace, GFile *folder) {
@@ -4869,16 +4944,17 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   AdwDialog *dialog = adw_preferences_dialog_new();
   adw_dialog_set_title(dialog, "Settings");
 
-  AdwPreferencesPage *page = ADW_PREFERENCES_PAGE(
+  AdwPreferencesPage *general_page = ADW_PREFERENCES_PAGE(
       adw_preferences_page_new());
-  adw_preferences_page_set_title(page, "Editor");
-  adw_preferences_page_set_icon_name(page, "document-edit-symbolic");
-  adw_preferences_dialog_add(ADW_PREFERENCES_DIALOG(dialog), page);
+  adw_preferences_page_set_title(general_page, "General");
+  adw_preferences_page_set_icon_name(general_page,
+                                     "preferences-system-symbolic");
+  adw_preferences_dialog_add(ADW_PREFERENCES_DIALOG(dialog), general_page);
 
   AdwPreferencesGroup *appearance = ADW_PREFERENCES_GROUP(
       adw_preferences_group_new());
   adw_preferences_group_set_title(appearance, "Appearance");
-  adw_preferences_page_add(page, appearance);
+  adw_preferences_page_add(general_page, appearance);
 
   AdwSpinRow *font = ADW_SPIN_ROW(
       adw_spin_row_new_with_range(11.0, 32.0, 1.0));
@@ -4924,7 +5000,7 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
       attachments, self->workspace
           ? "The destination is stored by Phi for this workspace."
           : "Open a workspace to use a fixed image folder.");
-  adw_preferences_page_add(page, attachments);
+  adw_preferences_page_add(general_page, attachments);
 
   GFile *workspace = self->workspace
       ? pdfv_workspace_get_folder(self->workspace) : NULL;
@@ -4969,13 +5045,17 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   g_free(folder_uri);
   g_free(folder_label);
 
-  AdwPreferencesGroup *latex = ADW_PREFERENCES_GROUP(
+  AdwPreferencesPage *latex_page = ADW_PREFERENCES_PAGE(
+      adw_preferences_page_new());
+  adw_preferences_page_set_title(latex_page, "LaTeX Snippets");
+  adw_preferences_page_set_icon_name(latex_page,
+                                     "accessories-text-editor-symbolic");
+  adw_preferences_dialog_add(ADW_PREFERENCES_DIALOG(dialog), latex_page);
+
+  AdwPreferencesGroup *enhancements = ADW_PREFERENCES_GROUP(
       adw_preferences_group_new());
-  adw_preferences_group_set_title(latex, "LaTeX Suite");
-  adw_preferences_group_set_description(
-      latex,
-      "Editor enhancements and snippets are stored globally.");
-  adw_preferences_page_add(page, latex);
+  adw_preferences_group_set_title(enhancements, "Editor enhancement");
+  adw_preferences_page_add(latex_page, enhancements);
 
   AdwSwitchRow *conceal = ADW_SWITCH_ROW(adw_switch_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(conceal),
@@ -4985,55 +5065,79 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
       "Show readable symbols outside the cursor; disabled by default");
   adw_switch_row_set_active(
       conceal, pdfv_settings_get_latex_conceal(self->settings));
-  adw_preferences_group_add(latex, GTK_WIDGET(conceal));
+  adw_preferences_group_add(enhancements, GTK_WIDGET(conceal));
   g_signal_connect_object(conceal, "notify::active",
                           G_CALLBACK(on_preferences_latex_conceal_changed),
                           self, 0);
 
-  GtkWidget *snippet_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-  gtk_widget_set_margin_top(snippet_box, 6);
-  gtk_widget_set_margin_bottom(snippet_box, 6);
-  GtkWidget *scroll = gtk_scrolled_window_new();
-  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
-                                 GTK_POLICY_AUTOMATIC,
-                                 GTK_POLICY_AUTOMATIC);
-  gtk_widget_set_size_request(scroll, -1, 300);
-  gtk_widget_add_css_class(scroll, "card");
-  GtkWidget *view = gtk_text_view_new();
-  gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
-  gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view), GTK_WRAP_NONE);
-  gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view), 10);
-  gtk_text_view_set_right_margin(GTK_TEXT_VIEW(view), 10);
-  gtk_text_view_set_top_margin(GTK_TEXT_VIEW(view), 10);
-  gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(view), 10);
-  GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
+  AdwPreferencesGroup *snippets = ADW_PREFERENCES_GROUP(
+      adw_preferences_group_new());
+  adw_preferences_group_set_title(snippets, "Snippet definitions");
+  adw_preferences_group_set_description(
+      snippets,
+      "Phi’s LaTeX snippets are based on and fully compatible with "
+      "Obsidian LaTeX Suite. See its repository for documentation on how "
+      "the snippet format works.");
+  adw_preferences_page_add(latex_page, snippets);
+
+  AdwActionRow *documentation = ADW_ACTION_ROW(adw_action_row_new());
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(documentation),
+      "Obsidian LaTeX Suite documentation");
+  adw_action_row_set_subtitle(
+      documentation, "github.com/artisticat1/obsidian-latex-suite");
+  GtkWidget *documentation_link = gtk_link_button_new_with_label(
+      "https://github.com/artisticat1/obsidian-latex-suite", "Open");
+  gtk_widget_set_valign(documentation_link, GTK_ALIGN_CENTER);
+  adw_action_row_add_suffix(documentation, documentation_link);
+  adw_action_row_set_activatable_widget(documentation, documentation_link);
+  adw_preferences_group_add(snippets, GTK_WIDGET(documentation));
+
   const gchar *custom = pdfv_settings_get_latex_snippets(self->settings);
   GError *default_error = NULL;
   gchar *defaults = !custom || !*custom
       ? pdfv_markdown_resource_scheme_load_default_snippets(&default_error)
       : NULL;
-  gtk_text_buffer_set_text(buffer, custom && *custom ? custom
-                                                     : defaults ? defaults : "",
-                           -1);
+  GtkWidget *snippet_box = create_latex_source_box(
+      self, custom && *custom ? custom : defaults ? defaults : "", 300,
+      G_CALLBACK(on_preferences_snippets_changed),
+      SNIPPET_RESET_DEFINITIONS);
   if (default_error) {
     g_warning("Could not load default snippets: %s", default_error->message);
     g_clear_error(&default_error);
   }
   g_free(defaults);
-  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
-  gtk_box_append(GTK_BOX(snippet_box), scroll);
+  adw_preferences_group_add(snippets, snippet_box);
 
-  GtkWidget *reset = gtk_button_new_with_label("Reset to Defaults…");
-  gtk_widget_set_halign(reset, GTK_ALIGN_END);
-  gtk_widget_add_css_class(reset, "flat");
-  gtk_box_append(GTK_BOX(snippet_box), reset);
-  adw_preferences_group_add(latex, snippet_box);
-  g_signal_connect_object(buffer, "changed",
-                          G_CALLBACK(on_preferences_snippets_changed),
-                          self, 0);
-  g_object_set_data(G_OBJECT(reset), "snippets-buffer", buffer);
-  g_signal_connect(reset, "clicked",
-                   G_CALLBACK(on_reset_snippets_clicked), self);
+  AdwPreferencesGroup *variables = ADW_PREFERENCES_GROUP(
+      adw_preferences_group_new());
+  adw_preferences_group_set_title(variables, "Snippet variables");
+  adw_preferences_group_set_description(
+      variables,
+      "Named regular-expression fragments available to triggers as "
+      "${NAME}.");
+  adw_preferences_page_add(latex_page, variables);
+  const gchar *custom_variables =
+      pdfv_settings_get_latex_snippet_variables(self->settings);
+  GError *variables_error = NULL;
+  gchar *variable_defaults = !custom_variables || !*custom_variables
+      ? pdfv_markdown_resource_scheme_load_default_snippet_variables(
+            &variables_error)
+      : NULL;
+  GtkWidget *variable_box = create_latex_source_box(
+      self,
+      custom_variables && *custom_variables
+          ? custom_variables
+          : variable_defaults ? variable_defaults : "",
+      180, G_CALLBACK(on_preferences_snippet_variables_changed),
+      SNIPPET_RESET_VARIABLES);
+  if (variables_error) {
+    g_warning("Could not load default snippet variables: %s",
+              variables_error->message);
+    g_clear_error(&variables_error);
+  }
+  g_free(variable_defaults);
+  adw_preferences_group_add(variables, variable_box);
 
   adw_dialog_present(dialog, GTK_WIDGET(self));
 }

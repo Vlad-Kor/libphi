@@ -53,6 +53,8 @@ void pdfv_markdown_editor_set_latex_conceal(
     PdfvMarkdownEditor *self, gboolean enabled);
 void pdfv_markdown_editor_set_snippets(PdfvMarkdownEditor *self,
                                        const gchar *snippets);
+void pdfv_markdown_editor_set_snippet_variables(
+    PdfvMarkdownEditor *self, const gchar *variables);
 void pdfv_markdown_editor_set_attachment_folder(
     PdfvMarkdownEditor *self, GFile *folder);
 void pdfv_markdown_editor_focus(PdfvMarkdownEditor *self);

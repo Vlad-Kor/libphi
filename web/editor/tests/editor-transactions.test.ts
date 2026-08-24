@@ -530,6 +530,30 @@ describe("LaTeX Suite transactions", () => {
       .toBe("<span style='color:blue'>blue text</span>");
   });
 
+  it("runs bundled Obsidian-compatible snippets and function handlers", async () => {
+    setCustomSnippets();
+
+    const greek = viewFor("$@$", 2, 2, latexSuite);
+    greek.dispatch({
+      changes: { from: 2, insert: "a" },
+      selection: { anchor: 3 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(greek.state.doc.toString()).toBe("$\\alpha$");
+
+    const identity = viewFor("$iden$", 5, 5, latexSuite);
+    identity.dispatch({
+      changes: { from: 5, insert: "3" },
+      selection: { anchor: 6 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(identity.state.doc.toString()).toContain(
+      "\\begin{pmatrix}\n1 & 0 & 0 \\\\\n0 & 1 & 0 \\\\\n0 & 0 & 1\n\\end{pmatrix}",
+    );
+  });
+
   it("uses matrix-aware Tab/Enter and logical tab-out", () => {
     setCustomSnippets("[]");
     const matrixText = "$\\begin{pmatrix}a\\end{pmatrix}$";

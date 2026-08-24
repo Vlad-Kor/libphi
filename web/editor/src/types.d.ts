@@ -45,6 +45,7 @@ export interface EditorSettings {
   allowRemoteImages?: boolean;
   executableSnippets?: boolean;
   snippets?: string;
+  snippetVariables?: string;
 }
 
 export interface DocumentSnapshot {

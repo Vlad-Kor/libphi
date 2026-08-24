@@ -38,6 +38,14 @@ await copyFile("src/index.html", resolve(outdir, "index.html"));
 await copyFile("src/styles/editor.css", resolve(outdir, "editor.css"));
 await copyFile("src/math/mathjax-config.js", resolve(outdir, "mathjax-config.js"));
 await copyFile("src/latex-suite/default-snippets.txt", resolve(outdir, "default-snippets.txt"));
+await copyFile(
+  "src/latex-suite/default-snippet-variables.txt",
+  resolve(outdir, "default-snippet-variables.txt"),
+);
+await copyFile(
+  "src/latex-suite/obsidian-latex-suite.LICENSE.md",
+  resolve(outdir, "obsidian-latex-suite.LICENSE.md"),
+);
 await copyFile("node_modules/mathjax/tex-svg.js", resolve(outdir, "mathjax/tex-svg.js"));
 await cp("node_modules/mathjax/input/tex/extensions", resolve(outdir, "mathjax/input/tex/extensions"), { recursive: true });
 await cp("node_modules/mathjax/a11y", resolve(outdir, "mathjax/a11y"), { recursive: true });

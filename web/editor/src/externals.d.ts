@@ -3,6 +3,11 @@ declare module "*.txt" {
   export default value;
 }
 
+declare module "*.txt?raw" {
+  const value: string;
+  export default value;
+}
+
 declare module "markdown-it-footnote" {
   const plugin: (markdown: unknown) => void;
   export default plugin;

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { concealLatex } from "../src/latex-suite/enhancements";
-import { expandReplacement, parseSnippetFile } from "../src/latex-suite/snippet-parser";
+import defaultSnippetVariables from "../src/latex-suite/default-snippet-variables.txt?raw";
+import defaultSnippets from "../src/latex-suite/default-snippets.txt?raw";
+import {
+  expandReplacement,
+  parseSnippetFile,
+  parseSnippetVariables,
+} from "../src/latex-suite/snippet-parser";
 
 describe("LaTeX Suite snippet format", () => {
   it("parses JSON5-style snippet files and priorities", () => {
@@ -11,6 +17,25 @@ describe("LaTeX Suite snippet format", () => {
     ]`);
     expect(snippets).toHaveLength(2);
     expect(snippets[0].trigger).toBe("x");
+  });
+
+  it("ships the complete Obsidian LaTeX Suite defaults and variables", () => {
+    const snippets = parseSnippetFile(defaultSnippets);
+    const variables = parseSnippetVariables(defaultSnippetVariables);
+
+    expect(snippets).toHaveLength(202);
+    expect(snippets.filter((snippet) => snippet.handler)).toHaveLength(4);
+    expect(variables.GREEK).toContain("Omega");
+    expect(variables.MORE_SYMBOLS).toContain("iiint");
+    expect(variables.ACCENT).toContain("overline");
+  });
+
+  it("normalizes wrapped and unwrapped snippet variable names", () => {
+    expect(parseSnippetVariables(`{
+      "\${GREEK}": "alpha|beta",
+      SYMBOL: "sum|prod",
+      ignored: "lowercase names are not variables",
+    }`)).toEqual({ GREEK: "alpha|beta", SYMBOL: "sum|prod" });
   });
 
   it("expands captures, visual selections, placeholders, and ordered tabstops", () => {

@@ -130,13 +130,22 @@ static void app_scheme_request(WebKitURISchemeRequest *request,
   g_uri_unref(parsed);
 }
 
-gchar *pdfv_markdown_resource_scheme_load_default_snippets(GError **error) {
-  gchar *filename = editor_asset_filename("default-snippets.txt");
+static gchar *load_editor_text_asset(const gchar *name, GError **error) {
+  gchar *filename = editor_asset_filename(name);
   gchar *contents = NULL;
   if (!g_file_get_contents(filename, &contents, NULL, error))
     g_clear_pointer(&contents, g_free);
   g_free(filename);
   return contents;
+}
+
+gchar *pdfv_markdown_resource_scheme_load_default_snippets(GError **error) {
+  return load_editor_text_asset("default-snippets.txt", error);
+}
+
+gchar *pdfv_markdown_resource_scheme_load_default_snippet_variables(
+    GError **error) {
+  return load_editor_text_asset("default-snippet-variables.txt", error);
 }
 
 static void vault_scheme_request(WebKitURISchemeRequest *request,
