@@ -1,6 +1,6 @@
 import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, showTooltip, type Tooltip } from "@codemirror/view";
-import { parseObsidian, selectionTouches, type ObsidianNode } from "./parser";
+import { parseMarkdownNodes, selectionTouches, type MarkdownNode } from "./parser";
 import {
   CalloutWidget,
   BulletWidget,
@@ -17,7 +17,7 @@ import {
   TagWidget,
   TaskWidget,
 } from "../widgets/preview";
-import { rawHtmlIsBlock } from "./markdown";
+import { rawHtmlIsBlock } from "./render";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
 const emphasis = Decoration.mark({ class: "cm-live-emphasis" });
@@ -28,7 +28,7 @@ const tag = Decoration.mark({ class: "cm-live-tag" });
 const blockId = Decoration.mark({ class: "cm-live-block-id" });
 export const refreshLivePreview = StateEffect.define<null>();
 
-function active(node: ObsidianNode, state: EditorState): boolean {
+function active(node: MarkdownNode, state: EditorState): boolean {
   return state.selection.ranges.some((selection) => {
     /* A click in the empty area after the final callout line maps to node.to.
      * Keep that endpoint editable; the next document line starts at to + 1. */
@@ -38,7 +38,7 @@ function active(node: ObsidianNode, state: EditorState): boolean {
   });
 }
 
-function imageIsInsideListItem(state: EditorState, node: ObsidianNode): boolean {
+function imageIsInsideListItem(state: EditorState, node: MarkdownNode): boolean {
   const line = state.doc.lineAt(node.from);
   const prefix = state.sliceDoc(line.from, node.from);
   return /^\s*[-+*]\s+(?:\[[^\]]\]\s+)?$/.test(prefix);
@@ -50,7 +50,7 @@ function targetIsImage(target: string): boolean {
   );
 }
 
-function blockReplacement(node: ObsidianNode, state: EditorState): Decoration | undefined {
+function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | undefined {
   switch (node.kind) {
     case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from), block: true });
     case "horizontal-rule": return Decoration.replace({ widget: new HorizontalRuleWidget(), block: true });
@@ -110,7 +110,7 @@ interface DecorationSink {
 
 function addDelimited(
   builder: DecorationSink,
-  node: ObsidianNode,
+  node: MarkdownNode,
   mark: Decoration,
 ): void {
   if (node.contentFrom == null || node.contentTo == null) return;
@@ -120,7 +120,7 @@ function addDelimited(
 }
 
 function buildDecorations(state: EditorState): DecorationSet {
-  const nodes = parseObsidian(state.doc.toString());
+  const nodes = parseMarkdownNodes(state.doc.toString());
   const ranges: Range<Decoration>[] = [];
   const builder: DecorationSink = {
     add(from, to, decoration) {
@@ -184,7 +184,7 @@ function buildDecorations(state: EditorState): DecorationSet {
 }
 
 function buildMathTooltips(state: EditorState): readonly Tooltip[] {
-  const nodes = parseObsidian(state.doc.toString()).filter(
+  const nodes = parseMarkdownNodes(state.doc.toString()).filter(
     (node) => node.kind === "math" || node.kind === "display-math",
   );
   const seen = new Set<number>();

@@ -99,21 +99,21 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 	
 	GtkWindow* window = gtk_application_get_active_window(GTK_APPLICATION(app));
 	
-	const char* developers[] = { "sp1rit", "Vlad-Kor", NULL };
+	const char* developers[] = { "Vlad Korsakov", NULL };
 	const char* acknowledgements[] = {
 		"artisticat1 and the Obsidian LaTeX Suite contributors",
 		NULL,
 	};
 	AdwAboutDialog* about = ADW_ABOUT_DIALOG(adw_about_dialog_new());
 	adw_about_dialog_set_application_name(about, "Phi Document Viewer");
-	adw_about_dialog_set_application_icon(about, "arpa.sp1rit.phi.viewer");
+	adw_about_dialog_set_application_icon(about, "ai.korsakov.Phi");
 	adw_about_dialog_set_version(about, "0.1");
 	adw_about_dialog_set_developers(about, developers);
 	adw_about_dialog_set_license_type(about, GTK_LICENSE_AGPL_3_0);
 	adw_about_dialog_set_comments(
 		about,
 		"A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK");
-	adw_about_dialog_set_website(about, "https://github.com/sp1ritCS/libphi");
+	adw_about_dialog_set_website(about, "https://github.com/Vlad-Kor/libphi");
 	adw_about_dialog_add_link(
 		about, "Obsidian LaTeX Suite",
 		"https://github.com/artisticat1/obsidian-latex-suite");
@@ -148,7 +148,7 @@ PdfvApplication* pdfv_application_new(void) {
 	if (g_getenv("PHI_DEVELOPMENT_NON_UNIQUE"))
 		flags |= G_APPLICATION_NON_UNIQUE;
 	return g_object_new(PDFV_TYPE_APPLICATION,
-		"application-id", "arpa.sp1rit.phi.viewer",
+		"application-id", "ai.korsakov.Phi",
 		"flags", flags,
 		NULL);
 }

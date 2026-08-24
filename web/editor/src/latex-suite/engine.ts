@@ -3,7 +3,7 @@ import { EditorView, keymap, ViewPlugin, type Command, type ViewUpdate } from "@
 import { indentLess, indentMore } from "@codemirror/commands";
 import defaultSnippets from "./default-snippets.txt?raw";
 import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
-import { codeModeAt, mathModeAt } from "../obsidian/parser";
+import { codeModeAt, mathModeAt } from "../markdown/parser";
 import { reportError } from "../bridge";
 import {
   expandReplacement,

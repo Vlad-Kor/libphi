@@ -1,4 +1,4 @@
-import { renderMarkdown } from "./obsidian/markdown";
+import { renderMarkdown } from "./markdown/render";
 
 export function markdownClipboardHtml(markdown: string): string {
   return renderMarkdown(markdown);

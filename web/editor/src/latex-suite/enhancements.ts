@@ -17,7 +17,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { parseObsidian } from "../obsidian/parser";
+import { parseMarkdownNodes } from "../markdown/parser";
 import {
   brackets,
   cmd_symbols,
@@ -508,7 +508,7 @@ function syntaxRanges(view: EditorView): Range<Decoration>[] {
   const mark = (from: number, to: number, className: string) => {
     if (from < to) ranges.push(Decoration.mark({ class: className }).range(from, to));
   };
-  const math = parseObsidian(document).filter(
+  const math = parseMarkdownNodes(document).filter(
     (node) => node.kind === "math" || node.kind === "display-math",
   );
   for (const node of math) {
@@ -599,7 +599,7 @@ function concealPresentation(view: EditorView): {
   atomicRanges: RangeSet<RangeValue>;
 } {
   const document = view.state.doc.toString();
-  const specs = parseObsidian(document)
+  const specs = parseMarkdownNodes(document)
     .filter((node) => node.kind === "math" || node.kind === "display-math")
     .flatMap((node) => node.contentFrom == null || node.contentTo == null ? [] :
       concealLatex(document.slice(node.contentFrom, node.contentTo), node.contentFrom));

@@ -1,4 +1,4 @@
-export type ObsidianNodeKind =
+export type MarkdownNodeKind =
   | "frontmatter"
   | "heading"
   | "emphasis"
@@ -26,8 +26,8 @@ export type ObsidianNodeKind =
   | "tag"
   | "block-id";
 
-export interface ObsidianNode {
-  kind: ObsidianNodeKind;
+export interface MarkdownNode {
+  kind: MarkdownNodeKind;
   from: number;
   to: number;
   contentFrom?: number;
@@ -55,11 +55,11 @@ function collectCodeRanges(text: string): Range[] {
 }
 
 function pushInline(
-  nodes: ObsidianNode[],
+  nodes: MarkdownNode[],
   text: string,
   ranges: Range[],
   pattern: RegExp,
-  kind: ObsidianNodeKind,
+  kind: MarkdownNodeKind,
   openLength: number,
   closeLength = openLength,
 ): void {
@@ -105,8 +105,8 @@ function markdownDestination(raw: string): string {
   return value;
 }
 
-function collectMarkdownLinks(text: string, protectedRanges: Range[]): ObsidianNode[] {
-  const nodes: ObsidianNode[] = [];
+function collectMarkdownLinks(text: string, protectedRanges: Range[]): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
   for (let open = 0; open < text.length; open++) {
     if (text[open] !== "[" || isMarkdownEscape(text, open) ||
         text[open + 1] === "[" || inside(open, protectedRanges)) continue;
@@ -150,8 +150,8 @@ function collectMarkdownLinks(text: string, protectedRanges: Range[]): ObsidianN
   return nodes;
 }
 
-export function parseObsidian(text: string): ObsidianNode[] {
-  const nodes: ObsidianNode[] = [];
+export function parseMarkdownNodes(text: string): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
   const codeRanges = collectCodeRanges(text);
   const htmlRanges: Range[] = [];
   const rawHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td|iframe)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
@@ -410,7 +410,7 @@ export function parseObsidian(text: string): ObsidianNode[] {
 }
 
 export function selectionTouches(
-  node: Pick<ObsidianNode, "from" | "to">,
+  node: Pick<MarkdownNode, "from" | "to">,
   selection: { from: number; to: number },
 ): boolean {
   if (selection.from === selection.to)

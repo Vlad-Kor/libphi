@@ -30,7 +30,7 @@ static void vault_fixture_setup(VaultFixture *fixture, gconstpointer data) {
   gchar *source = NULL;
   gsize source_length = 0;
   g_assert_true(g_file_get_contents(
-      TEST_MARKDOWN_FIXTURE_DIR "/obsidian-complete.md", &source,
+      TEST_MARKDOWN_FIXTURE_DIR "/markdown-compatibility.md", &source,
       &source_length, &error));
   g_assert_no_error(error);
   fixture->overview = g_file_get_child(fixture->root, "Overview.md");
@@ -254,7 +254,7 @@ static void test_byte_preserving_read(VaultFixture *fixture,
   gchar *expected = NULL;
   gsize expected_length = 0;
   g_assert_true(g_file_get_contents(
-      TEST_MARKDOWN_FIXTURE_DIR "/obsidian-complete.md", &expected,
+      TEST_MARKDOWN_FIXTURE_DIR "/markdown-compatibility.md", &expected,
       &expected_length, &error));
   g_assert_no_error(error);
   gchar *actual = pdfv_markdown_vault_adapter_read_text(

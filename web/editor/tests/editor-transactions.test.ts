@@ -67,7 +67,7 @@ describe("CodeMirror document transactions", () => {
     expect(customView.state.doc.toString()).toBe("- [-] Cancelled");
   });
 
-  it("updates Obsidian and regular Markdown image widths", () => {
+  it("updates wiki embeds and regular Markdown image widths", () => {
     expect(resizeImageMarkdown("![[diagram.png]]", 341.6)).toBe("![[diagram.png|342]]");
     expect(resizeImageMarkdown("![[diagram.png|200]]", 480)).toBe("![[diagram.png|480]]");
     expect(resizeImageMarkdown("![Diagram](<images/my diagram.png>)", 275))
@@ -530,7 +530,7 @@ describe("LaTeX Suite transactions", () => {
       .toBe("<span style='color:blue'>blue text</span>");
   });
 
-  it("runs bundled Obsidian-compatible snippets and function handlers", async () => {
+  it("runs bundled default snippets and function handlers", async () => {
     setCustomSnippets();
 
     const greek = viewFor("$@$", 2, 2, latexSuite);

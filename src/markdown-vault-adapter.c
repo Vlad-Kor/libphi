@@ -43,8 +43,8 @@ PdfvMarkdownVaultAdapter *pdfv_markdown_vault_adapter_new(GFile *root) {
       g_object_new(PDFV_TYPE_MARKDOWN_VAULT_ADAPTER, NULL);
   self->root = g_object_ref(root);
   self->attachment_folder = g_strdup("");
-  GFile *obsidian = g_file_get_child(root, ".obsidian");
-  GFile *configuration = g_file_get_child(obsidian, "app.json");
+  GFile *metadata_folder = g_file_get_child(root, ".obsidian");
+  GFile *configuration = g_file_get_child(metadata_folder, "app.json");
   gchar *contents = NULL;
   if (g_file_load_contents(configuration, NULL, &contents, NULL, NULL, NULL)) {
     JsonParser *parser = json_parser_new();
@@ -63,7 +63,7 @@ PdfvMarkdownVaultAdapter *pdfv_markdown_vault_adapter_new(GFile *root) {
   }
   g_free(contents);
   g_object_unref(configuration);
-  g_object_unref(obsidian);
+  g_object_unref(metadata_folder);
   return self;
 }
 

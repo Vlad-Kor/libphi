@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../src/obsidian/markdown";
+import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../src/markdown/render";
 import { defaultSettings, updateRuntimeSettings } from "../src/settings";
 
 afterEach(() => updateRuntimeSettings(defaultSettings));

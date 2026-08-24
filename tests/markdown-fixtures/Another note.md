@@ -6,7 +6,7 @@ This line has a block reference. ^embedded-block
 
 ## Nested heading
 
-Nested content with a [[obsidian-complete|backlink]].
+Nested content with a [[markdown-compatibility|backlink]].
 
 # Later section
 

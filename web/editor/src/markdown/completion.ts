@@ -44,7 +44,7 @@ function asCompletion(value: NativeCompletion | string, type: string): Completio
   };
 }
 
-export async function obsidianCompletion(
+export async function markdownCompletion(
   context: CompletionContext,
 ): Promise<CompletionResult | null> {
   const callout = context.matchBefore(/>\s*\[![\w-]*/);

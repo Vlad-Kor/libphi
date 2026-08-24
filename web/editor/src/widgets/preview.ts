@@ -9,9 +9,9 @@ import {
   renderRawHtml,
   sanitizeHtml,
   wireRenderedContent,
-} from "../obsidian/markdown";
+} from "../markdown/render";
 import { remoteImagesAllowed } from "../settings";
-import { calloutIcon } from "../obsidian/callout-icons";
+import { calloutIcon } from "../markdown/callout-icons";
 
 let mermaidSequence = 0;
 interface MermaidApi {

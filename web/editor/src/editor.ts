@@ -13,8 +13,8 @@ import { formattingKeymap, runEditingCommand } from "./commands";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
-import { obsidianCompletion } from "./obsidian/completion";
-import { livePreview, refreshLivePreview } from "./obsidian/live-preview";
+import { markdownCompletion } from "./markdown/completion";
+import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { applyTheme, defaultSettings, updateRuntimeSettings } from "./settings";
 import type { DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
 
@@ -60,7 +60,7 @@ function iconButton(button: HTMLButtonElement, icon: SearchIcon, fallback: strin
   button.setAttribute("aria-label", label);
   button.title = label;
 }
-const obsidianHighlightStyle = HighlightStyle.define([
+const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.strong, fontWeight: "750", textDecoration: "none" },
   { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], textDecoration: "none" },
 ]);
@@ -103,9 +103,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         rectangularSelection(),
         crosshairCursor(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        syntaxHighlighting(obsidianHighlightStyle),
+        syntaxHighlighting(markdownHighlightStyle),
         markdown({ base: markdownLanguage, addKeymap: true }),
-        autocompletion({ override: [obsidianCompletion], activateOnTyping: true }),
+        autocompletion({ override: [markdownCompletion], activateOnTyping: true }),
         keymap.of([
           ...formattingKeymap,
           { key: "Mod-s", preventDefault: true, run: () => { void this.requestSave(); return true; } },

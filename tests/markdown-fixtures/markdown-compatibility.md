@@ -1,5 +1,5 @@
 ---
-title: Obsidian compatibility fixture
+title: Markdown compatibility fixture
 tags:
   - university
   - markdown/editor

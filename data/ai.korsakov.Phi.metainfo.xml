@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>arpa.sp1rit.phi.viewer</id>
+  <id>ai.korsakov.Phi</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
   <name>Phi Document Viewer</name>
-  <summary>View PDFs and edit Obsidian-compatible Markdown</summary>
+  <summary>View PDFs and edit Markdown</summary>
   <description>
     <p>
       Phi is a high-performance PDF and Markdown application built with GTK4
       and libadwaita. It uses MuPDF for PDF rendering and an embedded,
-      offline editor for Obsidian-compatible Markdown notes.
+      offline Markdown editor.
     </p>
     <p>Features:</p>
     <ul>
@@ -24,11 +24,11 @@
       <li>External link support</li>
     </ul>
   </description>
-  <launchable type="desktop-id">arpa.sp1rit.phi.viewer.desktop</launchable>
-  <url type="homepage">https://github.com/sp1ritCS/libphi</url>
-  <url type="bugtracker">https://github.com/sp1ritCS/libphi/issues</url>
-  <developer id="arpa.sp1rit">
-    <name>sp1rit</name>
+  <launchable type="desktop-id">ai.korsakov.Phi.desktop</launchable>
+  <url type="homepage">https://github.com/Vlad-Kor/libphi</url>
+  <url type="bugtracker">https://github.com/Vlad-Kor/libphi/issues</url>
+  <developer id="ai.korsakov">
+    <name>Vlad Korsakov</name>
   </developer>
   <content_rating type="oars-1.1" />
   <supports>
