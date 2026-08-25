@@ -10,6 +10,7 @@ describe("Markdown extension parser precedence", () => {
     const nodes = parseMarkdownNodes(source);
     expect(nodes.some((node) => node.kind === "math")).toBe(false);
     expect(nodes.some((node) => node.kind === "wikilink")).toBe(false);
+    expect(nodes.filter((node) => node.kind === "inline-code")).toHaveLength(1);
   });
 
   it("does not parse Markdown inside raw HTML", () => {

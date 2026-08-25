@@ -29,6 +29,10 @@ void phi_page_detach_document(PhiPage* self) {
 	/* A GListModel consumer can keep a page alive after PhiDocument releases
 	 * its page cache. Drop the MuPDF page while the owning context is still
 	 * valid, then leave the detached GObject safe to dispose later. */
+	if (self->stext && self->document) {
+		fz_drop_stext_page(self->document->ctx, self->stext);
+	}
+	self->stext = NULL;
 	if (self->page && self->document) {
 		fz_drop_page(self->document->ctx, self->page);
 	}
@@ -50,6 +54,7 @@ static void phi_page_class_init(PhiPageClass* klass) {
 static void phi_page_init(PhiPage* self) {
 	self->document = NULL;
 	self->page = NULL;
+	self->stext = NULL;
 	self->bounds_valid = FALSE;
 }
 
@@ -258,9 +263,12 @@ static void phi_stext_fix_separate_diacritics(fz_stext_page* page) {
 }
 
 static fz_stext_page* phi_page_extract_stext(PhiPage* self) {
-	fz_stext_page* page = fz_new_stext_page_from_page(self->document->ctx, self->page, NULL);
-	phi_stext_fix_separate_diacritics(page);
-	return page;
+	if (!self->stext) {
+		self->stext = fz_new_stext_page_from_page(
+			self->document->ctx, self->page, NULL);
+		phi_stext_fix_separate_diacritics(self->stext);
+	}
+	return fz_keep_stext_page(self->document->ctx, self->stext);
 }
 
 static gchar* phi_normalize_extracted_text(const char* text) {
@@ -415,6 +423,131 @@ gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphen
 		return FALSE;
 	}
 	
+	return found;
+}
+
+gboolean phi_page_has_text_at(PhiPage* self, graphene_point_t* point) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), FALSE);
+	g_return_val_if_fail(point != NULL, FALSE);
+
+	fz_stext_page* stext = NULL;
+	gboolean found = FALSE;
+	fz_try(self->document->ctx) {
+		stext = phi_page_extract_stext(self);
+		for (fz_stext_block* block = stext->first_block;
+			block && !found; block = block->next) {
+			if (block->type != FZ_STEXT_BLOCK_TEXT)
+				continue;
+			for (fz_stext_line* line = block->u.t.first_line;
+				line && !found; line = line->next) {
+				fz_rect line_bbox = fz_empty_rect;
+				for (fz_stext_char* ch = line->first_char;
+					ch; ch = ch->next)
+					line_bbox = fz_union_rect(
+						line_bbox, fz_rect_from_quad(ch->quad));
+				found = line->first_char &&
+					point->x >= line_bbox.x0 && point->x <= line_bbox.x1 &&
+					point->y >= line_bbox.y0 && point->y <= line_bbox.y1;
+			}
+		}
+	} fz_always(self->document->ctx) {
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+	} fz_catch(self->document->ctx) {
+		return FALSE;
+	}
+	return found;
+}
+
+static gboolean phi_sentence_terminator(int character) {
+	return character == '.' || character == '?' || character == '!';
+}
+
+gboolean phi_page_select_sentence_at(PhiPage* self, graphene_point_t* point,
+		graphene_point_t* sentence_start, graphene_point_t* sentence_end) {
+	g_return_val_if_fail(PHI_IS_PAGE(self), FALSE);
+	g_return_val_if_fail(point != NULL && sentence_start != NULL &&
+		sentence_end != NULL, FALSE);
+
+	fz_stext_page* stext = NULL;
+	GPtrArray* characters = NULL;
+	gboolean found = FALSE;
+	fz_try(self->document->ctx) {
+		stext = phi_page_extract_stext(self);
+		for (fz_stext_block* block = stext->first_block;
+			block && !found; block = block->next) {
+			if (block->type != FZ_STEXT_BLOCK_TEXT)
+				continue;
+
+			fz_stext_char* target = NULL;
+			for (fz_stext_line* line = block->u.t.first_line;
+				line && !target; line = line->next) {
+				for (fz_stext_char* ch = line->first_char;
+					ch; ch = ch->next) {
+					fz_rect bbox = fz_rect_from_quad(ch->quad);
+					if (point->x >= bbox.x0 && point->x <= bbox.x1 &&
+						point->y >= bbox.y0 && point->y <= bbox.y1) {
+						target = ch;
+						break;
+					}
+				}
+			}
+			if (!target || g_unichar_isspace(target->c))
+				continue;
+
+			characters = g_ptr_array_new();
+			guint target_index = 0;
+			for (fz_stext_line* line = block->u.t.first_line;
+				line; line = line->next) {
+				for (fz_stext_char* ch = line->first_char;
+					ch; ch = ch->next) {
+					if (ch == target)
+						target_index = characters->len;
+					g_ptr_array_add(characters, ch);
+				}
+			}
+
+			guint begin_index = 0;
+			for (guint i = 0; i < target_index; i++) {
+				fz_stext_char* ch = g_ptr_array_index(characters, i);
+				if (phi_sentence_terminator(ch->c))
+					begin_index = i + 1;
+			}
+			while (begin_index < characters->len) {
+				fz_stext_char* ch = g_ptr_array_index(
+					characters, begin_index);
+				if (!g_unichar_isspace(ch->c))
+					break;
+				begin_index++;
+			}
+
+			guint end_index = characters->len - 1;
+			for (guint i = target_index; i < characters->len; i++) {
+				fz_stext_char* ch = g_ptr_array_index(characters, i);
+				if (phi_sentence_terminator(ch->c)) {
+					end_index = i;
+					break;
+				}
+			}
+
+			fz_stext_char* begin = g_ptr_array_index(
+				characters, MIN(begin_index, target_index));
+			fz_stext_char* end = g_ptr_array_index(characters, end_index);
+			fz_rect begin_bbox = fz_rect_from_quad(begin->quad);
+			fz_rect end_bbox = fz_rect_from_quad(end->quad);
+			sentence_start->x = begin_bbox.x0;
+			sentence_start->y = (begin_bbox.y0 + begin_bbox.y1) / 2;
+			sentence_end->x = end_bbox.x1;
+			sentence_end->y = (end_bbox.y0 + end_bbox.y1) / 2;
+			found = TRUE;
+		}
+	} fz_always(self->document->ctx) {
+		g_clear_pointer(&characters, g_ptr_array_unref);
+		if (stext)
+			fz_drop_stext_page(self->document->ctx, stext);
+	} fz_catch(self->document->ctx) {
+		return FALSE;
+	}
 	return found;
 }
 

@@ -62,6 +62,13 @@ gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphe
 /* Select word at point, returns start/end points of word and TRUE if found */
 gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphene_point_t* word_start, graphene_point_t* word_end);
 
+/* Return TRUE when the point is over selectable text. */
+gboolean phi_page_has_text_at(PhiPage* self, graphene_point_t* point);
+
+/* Select the sentence at point, including its closing punctuation. */
+gboolean phi_page_select_sentence_at(PhiPage* self, graphene_point_t* point,
+	graphene_point_t* sentence_start, graphene_point_t* sentence_end);
+
 /* Copy selected text between two points */
 gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_point_t* end);
 

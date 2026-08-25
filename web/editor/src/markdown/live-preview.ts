@@ -26,6 +26,7 @@ const strike = Decoration.mark({ class: "cm-live-strike" });
 const highlight = Decoration.mark({ class: "cm-live-highlight" });
 const tag = Decoration.mark({ class: "cm-live-tag" });
 const blockId = Decoration.mark({ class: "cm-live-block-id" });
+const inlineCode = Decoration.mark({ class: "cm-live-inline-code" });
 const htmlTag = Decoration.mark({ class: "cm-html-tag" });
 const htmlAttribute = Decoration.mark({ class: "cm-html-attribute" });
 const htmlValue = Decoration.mark({ class: "cm-html-value" });
@@ -192,14 +193,16 @@ function buildDecorations(state: EditorState): DecorationSet {
         const indentColumns = Number(node.meta?.indentColumns ?? 0);
         const marker = String(node.meta?.marker ?? node.text);
         const ordered = Boolean(node.meta?.ordered);
-        const markerIndent = node.meta?.task ? 1.95 : ordered
-          ? 0.56 * Math.max(1, marker.length - 1) + 0.62
+        const markerIndent = ordered
+          ? 0.62 * marker.length + 0.35
           : 1.1;
-        const contentIndent = indentColumns * 0.25 + markerIndent;
+        const contentIndent = node.meta?.task
+          ? `calc(${indentColumns ? `${indentColumns * 0.25}em + ` : ""}18px + 0.4em)`
+          : `${Number((indentColumns * 0.25 + markerIndent).toFixed(2))}em`;
         builder.add(node.from, node.from, Decoration.line({
           attributes: {
             class: `cm-live-list-item${ordered ? " cm-live-ordered-list-item" : ""}`,
-            style: `--phi-list-content-indent:${Number(contentIndent.toFixed(2))}em`,
+            style: `--phi-list-content-indent:${contentIndent}`,
           },
         }));
         if (!isActive) {
@@ -236,6 +239,7 @@ function buildDecorations(state: EditorState): DecorationSet {
       case "strong": if (!isActive) addDelimited(builder, node, strong); break;
       case "strike": if (!isActive) addDelimited(builder, node, strike); break;
       case "highlight": if (!isActive) addDelimited(builder, node, highlight); break;
+      case "inline-code": if (!isActive) addDelimited(builder, node, inlineCode); break;
       case "comment": if (!isActive) builder.add(node.from, node.to, hidden); break;
       case "tag": builder.add(node.from, node.to, tag); break;
       case "block-id": builder.add(node.from, node.to, blockId); break;

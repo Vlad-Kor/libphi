@@ -1720,20 +1720,25 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
     (void)gesture;
     gtk_widget_grab_focus(GTK_WIDGET(self));
     
-    /* Double-click: select word */
-    if (n_press == 2) {
+    /* Double-click selects a word; triple-click selects its sentence. */
+    if (n_press == 2 || n_press == 3) {
         gint page_num;
         graphene_point_t page_point;
         if (screen_to_page_coords(self, x, y, &page_num, &page_point)) {
             PhiPage* page = g_ptr_array_index(self->pages, page_num);
             if (page) {
-                graphene_point_t word_start, word_end;
-                if (phi_page_select_word_at(page, &page_point, &word_start, &word_end)) {
+                graphene_point_t selection_start, selection_end;
+                gboolean selected = n_press == 3
+                    ? phi_page_select_sentence_at(
+                        page, &page_point, &selection_start, &selection_end)
+                    : phi_page_select_word_at(
+                        page, &page_point, &selection_start, &selection_end);
+                if (selected) {
                     self->selection_start_page = page_num;
-                    self->selection_start = word_start;
+                    self->selection_start = selection_start;
                     self->selection_end_page = page_num;
-                    self->selection_end = word_end;
-                    self->double_click_selected = TRUE;  /* Prevent drag from clearing */
+                    self->selection_end = selection_end;
+                    self->double_click_selected = TRUE;
                     
                     update_selection_quads(self);
                     gtk_widget_queue_draw(GTK_WIDGET(self));
@@ -1833,18 +1838,27 @@ on_motion(GtkEventControllerMotion* controller, gdouble x, gdouble y,
     self->pointer_y = y;
     
     PhiLink* link = find_link_at(self, x, y);
-    
     const gchar* new_hover = link ? link->uri : NULL;
-    
     if (g_strcmp0(new_hover, self->hover_link) != 0) {
         g_free(self->hover_link);
         self->hover_link = g_strdup(new_hover);
-        
-        if (link)
-            gtk_widget_set_cursor_from_name(GTK_WIDGET(self), "pointer");
-        else
-            gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
     }
+
+    gboolean over_text = FALSE;
+    if (!link) {
+        gint page_num;
+        graphene_point_t page_point;
+        if (screen_to_page_coords(self, x, y, &page_num, &page_point)) {
+            PhiPage* page = g_ptr_array_index(self->pages, page_num);
+            over_text = page && phi_page_has_text_at(page, &page_point);
+        }
+    }
+    if (link)
+        gtk_widget_set_cursor_from_name(GTK_WIDGET(self), "pointer");
+    else if (over_text)
+        gtk_widget_set_cursor_from_name(GTK_WIDGET(self), "text");
+    else
+        gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
 }
 
 static void
@@ -2132,7 +2146,10 @@ on_pan_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocu
     (void)offset_x;
     (void)offset_y;
     
-    gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
+    if (self->has_pointer_position)
+        on_motion(NULL, self->pointer_x, self->pointer_y, self);
+    else
+        gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
 }
 
 static void
@@ -2194,7 +2211,10 @@ on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDoc
     }
     
     self->selecting = FALSE;
-    gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
+    if (self->has_pointer_position)
+        on_motion(NULL, self->pointer_x, self->pointer_y, self);
+    else
+        gtk_widget_set_cursor(GTK_WIDGET(self), NULL);
     
     /* If we just did a double-click selection, don't process as click */
     if (self->double_click_selected) {

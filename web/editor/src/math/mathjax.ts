@@ -63,6 +63,13 @@ function api(): MathJaxApi | undefined {
   return (window as MathJaxWindow).MathJax;
 }
 
+function normalizeInlineEnvironments(latex: string): string {
+  if (!/\\begin\{align\*?\}/.test(latex)) return latex;
+  return latex
+    .replace(/\\begin\{align\*?\}/g, "\\begin{aligned}")
+    .replace(/\\end\{align\*?\}/g, "\\end{aligned}");
+}
+
 function retryPromise(error: unknown): Promise<unknown> | undefined {
   if (!error || typeof error !== "object" || !("retry" in error)) return undefined;
   const retry = (error as { retry?: unknown }).retry;
@@ -146,7 +153,8 @@ export async function renderMath(
     target.classList.add("math-loading");
     target.textContent = latex;
     const mathjax = await waitForMathJax();
-    const source = `${preamble ? `${preamble}\n` : ""}${latex}`;
+    const normalized = display ? latex : normalizeInlineEnvironments(latex);
+    const source = `${preamble ? `${preamble}\n` : ""}${normalized}`;
     const rendered = await convertMath(mathjax, source, display);
     target.replaceChildren(rendered);
     target.classList.remove("math-loading");

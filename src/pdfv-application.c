@@ -40,6 +40,7 @@ static void pdfv_application_startup(GApplication* app) {
 	const char* open_accels[] = { "<Control>o", NULL };
 	const char* new_tab_accels[] = { "<Control>t", NULL };
 	const char* close_tab_accels[] = { "<Control>w", NULL };
+	const char* reopen_closed_tab_accels[] = { "<Control><Shift>t", NULL };
 	const char* save_accels[] = { "<Control>s", NULL };
 	const char* quit_accels[] = { "<Control>q", NULL };
 	const char* zoom_in_accels[] = { "<Control>plus", "<Control>equal", NULL };
@@ -62,6 +63,7 @@ static void pdfv_application_startup(GApplication* app) {
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.open", open_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.new-tab", new_tab_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.close-tab", close_tab_accels);
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.reopen-closed-tab", reopen_closed_tab_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.save", save_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "app.quit", quit_accels);
 	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "win.zoom-in", zoom_in_accels);

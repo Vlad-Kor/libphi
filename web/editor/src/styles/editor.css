@@ -384,6 +384,10 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
   text-align: end;
 }
 .list-number, .cm-live-list-number { color: var(--editor-muted); font-weight: 600; }
+.list-number {
+  font-family: ui-monospace, "Adwaita Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
 .horizontal-rule-widget {
   display: block;
   width: 100%;
@@ -392,7 +396,14 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
   border: 0;
   background: var(--editor-border);
 }
-.task-checkbox { margin: 0 .4em 0 0; transform: translateY(1px); }
+.task-checkbox { margin: 0 .4em 0 0; transform: translateY(-1px); }
+.cm-live-inline-code {
+  padding: .08em .3em;
+  border-radius: 5px;
+  background: var(--editor-code-bg);
+  font-family: ui-monospace, "Adwaita Mono", monospace;
+  font-size: .92em;
+}
 .cm-html-tag { color: color-mix(in srgb, #c061cb 80%, var(--editor-fg)); font-weight: 650; }
 .cm-html-attribute { color: color-mix(in srgb, var(--editor-link) 82%, var(--editor-fg)); }
 .cm-html-value { color: color-mix(in srgb, #e5a50a 78%, var(--editor-fg)); }

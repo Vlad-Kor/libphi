@@ -26,6 +26,13 @@
 
 #define WORKSPACE_VISIBLE_MATCHES 4
 #define WORKSPACE_PREVIEW_DELAY_MS 220
+#define CLOSED_TAB_HISTORY_LIMIT 12
+
+typedef struct {
+  GFile *file;
+  gint page_number;
+  gboolean empty;
+} ClosedTab;
 
 struct _PdfvWindow {
   AdwApplicationWindow parent_instance;
@@ -34,6 +41,7 @@ struct _PdfvWindow {
   AdwTabView *tab_view;
   AdwTabBar *tab_bar;
   AdwTabOverview *tab_overview;
+  GQueue closed_tabs;
 
   /* Main layout */
   AdwOverlaySplitView *split_view;
@@ -172,6 +180,8 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                                    guint generation);
 static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
                                            gboolean fit_width);
+static void open_file_in_new_window_at_page(PdfvWindow *self, GFile *file,
+                                            gint target_page);
 static AdwTabPage *workspace_open_file(PdfvWindow *self, GFile *file,
                                        gboolean persistent);
 static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
@@ -227,6 +237,56 @@ static void on_workspace_search_surface_pressed(GtkGestureClick *gesture,
                                                 gint n_press, gdouble x,
                                                 gdouble y,
                                                 PdfvWindow *self);
+
+static void closed_tab_free(ClosedTab *tab) {
+  if (!tab)
+    return;
+  g_clear_object(&tab->file);
+  g_free(tab);
+}
+
+static ClosedTab *closed_tab_snapshot(AdwTabPage *page) {
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  if (!GTK_IS_STACK(stack))
+    return NULL;
+
+  GFile *file = g_object_get_data(G_OBJECT(stack), "document-file");
+  gboolean empty = g_strcmp0(
+      gtk_stack_get_visible_child_name(GTK_STACK(stack)), "empty") == 0;
+  if (!file && !empty)
+    return NULL;
+
+  ClosedTab *tab = g_new0(ClosedTab, 1);
+  tab->file = file ? g_object_ref(file) : NULL;
+  tab->empty = empty;
+  PdfvDocumentView *view = g_object_get_data(
+      G_OBJECT(stack), "document-view");
+  if (file && view && pdfv_document_view_get_document(view))
+    tab->page_number = pdfv_document_view_get_current_page(view);
+  return tab;
+}
+
+static void closed_tab_push(PdfvWindow *self, ClosedTab *tab) {
+  if (!tab)
+    return;
+  g_queue_push_tail(&self->closed_tabs, tab);
+  while (g_queue_get_length(&self->closed_tabs) > CLOSED_TAB_HISTORY_LIMIT)
+    closed_tab_free(g_queue_pop_head(&self->closed_tabs));
+}
+
+static AdwTabPage *add_related_tab(PdfvWindow *self, GtkWidget *child,
+                                   AdwTabPage *parent) {
+  if (parent &&
+      adw_tab_view_get_page_position(self->tab_view, parent) < 0)
+    parent = NULL;
+  return adw_tab_view_add_page(self->tab_view, child, parent);
+}
+
+static AdwTabPage *add_tab_after_selected(PdfvWindow *self,
+                                          GtkWidget *child) {
+  return add_related_tab(
+      self, child, adw_tab_view_get_selected_page(self->tab_view));
+}
 
 static void apply_preferences_to_editor(PdfvWindow *self,
                                         PdfvMarkdownEditor *editor) {
@@ -1482,7 +1542,8 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
 
   if (!self->workspace_preview_tab) {
     GtkWidget *content = create_tab_content(self);
-    self->workspace_preview_tab = adw_tab_view_append(self->tab_view, content);
+    self->workspace_preview_tab = add_related_tab(
+        self, content, self->workspace_return_tab);
     adw_tab_page_set_title(self->workspace_preview_tab, "Loading…");
   }
   self->workspace_preview_page = match->page;
@@ -2233,7 +2294,6 @@ static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
                                         PdfvWindow *self) {
   (void)controller;
   (void)keycode;
-  (void)state;
   switch (keyval) {
   case GDK_KEY_Down:
     workspace_move_result(self, 1);
@@ -2242,25 +2302,52 @@ static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
     workspace_move_result(self, -1);
     return GDK_EVENT_STOP;
   case GDK_KEY_Right:
-    if (self->workspace_results && self->workspace_results->len > 0)
+  case GDK_KEY_Left: {
+    GdkModifierType text_modifiers = GDK_SHIFT_MASK | GDK_CONTROL_MASK |
+        GDK_ALT_MASK | GDK_SUPER_MASK;
+    gint selection_start = 0;
+    gint selection_end = 0;
+    gboolean has_selection = gtk_editable_get_selection_bounds(
+        GTK_EDITABLE(self->workspace_search_entry), &selection_start,
+        &selection_end);
+    if ((state & text_modifiers) || has_selection)
+      return GDK_EVENT_PROPAGATE;
+
+    const gchar *text = gtk_editable_get_text(
+        GTK_EDITABLE(self->workspace_search_entry));
+    gint position = gtk_editable_get_position(
+        GTK_EDITABLE(self->workspace_search_entry));
+    gint length = (gint)g_utf8_strlen(text, -1);
+    if (keyval == GDK_KEY_Right) {
+      if (position < length || !self->workspace_results ||
+          self->workspace_result_group + 1 >=
+              (gint)self->workspace_results->len)
+        return GDK_EVENT_PROPAGATE;
       workspace_select_result(
-          self, (self->workspace_result_group + 1) %
-                    (gint)self->workspace_results->len,
+          self, self->workspace_result_group + 1,
           self->workspace_result_match, TRUE);
-    return GDK_EVENT_STOP;
-  case GDK_KEY_Left:
-    if (self->workspace_results && self->workspace_results->len > 0)
+    } else {
+      if (position > 0 || !self->workspace_results ||
+          self->workspace_result_group <= 0)
+        return GDK_EVENT_PROPAGATE;
       workspace_select_result(
-          self,
-          (self->workspace_result_group - 1 +
-           (gint)self->workspace_results->len) %
-              (gint)self->workspace_results->len,
+          self, self->workspace_result_group - 1,
           self->workspace_result_match, TRUE);
+    }
     return GDK_EVENT_STOP;
+  }
   case GDK_KEY_Return:
   case GDK_KEY_KP_Enter:
-    if (workspace_selected_match(self))
-      workspace_search_close(self, TRUE);
+    if (workspace_selected_match(self)) {
+      if (state & GDK_CONTROL_MASK) {
+        PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
+        PdfvWorkspaceMatch *match = workspace_selected_match(self);
+        open_file_in_new_window_at_page(self, group->file, match->page);
+        workspace_search_close(self, FALSE);
+      } else {
+        workspace_search_close(self, TRUE);
+      }
+    }
     return GDK_EVENT_STOP;
   case GDK_KEY_Escape:
     workspace_search_close(self, FALSE);
@@ -2360,6 +2447,8 @@ static void workspace_search_close(PdfvWindow *self, gboolean commit) {
       AdwTabPage *preview = self->workspace_preview_tab;
       self->workspace_preview_tab = NULL;
       g_clear_object(&self->workspace_preview_file);
+      g_object_set_data(G_OBJECT(preview), "skip-closed-tab-history",
+                        GINT_TO_POINTER(1));
       adw_tab_view_close_page(self->tab_view, preview);
     }
     if (self->workspace_return_tab &&
@@ -2913,6 +3002,7 @@ typedef struct {
   AdwTabView *tab_view;
   AdwTabPage *page;
   PdfvMarkdownEditor *editor;
+  ClosedTab *closed_tab;
 } MarkdownCloseRequest;
 
 static gboolean continue_window_close_idle(gpointer user_data) {
@@ -2925,6 +3015,7 @@ static void markdown_close_request_free(MarkdownCloseRequest *request) {
   g_clear_object(&request->tab_view);
   g_clear_object(&request->page);
   g_clear_object(&request->editor);
+  closed_tab_free(request->closed_tab);
   g_free(request);
 }
 
@@ -2938,6 +3029,8 @@ static void finish_markdown_close(MarkdownCloseRequest *request,
     g_signal_handlers_disconnect_by_data(request->editor, self);
     if (self->current_editor == request->editor)
       self->current_editor = NULL;
+    if (!self->closing_window)
+      closed_tab_push(self, g_steal_pointer(&request->closed_tab));
   }
   adw_tab_view_close_page_finish(request->tab_view, request->page, close_page);
   gboolean continue_window_close = close_page && self->closing_window;
@@ -3020,6 +3113,8 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
       pdfv_window_new_tab(self);
     return GDK_EVENT_STOP;
   }
+  gboolean remember = !self->closing_window &&
+      !g_object_get_data(G_OBJECT(page), "skip-closed-tab-history");
   if (editor) {
     if (g_object_get_data(G_OBJECT(page), "markdown-close-pending"))
       return GDK_EVENT_STOP;
@@ -3030,6 +3125,7 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
     request->tab_view = g_object_ref(tab_view);
     request->page = g_object_ref(page);
     request->editor = g_object_ref(editor);
+    request->closed_tab = remember ? closed_tab_snapshot(page) : NULL;
     if (pdfv_markdown_editor_get_dirty(editor)) {
       pdfv_markdown_editor_save_async(editor, NULL, on_close_save_done,
                                       request);
@@ -3044,6 +3140,9 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
     g_signal_handlers_disconnect_by_data(view, self);
     self->current_view = NULL;
   }
+
+  if (remember)
+    closed_tab_push(self, closed_tab_snapshot(page));
 
   adw_tab_view_close_page_finish(tab_view, page, TRUE);
   if (self->closing_window || adw_tab_view_get_n_pages(tab_view) == 0)
@@ -4318,7 +4417,7 @@ static void action_new_workspace_window(GSimpleAction *action,
 
 static void open_file_in_new_tab(PdfvWindow *self, GFile *file) {
   GtkWidget *content = create_tab_content(self);
-  AdwTabPage *page = adw_tab_view_append(self->tab_view, content);
+  AdwTabPage *page = add_tab_after_selected(self, content);
   adw_tab_view_set_selected_page(self->tab_view, page);
   if (file_is_markdown(file))
     open_markdown_in_tab_async(self, file, page);
@@ -4326,7 +4425,8 @@ static void open_file_in_new_tab(PdfvWindow *self, GFile *file) {
     open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0);
 }
 
-static void open_file_in_new_window(PdfvWindow *self, GFile *file) {
+static void open_file_in_new_window_at_page(PdfvWindow *self, GFile *file,
+                                            gint target_page) {
   GtkApplication *application = gtk_window_get_application(GTK_WINDOW(self));
   if (!application)
     return;
@@ -4336,8 +4436,21 @@ static void open_file_in_new_window(PdfvWindow *self, GFile *file) {
     if (pdfv_workspace_file_is_within(root, file))
       open_workspace_folder_internal(window, root, FALSE);
   }
-  pdfv_window_open_file(window, file);
+  AdwTabPage *page = adw_tab_view_get_selected_page(window->tab_view);
+  if (!page) {
+    GtkWidget *content = create_tab_content(window);
+    page = add_tab_after_selected(window, content);
+  }
+  if (file_is_markdown(file))
+    open_markdown_in_tab_async(window, file, page);
+  else
+    open_file_in_tab_async(window, file, page, MAX(0, target_page), FALSE,
+                           TRUE, 0);
   gtk_window_present(GTK_WINDOW(window));
+}
+
+static void open_file_in_new_window(PdfvWindow *self, GFile *file) {
+  open_file_in_new_window_at_page(self, file, 0);
 }
 
 static void on_default_file_launched(GObject *source, GAsyncResult *result,
@@ -4598,6 +4711,37 @@ static void action_close_tab(GSimpleAction *action, GVariant *parameter,
   AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
   if (page)
     adw_tab_view_close_page(self->tab_view, page);
+}
+
+static void action_reopen_closed_tab(GSimpleAction *action,
+                                     GVariant *parameter,
+                                     gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  ClosedTab *closed = g_queue_pop_tail(&self->closed_tabs);
+  if (!closed)
+    return;
+
+  if (closed->file && !g_file_query_exists(closed->file, NULL)) {
+    adw_toast_overlay_add_toast(
+        self->toast_overlay,
+        adw_toast_new("The closed document no longer exists"));
+    closed_tab_free(closed);
+    return;
+  }
+
+  GtkWidget *content = create_tab_content(self);
+  AdwTabPage *page = add_tab_after_selected(self, content);
+  adw_tab_view_set_selected_page(self->tab_view, page);
+  if (closed->file) {
+    if (file_is_markdown(closed->file))
+      open_markdown_in_tab_async(self, closed->file, page);
+    else
+      open_file_in_tab_async(self, closed->file, page, closed->page_number,
+                             FALSE, TRUE, 0);
+  }
+  closed_tab_free(closed);
 }
 
 static void on_window_markdown_saved(GObject *source, GAsyncResult *result,
@@ -5821,6 +5965,7 @@ static GActionEntry win_actions[] = {
     {.name = "new-workspace-window",
      .activate = action_new_workspace_window},
     {.name = "close-tab", .activate = action_close_tab},
+    {.name = "reopen-closed-tab", .activate = action_reopen_closed_tab},
     {.name = "save", .activate = action_save},
     {.name = "toggle-markdown-source",
      .activate = action_toggle_markdown_source},
@@ -5905,7 +6050,7 @@ static AdwTabPage *on_tab_overview_create_tab(AdwTabOverview *overview,
                                               PdfvWindow *self) {
   (void)overview;
   GtkWidget *content = create_tab_content(self);
-  AdwTabPage *page = adw_tab_view_append(self->tab_view, content);
+  AdwTabPage *page = add_tab_after_selected(self, content);
   adw_tab_page_set_title(page, "New Tab");
   return page;
 }
@@ -6038,6 +6183,7 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->zoom_menu_section);
   g_clear_object(&self->view_menu_section);
   g_clear_object(&self->open_workspace_menu);
+  g_queue_clear_full(&self->closed_tabs, (GDestroyNotify)closed_tab_free);
   g_clear_pointer(&self->settings, pdfv_settings_free);
 
   if (self->current_outline) {
@@ -6049,6 +6195,7 @@ static void pdfv_window_dispose(GObject *object) {
 }
 
 static void pdfv_window_init(PdfvWindow *self) {
+  g_queue_init(&self->closed_tabs);
   self->current_view = NULL;
   self->current_editor = NULL;
   self->current_outline = NULL;
@@ -6750,7 +6897,7 @@ static AdwTabPage *workspace_open_file(PdfvWindow *self, GFile *file,
   }
   if (!page) {
     GtkWidget *content = create_tab_content(self);
-    page = adw_tab_view_append(self->tab_view, content);
+    page = add_tab_after_selected(self, content);
   }
   if (!persistent)
     self->workspace_browse_tab = page;
@@ -6781,7 +6928,7 @@ static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
     stack = adw_tab_page_get_child(page);
   } else {
     stack = create_tab_content(self);
-    page = adw_tab_view_append(self->tab_view, stack);
+    page = add_tab_after_selected(self, stack);
     adw_tab_view_set_selected_page(self->tab_view, page);
   }
   if (file_is_markdown(file))
@@ -6798,7 +6945,7 @@ void pdfv_window_new_tab(PdfvWindow *self) {
   g_return_if_fail(PDFV_IS_WINDOW(self));
 
   GtkWidget *content = create_tab_content(self);
-  AdwTabPage *page = adw_tab_view_append(self->tab_view, content);
+  AdwTabPage *page = add_tab_after_selected(self, content);
   adw_tab_page_set_title(page, "New Tab");
   adw_tab_view_set_selected_page(self->tab_view, page);
 }

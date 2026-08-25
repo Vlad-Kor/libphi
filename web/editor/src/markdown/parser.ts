@@ -15,6 +15,7 @@ export type MarkdownNodeKind =
   | "footnote-definition"
   | "math"
   | "display-math"
+  | "inline-code"
   | "task"
   | "callout"
   | "table"
@@ -184,6 +185,22 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
       to: match.index + match[0].length,
       text: language === "mermaid" ? match[4] : match[0],
       meta: { language },
+    });
+  }
+
+  const inlineCode = /(`+)([^\n]*?)\1/g;
+  for (const match of text.matchAll(inlineCode)) {
+    const from = match.index;
+    const to = from + match[0].length;
+    if (!codeRanges.some((range) => range.from === from && range.to === to))
+      continue;
+    nodes.push({
+      kind: "inline-code",
+      from,
+      to,
+      contentFrom: from + match[1].length,
+      contentTo: to - match[1].length,
+      text: match[2],
     });
   }
 

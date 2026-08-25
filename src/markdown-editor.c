@@ -564,6 +564,8 @@ static void handle_attachment_create(PdfvMarkdownEditor *self,
   }
   GError *error = NULL;
   GFile *root = pdfv_markdown_vault_adapter_get_root(self->vault);
+  /* A workspace is optional. Without a configured attachment folder, keep
+   * pasted images beside the open note and return a note-relative link. */
   GFile *parent = self->attachment_folder
       ? g_object_ref(self->attachment_folder)
       : self->file ? g_file_get_parent(self->file) : NULL;

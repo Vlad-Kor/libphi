@@ -178,6 +178,24 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
   });
 
+  it("renders inline code as a compact code chip outside its source", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "Use `test` here";
+    editor.openDocument({
+      documentId: "inline-code",
+      path: "inline-code.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    expect(parent.querySelector(".cm-live-inline-code")?.textContent).toBe("test");
+    expect(parent.querySelector(".cm-line")?.textContent).toBe("Use test here");
+  });
+
   it("builds sorted previews for nested rich lists and keeps list images inline", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
@@ -268,13 +286,14 @@ $$`;
     expect(lines[0].style.getPropertyValue("--phi-list-content-indent"))
       .toBe("1.1em");
     expect(lines[1].style.getPropertyValue("--phi-list-content-indent"))
-      .toBe("1.95em");
+      .toBe("calc(18px + 0.4em)");
     expect(lines[2].classList.contains("cm-live-ordered-list-item")).toBe(true);
     expect(lines[2].querySelector(".list-number")?.textContent).toBe("10.");
 
     const css = readFileSync("src/styles/editor.css", "utf8");
-    expect(css).toMatch(/\.task-checkbox\s*\{[^}]*translateY\(1px\)/s);
+    expect(css).toMatch(/\.task-checkbox\s*\{[^}]*translateY\(-1px\)/s);
     expect(css).toMatch(/\.list-number, \.cm-live-list-number\s*\{[^}]*var\(--editor-muted\)/s);
+    expect(css).toMatch(/\.list-number\s*\{[^}]*ui-monospace[^}]*tabular-nums/s);
     expect(css).toMatch(/\.cm-tooltip-autocomplete\s*\{[^}]*border-radius: 12px/s);
     expect(css).toMatch(/\.cm-completionIcon\s*\{\s*display: none/s);
   });
@@ -588,6 +607,23 @@ $$`;
     expect(calls).toEqual(["theta_unique = 7"]);
     expect(target.querySelector("mjx-container")).not.toBeNull();
     expect(target.textContent).not.toContain("$$");
+  });
+
+  it("renders an inline align environment as its inline-safe equivalent", async () => {
+    const calls: { latex: string; display?: boolean }[] = [];
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: (latex: string, options?: { display?: boolean }) => {
+        calls.push({ latex, display: options?.display });
+        return document.createElement("mjx-container");
+      },
+    };
+    const target = document.createElement("span");
+    await renderMath(String.raw`\begin{align}&\text{oben}\\&\text{unten}\end{align}`, false, target);
+    expect(calls).toEqual([{
+      latex: String.raw`\begin{aligned}&\text{oben}\\&\text{unten}\end{aligned}`,
+      display: false,
+    }]);
   });
 
   it("indents and outdents hierarchical list items with Tab", () => {

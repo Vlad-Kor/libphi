@@ -35,9 +35,21 @@ static void test_separate_diacritic_text(void) {
 
 	graphene_point_t start = GRAPHENE_POINT_INIT(70, 100);
 	graphene_point_t end = GRAPHENE_POINT_INIT(220, 100);
+	graphene_point_t text_point = GRAPHENE_POINT_INIT(80, 100);
+	g_assert_true(phi_page_has_text_at(page, &text_point));
 	g_autofree gchar* selection = phi_page_copy_selection(page, &start, &end);
 	g_assert_nonnull(selection);
 	g_assert_nonnull(g_strstr_len(selection, -1, "präsentiert"));
+
+	graphene_point_t sentence_start;
+	graphene_point_t sentence_end;
+	g_assert_true(phi_page_select_sentence_at(
+		page, &text_point, &sentence_start, &sentence_end));
+	g_autofree gchar* sentence = phi_page_copy_selection(
+		page, &sentence_start, &sentence_end);
+	g_assert_nonnull(sentence);
+	g_assert_nonnull(g_strstr_len(sentence, -1, "präsentiert"));
+	g_assert_nonnull(g_strstr_len(sentence, -1, "Test"));
 
 	PhiTextQuad quads[8];
 	g_assert_cmpint(phi_page_search_text(page, "präsentiert", quads,
