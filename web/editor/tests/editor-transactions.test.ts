@@ -345,6 +345,34 @@ $$`;
     expect(parent.querySelector(".callout")).toBeNull();
   });
 
+  it("renders inline LaTeX in Live Preview callout titles", async () => {
+    const calls: string[] = [];
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: (latex: string) => {
+        calls.push(latex);
+        return document.createElement("mjx-container");
+      },
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "> [!info] Energy $callout_title_unique$\n> body\n\nOutside";
+    editor.openDocument({
+      documentId: "callout-title-math",
+      path: "callout-title-math.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    await settle();
+
+    expect(parent.querySelector(".callout-title .math-inline")).not.toBeNull();
+    expect(calls).toContain("callout_title_unique");
+  });
+
   it("can disable and restore the readable editor width", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -528,6 +556,47 @@ describe("LaTeX Suite transactions", () => {
     }));
     expect(visual.state.doc.toString())
       .toBe("<span style='color:blue'>blue text</span>");
+  });
+
+  it("only expands visual shortcuts when text is selected", async () => {
+    const selected = "${VISUAL}";
+    setCustomSnippets(String.raw`[
+      {trigger: "U", replacement: "\\underbrace{ ${selected} }_{ $0 }", options: "mA"},
+      {trigger: "X", replacement: "\\boxed{ ${selected} }", options: "mA"},
+      {trigger: "B", replacement: "{\\textcolor{#8279fc}{ ${selected} }$0}", options: "m"}
+    ]`);
+
+    const typedU = viewFor("$$", 1, 1, latexSuite);
+    typedU.dispatch({
+      changes: { from: 1, insert: "U" },
+      selection: { anchor: 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(typedU.state.doc.toString()).toBe("$U$");
+
+    const typedB = viewFor("$$", 1, 1, latexSuite);
+    typedB.dispatch({
+      changes: { from: 1, insert: "B" },
+      selection: { anchor: 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(typedB.state.doc.toString()).toBe("$B$");
+
+    const underbrace = viewFor("$value$", 1, 6, latexSuite);
+    underbrace.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "U", shiftKey: true, bubbles: true, cancelable: true,
+    }));
+    expect(underbrace.state.doc.toString())
+      .toBe("$\\underbrace{ value }_{  }$");
+
+    const blue = viewFor("$value$", 1, 6, latexSuite);
+    blue.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "B", shiftKey: true, bubbles: true, cancelable: true,
+    }));
+    expect(blue.state.doc.toString())
+      .toBe("${\\textcolor{#8279fc}{ value }}$");
   });
 
   it("runs bundled default snippets and function handlers", async () => {

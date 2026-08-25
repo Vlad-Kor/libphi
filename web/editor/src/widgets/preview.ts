@@ -552,6 +552,7 @@ export class CalloutWidget extends WidgetType {
     const label = this.title || this.type.replace(/(^|-)(\p{L})/gu,
       (_m, prefix, letter) => `${prefix ? " " : ""}${letter.toUpperCase()}`);
     title.append(calloutIcon(this.type), document.createTextNode(label));
+    wireRenderedContent(title);
     const body = document.createElement("div");
     body.className = "callout-content";
     body.innerHTML = renderMarkdown(this.body);

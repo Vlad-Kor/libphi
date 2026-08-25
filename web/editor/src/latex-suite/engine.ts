@@ -37,6 +37,11 @@ interface RuntimeSnippet extends LatexSnippet { expression?: RegExp }
 let snippets: RuntimeSnippet[] = [];
 let snippetVariables: Record<string, string> = {};
 
+function isVisualSnippet(snippet: LatexSnippet): boolean {
+  return snippet.options.includes("v") ||
+    snippet.replacement.includes("${VISUAL}");
+}
+
 function expandTriggerVariables(trigger: string): string {
   return trigger.replace(/\$\{([A-Z_]+)\}/g, (_match, name: string) =>
     snippetVariables[name] ? `(?:${snippetVariables[name]})` : "(?!)");
@@ -121,7 +126,8 @@ interface Match {
   matchedText: string;
 }
 
-function findMatch(text: string, position: number, automatic: boolean): Match | null {
+function findMatch(text: string, position: number, automatic: boolean,
+                   visualAvailable = false): Match | null {
   const start = Math.max(0, position - 512);
   const before = text.slice(start, position);
   const context = {
@@ -131,6 +137,7 @@ function findMatch(text: string, position: number, automatic: boolean): Match | 
   let macros: Set<string> | undefined;
   for (const snippet of snippets) {
     if (automatic !== snippet.options.includes("A")) continue;
+    if (automatic && isVisualSnippet(snippet) && !visualAvailable) continue;
     if ((snippet.excludedMacros?.length || snippet.includedMacros?.length) && !macros)
       macros = activeMacros(text, position);
     if (!contextAllows(snippet, context, macros)) continue;
@@ -250,9 +257,7 @@ function expandVisualShortcut(view: EditorView, event: KeyboardEvent): boolean {
     code: codeModeAt(text, range.head),
   };
   for (const snippet of snippets) {
-    const visual = snippet.options.includes("v") ||
-      snippet.replacement.includes("${VISUAL}");
-    if (!visual || snippet.options.includes("r") ||
+    if (!isVisualSnippet(snippet) || snippet.options.includes("r") ||
         snippet.trigger !== event.key ||
         !contextAllows(snippet, context)) continue;
     return applyMatch(
@@ -346,7 +351,9 @@ const automaticPlugin = ViewPlugin.fromClass(class {
       try {
         if (!autoFraction(view)) {
           const position = view.state.selection.main.head;
-          const match = findMatch(view.state.doc.toString(), position, true);
+          const match = findMatch(
+            view.state.doc.toString(), position, true, visual.length > 0,
+          );
           if (match) applyMatch(view, match, position, visual, true);
         }
       } finally {
