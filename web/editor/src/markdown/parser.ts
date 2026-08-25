@@ -402,23 +402,27 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
         ordered: Boolean(match[3]),
         number: Number(match[3] ?? 0),
         task: Boolean(taskMatch),
+        taskFrom: markerContentFrom,
       },
     });
   }
 
-  for (const match of text.matchAll(/^[ \t]*[-*+][ \t]+\[([^\]])\]/gm)) {
+  for (const match of text.matchAll(
+    /^[ \t]*[-*+][ \t]+\[([^\]])\]([ \t]*)/gm,
+  )) {
     if (!inside(match.index, protectedRanges)) {
       const marker = match[0].lastIndexOf("[");
       const from = match.index + marker;
+      const to = from + 3 + match[2].length;
       nodes.push({
         kind: "task",
         from,
-        to: from + 3,
+        to,
         text: match[1],
         meta: {
           status: match[1],
           prefixFrom: match.index,
-          prefixTo: from + 3,
+          prefixTo: to,
         },
       });
     }

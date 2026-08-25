@@ -8,7 +8,7 @@ import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecia
 import { tags } from "@lezer/highlight";
 import { parseDocument } from "yaml";
 import { acceptNativeResponse, requestNative, reportError, sendNative } from "./bridge";
-import { clipboardHtmlToMarkdown, markdownClipboardHtml } from "./clipboard";
+import { clipboardHtmlToMarkdown, clipboardImageFile, markdownClipboardHtml } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
@@ -323,15 +323,17 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   }
 
   private handlePaste(event: ClipboardEvent, view: EditorView): boolean {
-    const image = [...(event.clipboardData?.items ?? [])].find((item) => item.type.startsWith("image/"));
-    if (image) {
+    const file = clipboardImageFile(event.clipboardData);
+    if (file) {
       event.preventDefault();
-      const file = image.getAsFile();
-      if (!file) return true;
       const reader = new FileReader();
       reader.onload = () => {
         const encoded = String(reader.result ?? "").split(",").pop() ?? "";
-        requestNative<{ path?: string; name?: string }>("attachment/create", { mimeType: file.type, data: encoded })
+        requestNative<{ path?: string; name?: string }>(
+          "attachment/create",
+          { mimeType: file.type, data: encoded },
+          30_000,
+        )
           .then((result) => {
             if (!result.path) return;
             const name = (result.name ?? "Pasted image").replace(/\.[^.]+$/, "").replace(/]/g, "\\]");
@@ -339,6 +341,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
           })
           .catch((error) => reportError(error, "attachment/paste", this.documentPath));
       };
+      reader.onerror = () => reportError(
+        reader.error ?? new Error("Could not read the pasted image"),
+        "attachment/paste",
+        this.documentPath,
+      );
       reader.readAsDataURL(file);
       return true;
     }

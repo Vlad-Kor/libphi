@@ -275,12 +275,51 @@ static void closed_tab_push(PdfvWindow *self, ClosedTab *tab) {
     closed_tab_free(g_queue_pop_head(&self->closed_tabs));
 }
 
+typedef struct {
+  GWeakRef page;
+} TabReturnPage;
+
+static void tab_return_page_free(TabReturnPage *return_page) {
+  g_weak_ref_clear(&return_page->page);
+  g_free(return_page);
+}
+
 static AdwTabPage *add_related_tab(PdfvWindow *self, GtkWidget *child,
                                    AdwTabPage *parent) {
   if (parent &&
       adw_tab_view_get_page_position(self->tab_view, parent) < 0)
     parent = NULL;
-  return adw_tab_view_add_page(self->tab_view, child, parent);
+  AdwTabPage *page = adw_tab_view_add_page(self->tab_view, child, parent);
+  if (parent) {
+    TabReturnPage *return_page = g_new0(TabReturnPage, 1);
+    g_weak_ref_init(&return_page->page, parent);
+    g_object_set_data_full(G_OBJECT(page), "tab-return-page",
+                           return_page,
+                           (GDestroyNotify)tab_return_page_free);
+  }
+  return page;
+}
+
+static AdwTabPage *tab_return_page_ref(PdfvWindow *self,
+                                       AdwTabPage *page) {
+  TabReturnPage *stored = page
+      ? g_object_get_data(G_OBJECT(page), "tab-return-page") : NULL;
+  AdwTabPage *return_page = stored
+      ? ADW_TAB_PAGE(g_weak_ref_get(&stored->page)) : NULL;
+  if (!return_page ||
+      adw_tab_view_get_page_position(self->tab_view, return_page) < 0) {
+    g_clear_object(&return_page);
+    return NULL;
+  }
+  return return_page;
+}
+
+static void restore_tab_after_close(PdfvWindow *self,
+                                    AdwTabPage *return_page) {
+  if (return_page &&
+      adw_tab_view_get_page_position(self->tab_view, return_page) >= 0)
+    adw_tab_view_set_selected_page(self->tab_view, return_page);
+  g_clear_object(&return_page);
 }
 
 static AdwTabPage *add_tab_after_selected(PdfvWindow *self,
@@ -3037,7 +3076,9 @@ typedef struct {
   AdwTabView *tab_view;
   AdwTabPage *page;
   PdfvMarkdownEditor *editor;
+  AdwTabPage *return_page;
   ClosedTab *closed_tab;
+  gboolean restore_return_page;
 } MarkdownCloseRequest;
 
 static gboolean continue_window_close_idle(gpointer user_data) {
@@ -3050,6 +3091,7 @@ static void markdown_close_request_free(MarkdownCloseRequest *request) {
   g_clear_object(&request->tab_view);
   g_clear_object(&request->page);
   g_clear_object(&request->editor);
+  g_clear_object(&request->return_page);
   closed_tab_free(request->closed_tab);
   g_free(request);
 }
@@ -3068,6 +3110,8 @@ static void finish_markdown_close(MarkdownCloseRequest *request,
       closed_tab_push(self, g_steal_pointer(&request->closed_tab));
   }
   adw_tab_view_close_page_finish(request->tab_view, request->page, close_page);
+  if (close_page && request->restore_return_page && !self->closing_window)
+    restore_tab_after_close(self, g_steal_pointer(&request->return_page));
   gboolean continue_window_close = close_page && self->closing_window;
   gboolean last_page = close_page &&
                        adw_tab_view_get_n_pages(request->tab_view) == 0;
@@ -3132,6 +3176,11 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
   PdfvDocumentView *view = g_object_get_data(G_OBJECT(stack), "document-view");
   PdfvMarkdownEditor *editor =
       g_object_get_data(G_OBJECT(stack), "markdown-editor");
+  gboolean restore_return_page =
+      !self->closing_window &&
+      adw_tab_view_get_selected_page(tab_view) == page;
+  AdwTabPage *return_page = restore_return_page
+      ? tab_return_page_ref(self, page) : NULL;
   if (g_object_get_data(G_OBJECT(page), "workspace-trash-force-close")) {
     if (editor) {
       g_signal_handlers_disconnect_by_data(editor, self);
@@ -3144,6 +3193,7 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
         self->current_view = NULL;
     }
     adw_tab_view_close_page_finish(tab_view, page, TRUE);
+    restore_tab_after_close(self, g_steal_pointer(&return_page));
     if (adw_tab_view_get_n_pages(tab_view) == 0)
       pdfv_window_new_tab(self);
     return GDK_EVENT_STOP;
@@ -3151,8 +3201,10 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
   gboolean remember = !self->closing_window &&
       !g_object_get_data(G_OBJECT(page), "skip-closed-tab-history");
   if (editor) {
-    if (g_object_get_data(G_OBJECT(page), "markdown-close-pending"))
+    if (g_object_get_data(G_OBJECT(page), "markdown-close-pending")) {
+      g_clear_object(&return_page);
       return GDK_EVENT_STOP;
+    }
     g_object_set_data(G_OBJECT(page), "markdown-close-pending",
                       GINT_TO_POINTER(1));
     MarkdownCloseRequest *request = g_new0(MarkdownCloseRequest, 1);
@@ -3160,6 +3212,8 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
     request->tab_view = g_object_ref(tab_view);
     request->page = g_object_ref(page);
     request->editor = g_object_ref(editor);
+    request->return_page = g_steal_pointer(&return_page);
+    request->restore_return_page = restore_return_page;
     request->closed_tab = remember ? closed_tab_snapshot(page) : NULL;
     if (pdfv_markdown_editor_get_dirty(editor)) {
       pdfv_markdown_editor_save_async(editor, NULL, on_close_save_done,
@@ -3180,6 +3234,7 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
     closed_tab_push(self, closed_tab_snapshot(page));
 
   adw_tab_view_close_page_finish(tab_view, page, TRUE);
+  restore_tab_after_close(self, g_steal_pointer(&return_page));
   if (self->closing_window || adw_tab_view_get_n_pages(tab_view) == 0)
     g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, continue_window_close_idle,
                     g_object_ref(self), g_object_unref);

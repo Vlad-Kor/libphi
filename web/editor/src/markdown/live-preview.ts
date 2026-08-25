@@ -208,7 +208,8 @@ function buildDecorations(state: EditorState): DecorationSet {
         if (!isActive) {
           const markerFrom = Number(node.meta?.markerFrom ?? node.from);
           if (node.meta?.task) {
-            builder.add(markerFrom, Number(node.meta?.markerTo ?? markerFrom + 1),
+            builder.add(markerFrom, Number(node.meta?.taskFrom ??
+              node.meta?.markerTo ?? markerFrom + 1),
               hidden);
           } else {
             builder.add(node.from, Number(node.meta?.contentFrom ?? markerFrom + marker.length),
@@ -229,7 +230,8 @@ function buildDecorations(state: EditorState): DecorationSet {
               : selection.from < prefixTo && selection.to > node.from);
           if (isActive && !prefixActive) {
             builder.add(Number(node.meta?.markerFrom ?? node.from),
-              Number(node.meta?.markerTo ?? node.from + marker.length),
+              Number(node.meta?.taskFrom ?? node.meta?.markerTo ??
+                node.from + marker.length),
               hidden);
           }
         }

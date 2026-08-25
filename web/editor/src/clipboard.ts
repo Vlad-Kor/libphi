@@ -4,6 +4,17 @@ export function markdownClipboardHtml(markdown: string): string {
   return renderMarkdown(markdown);
 }
 
+/** WebKitGTK exposes clipboard collections as array-like DOM lists, but some
+ * versions do not make them iterable. Array.from handles both forms. */
+export function clipboardImageFile(data: DataTransfer | null): File | null {
+  const item = Array.from(data?.items ?? [])
+    .find((candidate) => candidate.type.startsWith("image/"));
+  const itemFile = item?.getAsFile();
+  if (itemFile) return itemFile;
+  return Array.from(data?.files ?? [])
+    .find((candidate) => candidate.type.startsWith("image/")) ?? null;
+}
+
 function safeDestination(value: string | null): string {
   const destination = (value ?? "").trim();
   if (!destination || /^(?:javascript|vbscript|data):/i.test(destination)) return "";

@@ -108,9 +108,10 @@ $$`;
   });
 
   it("parses unordered, task, and ordered list marker geometry", () => {
-    const nodes = parseMarkdownNodes(
-      "- bullet\n- [ ] task\n10. ordered\n    1) nested\n- [x]compact",
-    ).filter((node) => node.kind === "list-item");
+    const source =
+      "- bullet\n- [ ] task\n10. ordered\n    1) nested\n- [x]compact";
+    const allNodes = parseMarkdownNodes(source);
+    const nodes = allNodes.filter((node) => node.kind === "list-item");
     expect(nodes).toHaveLength(5);
     expect(nodes[0].meta).toMatchObject({
       marker: "-", markerFrom: 0, contentFrom: 2, ordered: false,
@@ -123,6 +124,9 @@ $$`;
       marker: "1)", indentColumns: 4, ordered: true, number: 1,
     });
     expect(nodes[4].meta).toMatchObject({ task: true, contentFrom: 51 });
+    const tasks = allNodes.filter((node) => node.kind === "task");
+    expect(source.slice(tasks[0].from, tasks[0].to)).toBe("[ ] ");
+    expect(source.slice(tasks[1].from, tasks[1].to)).toBe("[x]");
   });
 
   it("offers callout types without the generic keyword icon", async () => {

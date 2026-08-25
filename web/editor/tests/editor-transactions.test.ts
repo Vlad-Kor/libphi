@@ -287,6 +287,7 @@ $$`;
       .toBe("1.1em");
     expect(lines[1].style.getPropertyValue("--phi-list-content-indent"))
       .toBe("calc(18px + 0.4em)");
+    expect(lines[1].textContent).toBe("task text");
     expect(lines[2].classList.contains("cm-live-ordered-list-item")).toBe(true);
     expect(lines[2].querySelector(".list-number")?.textContent).toBe("10.");
 

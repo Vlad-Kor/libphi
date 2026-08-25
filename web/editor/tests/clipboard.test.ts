@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { clipboardHtmlToMarkdown, markdownClipboardHtml } from "../src/clipboard";
+import {
+  clipboardHtmlToMarkdown,
+  clipboardImageFile,
+  markdownClipboardHtml,
+} from "../src/clipboard";
 
 describe("clipboard interoperability", () => {
   it("exports Markdown as safe rich HTML", () => {
@@ -20,5 +24,20 @@ describe("clipboard interoperability", () => {
     expect(clipboardHtmlToMarkdown(
       '<a href="javascript:alert(1)">safe label</a><img src="data:text/html,bad" alt="image">',
     )).toBe("safe labelimage");
+  });
+
+  it("accepts WebKit-style non-iterable clipboard image lists", () => {
+    const file = new File(["image"], "paste.png", { type: "image/png" });
+    const item = { type: "image/png", getAsFile: () => file };
+    const items = { 0: item, length: 1 } as unknown as DataTransferItemList;
+    expect(clipboardImageFile({ items, files: [] } as unknown as DataTransfer))
+      .toBe(file);
+  });
+
+  it("falls back to clipboard files when no image item is exposed", () => {
+    const file = new File(["image"], "paste.webp", { type: "image/webp" });
+    const files = { 0: file, length: 1 } as unknown as FileList;
+    expect(clipboardImageFile({ items: [], files } as unknown as DataTransfer))
+      .toBe(file);
   });
 });
