@@ -49,6 +49,10 @@ pdfv_app = executable('pdfv', pdfv_sources,
 		'-DPDFV_EDITOR_DIR="' + editor_install_dir + '"',
 		'-DPDFV_EDITOR_SOURCE_DIR="' + editor_source_dir + '"',
 	],
+	# A per-user prefix such as ~/.local/lib64 is not normally searched by the
+	# dynamic loader. Keep the executable paired with the libphi installed in
+	# the same prefix instead of accidentally loading an older system copy.
+	install_rpath: '$ORIGIN/../' + get_option('libdir'),
 	install: true
 )
 

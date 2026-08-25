@@ -113,6 +113,7 @@ struct _PdfvWindow {
   GPtrArray *workspace_result_headers; /* Unowned GtkListBoxRow pointers */
   gint workspace_result_group;
   gint workspace_result_match;
+  gboolean workspace_group_navigation_active;
   guint workspace_result_scroll_id;
   guint workspace_group_select_id;
   gint workspace_pending_group;
@@ -1702,6 +1703,7 @@ static void on_workspace_result_selected(GtkListBox *box, GtkListBoxRow *row,
       GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "result-match")) - 1;
   if (group < 0)
     return;
+  self->workspace_group_navigation_active = TRUE;
   if (match < 0) {
     self->workspace_pending_group = group;
     if (!self->workspace_group_select_id)
@@ -1776,6 +1778,7 @@ static void workspace_results_clear(PdfvWindow *self) {
     self->workspace_group_select_id = 0;
   }
   self->workspace_pending_group = -1;
+  self->workspace_group_navigation_active = FALSE;
   g_ptr_array_set_size(self->workspace_result_headers, 0);
   gtk_list_box_remove_all(self->workspace_results_list);
   gtk_revealer_set_reveal_child(self->workspace_results_revealer, FALSE);
@@ -2249,6 +2252,7 @@ static void workspace_search_schedule(PdfvWindow *self, guint delay_ms) {
 
 static void on_workspace_search_changed(GtkSearchEntry *entry,
                                         PdfvWindow *self) {
+  self->workspace_group_navigation_active = FALSE;
   const gchar *query = gtk_editable_get_text(GTK_EDITABLE(entry));
   if (self->workspace_search_cancellable)
     g_cancellable_cancel(self->workspace_search_cancellable);
@@ -2310,30 +2314,46 @@ static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
     gboolean has_selection = gtk_editable_get_selection_bounds(
         GTK_EDITABLE(self->workspace_search_entry), &selection_start,
         &selection_end);
-    if ((state & text_modifiers) || has_selection)
+    if ((state & text_modifiers) || has_selection) {
+      self->workspace_group_navigation_active = FALSE;
       return GDK_EVENT_PROPAGATE;
+    }
 
     const gchar *text = gtk_editable_get_text(
         GTK_EDITABLE(self->workspace_search_entry));
     gint position = gtk_editable_get_position(
         GTK_EDITABLE(self->workspace_search_entry));
     gint length = (gint)g_utf8_strlen(text, -1);
-    if (keyval == GDK_KEY_Right) {
-      if (position < length || !self->workspace_results ||
-          self->workspace_result_group + 1 >=
-              (gint)self->workspace_results->len)
+    if (self->workspace_group_navigation_active) {
+      gint direction = keyval == GDK_KEY_Right ? 1 : -1;
+      gint next_group = self->workspace_result_group + direction;
+      if (self->workspace_results && next_group >= 0 &&
+          next_group < (gint)self->workspace_results->len) {
+        workspace_select_result(self, next_group,
+                                self->workspace_result_match, TRUE);
+        return GDK_EVENT_STOP;
+      }
+      if (keyval == GDK_KEY_Left) {
+        /* The first group is immediately to the right of the query's final
+         * cursor position. Crossing back moves into the text normally. */
+        self->workspace_group_navigation_active = FALSE;
         return GDK_EVENT_PROPAGATE;
-      workspace_select_result(
-          self, self->workspace_result_group + 1,
-          self->workspace_result_match, TRUE);
-    } else {
-      if (position > 0 || !self->workspace_results ||
-          self->workspace_result_group <= 0)
-        return GDK_EVENT_PROPAGATE;
-      workspace_select_result(
-          self, self->workspace_result_group - 1,
-          self->workspace_result_match, TRUE);
+      }
+      return GDK_EVENT_STOP;
     }
+
+    /* Left stays entirely within the query. Right crosses into the result
+     * groups only from the query's final cursor position. */
+    if (keyval == GDK_KEY_Left || position < length ||
+        !self->workspace_results ||
+        self->workspace_result_group + 1 >=
+            (gint)self->workspace_results->len)
+      return GDK_EVENT_PROPAGATE;
+
+    self->workspace_group_navigation_active = TRUE;
+    workspace_select_result(
+        self, self->workspace_result_group + 1,
+        self->workspace_result_match, TRUE);
     return GDK_EVENT_STOP;
   }
   case GDK_KEY_Return:
@@ -2353,6 +2373,7 @@ static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
     workspace_search_close(self, FALSE);
     return GDK_EVENT_STOP;
   default:
+    self->workspace_group_navigation_active = FALSE;
     return GDK_EVENT_PROPAGATE;
   }
 }
@@ -2361,6 +2382,17 @@ static void on_workspace_search_stop(GtkSearchEntry *entry,
                                      PdfvWindow *self) {
   (void)entry;
   workspace_search_close(self, FALSE);
+}
+
+static void on_workspace_search_entry_pressed(GtkGestureClick *gesture,
+                                              gint n_press, gdouble x,
+                                              gdouble y,
+                                              PdfvWindow *self) {
+  (void)gesture;
+  (void)n_press;
+  (void)x;
+  (void)y;
+  self->workspace_group_navigation_active = FALSE;
 }
 
 static void on_workspace_search_surface_pressed(GtkGestureClick *gesture,
@@ -2387,10 +2419,12 @@ static void workspace_search_open(PdfvWindow *self) {
   if (!self->workspace)
     return;
   if (gtk_widget_get_visible(self->workspace_search_overlay)) {
+    self->workspace_group_navigation_active = FALSE;
     gtk_widget_grab_focus(GTK_WIDGET(self->workspace_search_entry));
     return;
   }
   self->workspace_return_tab = adw_tab_view_get_selected_page(self->tab_view);
+  self->workspace_group_navigation_active = FALSE;
   if (self->workspace_return_tab)
     g_object_ref(self->workspace_return_tab);
   gtk_widget_set_visible(self->workspace_search_overlay, TRUE);
@@ -2410,6 +2444,7 @@ static void workspace_search_open(PdfvWindow *self) {
 static void workspace_search_close(PdfvWindow *self, gboolean commit) {
   if (!gtk_widget_get_visible(self->workspace_search_overlay))
     return;
+  self->workspace_group_navigation_active = FALSE;
   if (commit && workspace_selected_match(self))
     workspace_preview_flush(self);
   else
@@ -6788,6 +6823,12 @@ static void pdfv_window_init(PdfvWindow *self) {
                    G_CALLBACK(on_workspace_search_changed), self);
   g_signal_connect(self->workspace_search_entry, "stop-search",
                    G_CALLBACK(on_workspace_search_stop), self);
+  GtkGesture *workspace_search_entry_click = gtk_gesture_click_new();
+  g_signal_connect(workspace_search_entry_click, "pressed",
+                   G_CALLBACK(on_workspace_search_entry_pressed), self);
+  gtk_widget_add_controller(GTK_WIDGET(self->workspace_search_entry),
+                            GTK_EVENT_CONTROLLER(
+                                workspace_search_entry_click));
   GtkEventController *workspace_keys = gtk_event_controller_key_new();
   gtk_event_controller_set_propagation_phase(workspace_keys,
                                              GTK_PHASE_CAPTURE);
