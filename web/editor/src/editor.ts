@@ -8,7 +8,12 @@ import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecia
 import { tags } from "@lezer/highlight";
 import { parseDocument } from "yaml";
 import { acceptNativeResponse, requestNative, reportError, sendNative } from "./bridge";
-import { clipboardHtmlToMarkdown, clipboardImageFile, markdownClipboardHtml } from "./clipboard";
+import {
+  clipboardHtmlToMarkdown,
+  clipboardImageFile,
+  clipboardMayContainNativeImage,
+  markdownClipboardHtml,
+} from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
@@ -323,7 +328,14 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   }
 
   private handlePaste(event: ClipboardEvent, view: EditorView): boolean {
-    const file = clipboardImageFile(event.clipboardData);
+    const clipboard = event.clipboardData;
+    const file = clipboardImageFile(clipboard);
+    const insertAttachment = (result: { path?: string; name?: string }) => {
+      if (!result.path) return;
+      const name = (result.name ?? "Pasted image")
+        .replace(/\.[^.]+$/, "").replace(/]/g, "\\]");
+      view.dispatch(view.state.replaceSelection(`![${name}](<${result.path}>)`));
+    };
     if (file) {
       event.preventDefault();
       const reader = new FileReader();
@@ -334,11 +346,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
           { mimeType: file.type, data: encoded },
           30_000,
         )
-          .then((result) => {
-            if (!result.path) return;
-            const name = (result.name ?? "Pasted image").replace(/\.[^.]+$/, "").replace(/]/g, "\\]");
-            view.dispatch(view.state.replaceSelection(`![${name}](<${result.path}>)`));
-          })
+          .then(insertAttachment)
           .catch((error) => reportError(error, "attachment/paste", this.documentPath));
       };
       reader.onerror = () => reportError(
@@ -350,14 +358,14 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       return true;
     }
     const selection = view.state.selection.main;
-    const plain = event.clipboardData?.getData("text/plain") ?? "";
+    const plain = clipboard?.getData("text/plain") ?? "";
     if (!selection.empty && /^(https?|mailto):\S+$/i.test(plain)) {
       event.preventDefault();
       const label = view.state.sliceDoc(selection.from, selection.to);
       view.dispatch({ changes: { from: selection.from, to: selection.to, insert: `[${label}](${plain})` }, userEvent: "input.paste" });
       return true;
     }
-    const html = event.clipboardData?.getData("text/html") ?? "";
+    const html = clipboard?.getData("text/html") ?? "";
     if (html) {
       const markdown = clipboardHtmlToMarkdown(html);
       if (markdown) {
@@ -371,6 +379,17 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         });
         return true;
       }
+    }
+    /* WebKitGTK can emit an entirely empty DataTransfer even while the GTK
+     * clipboard advertises image/png. Let the native host read it directly. */
+    if (!plain && !html && clipboardMayContainNativeImage(clipboard)) {
+      event.preventDefault();
+      requestNative<{ path?: string; name?: string }>(
+        "attachment/paste", {}, 30_000,
+      )
+        .then(insertAttachment)
+        .catch((error) => reportError(error, "attachment/paste", this.documentPath));
+      return true;
     }
     return false;
   }

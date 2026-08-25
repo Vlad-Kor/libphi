@@ -547,22 +547,14 @@ static gchar *attachment_link_from_note(PdfvMarkdownEditor *self,
   return g_string_free(link, FALSE);
 }
 
-static void handle_attachment_create(PdfvMarkdownEditor *self,
-                                     const gchar *id, JsonObject *payload) {
-  const gchar *encoded = payload ? json_object_get_string_member_with_default(
-                                       payload, "data", NULL)
-                                 : NULL;
-  const gchar *mime = payload ? json_object_get_string_member_with_default(
-                                    payload, "mimeType", "image/png")
-                              : "image/png";
-  gsize length = 0;
-  guchar *data = encoded ? g_base64_decode(encoded, &length) : NULL;
+static JsonNode *save_attachment_data(PdfvMarkdownEditor *self,
+                                      const guchar *data, gsize length,
+                                      const gchar *mime, GError **error) {
   if (!data || length == 0 || length > MAX_ATTACHMENT_BYTES) {
-    g_free(data);
-    send_response_node(self, id, NULL, "Invalid or oversized attachment");
-    return;
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                        "Invalid or oversized attachment");
+    return NULL;
   }
-  GError *error = NULL;
   GFile *root = pdfv_markdown_vault_adapter_get_root(self->vault);
   /* A workspace is optional. Without a configured attachment folder, keep
    * pasted images beside the open note and return a note-relative link. */
@@ -571,20 +563,20 @@ static void handle_attachment_create(PdfvMarkdownEditor *self,
       : self->file ? g_file_get_parent(self->file) : NULL;
   if (!parent || !file_is_within(root, parent) ||
       !attachment_folder_is_safe(self, parent)) {
-    g_set_error(&error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                 "The attachment folder must be inside the current vault");
-  } else if (!g_file_make_directory_with_parents(parent, NULL, &error) &&
-             !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_EXISTS)) {
+  } else if (!g_file_make_directory_with_parents(parent, NULL, error) &&
+             !g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_EXISTS)) {
     /* Keep the directory creation error. */
   } else {
-    g_clear_error(&error);
+    g_clear_error(error);
   }
 
   GDateTime *now = g_date_time_new_now_local();
   gchar *stamp = g_date_time_format(now, "%Y-%m-%d %H%M%S");
   gchar *name = NULL;
   GFile *file = NULL;
-  for (guint suffix = 0; parent && !error; suffix++) {
+  for (guint suffix = 0; parent && !*error; suffix++) {
     g_free(name);
     name = suffix == 0
         ? g_strdup_printf("Pasted image %s.%s", stamp,
@@ -597,33 +589,112 @@ static void handle_attachment_create(PdfvMarkdownEditor *self,
     if (!g_file_query_exists(file, NULL))
       break;
   }
-  GFileOutputStream *stream = file && !error
-      ? g_file_create(file, G_FILE_CREATE_NONE, NULL, &error)
+  GFileOutputStream *stream = file && !*error
+      ? g_file_create(file, G_FILE_CREATE_NONE, NULL, error)
       : NULL;
   gboolean saved = stream &&
       g_output_stream_write_all(G_OUTPUT_STREAM(stream), data, length, NULL,
-                                NULL, &error) &&
-      g_output_stream_close(G_OUTPUT_STREAM(stream), NULL, &error);
-  if (!saved) {
-    send_response_error(self, id, error);
-  } else {
+                                NULL, error) &&
+      g_output_stream_close(G_OUTPUT_STREAM(stream), NULL, error);
+  JsonNode *node = NULL;
+  if (saved) {
     gchar *relative = attachment_link_from_note(self, file);
     JsonObject *value = json_object_new_owned();
     json_object_set_string_member(value, "path", relative ? relative : name);
     json_object_set_string_member(value, "name", name);
-    JsonNode *node = json_node_new(JSON_NODE_OBJECT);
+    node = json_node_new(JSON_NODE_OBJECT);
     json_node_take_object(node, value);
-    send_response_node(self, id, node, NULL);
     g_free(relative);
+  } else if (!*error) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "Could not save the pasted image");
   }
   g_clear_object(&stream);
   g_clear_object(&parent);
   g_clear_object(&file);
-  g_clear_error(&error);
   g_free(name);
   g_free(stamp);
   g_date_time_unref(now);
+  return node;
+}
+
+static void handle_attachment_create(PdfvMarkdownEditor *self,
+                                     const gchar *id, JsonObject *payload) {
+  const gchar *encoded = payload ? json_object_get_string_member_with_default(
+                                       payload, "data", NULL)
+                                 : NULL;
+  const gchar *mime = payload ? json_object_get_string_member_with_default(
+                                    payload, "mimeType", "image/png")
+                              : "image/png";
+  gsize length = 0;
+  guchar *data = encoded ? g_base64_decode(encoded, &length) : NULL;
+  GError *error = NULL;
+  JsonNode *node = save_attachment_data(self, data, length, mime, &error);
+  if (node)
+    send_response_node(self, id, node, NULL);
+  else
+    send_response_error(self, id, error);
+  g_clear_error(&error);
   g_free(data);
+}
+
+typedef struct {
+  PdfvMarkdownEditor *editor;
+  gchar *id;
+} ClipboardPasteRequest;
+
+static void clipboard_paste_request_free(ClipboardPasteRequest *request) {
+  g_clear_object(&request->editor);
+  g_free(request->id);
+  g_free(request);
+}
+
+static void on_clipboard_texture_read(GObject *source, GAsyncResult *result,
+                                      gpointer user_data) {
+  ClipboardPasteRequest *request = user_data;
+  GError *error = NULL;
+  GdkTexture *texture = gdk_clipboard_read_texture_finish(
+      GDK_CLIPBOARD(source), result, &error);
+  GBytes *bytes = texture ? gdk_texture_save_to_png_bytes(texture) : NULL;
+  gsize length = 0;
+  const guchar *data = bytes ? g_bytes_get_data(bytes, &length) : NULL;
+  JsonNode *node = data ? save_attachment_data(
+      request->editor, data, length, "image/png", &error) : NULL;
+  if (node)
+    send_response_node(request->editor, request->id, node, NULL);
+  else
+    send_response_error(request->editor, request->id, error);
+  g_clear_pointer(&bytes, g_bytes_unref);
+  g_clear_object(&texture);
+  g_clear_error(&error);
+  clipboard_paste_request_free(request);
+}
+
+static void handle_attachment_paste(PdfvMarkdownEditor *self,
+                                    const gchar *id) {
+  GdkClipboard *clipboard =
+      gtk_widget_get_clipboard(GTK_WIDGET(self->web_view));
+  GdkContentFormats *formats = gdk_clipboard_get_formats(clipboard);
+  gboolean image = gdk_content_formats_contain_gtype(formats,
+                                                       GDK_TYPE_TEXTURE);
+  gsize n_mime_types = 0;
+  const gchar *const *mime_types = gdk_content_formats_get_mime_types(
+      formats, &n_mime_types);
+  for (gsize i = 0; !image && i < n_mime_types; i++)
+    image = g_str_has_prefix(mime_types[i], "image/");
+  if (!image) {
+    JsonObject *value = json_object_new_owned();
+    json_object_set_boolean_member(value, "image", FALSE);
+    JsonNode *node = json_node_new(JSON_NODE_OBJECT);
+    json_node_take_object(node, value);
+    send_response_node(self, id, node, NULL);
+    return;
+  }
+  ClipboardPasteRequest *request = g_new0(ClipboardPasteRequest, 1);
+  request->editor = g_object_ref(self);
+  request->id = g_strdup(id);
+  gdk_clipboard_read_texture_async(clipboard, NULL,
+                                   on_clipboard_texture_read, request);
 }
 
 static GFile *resolve_vault_attachment(PdfvMarkdownEditor *self,
@@ -765,6 +836,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     handle_embed_read(self, id, payload);
   } else if (g_str_equal(type, "attachment/create")) {
     handle_attachment_create(self, id, payload);
+  } else if (g_str_equal(type, "attachment/paste")) {
+    handle_attachment_paste(self, id);
   } else if (g_str_equal(type, "attachment/resolve") ||
              g_str_equal(type, "attachment/open")) {
     handle_attachment_action(self, type, id, payload);
@@ -788,7 +861,10 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
                                  ? json_object_get_string_member_with_default(
                                        payload, "component", "web")
                                  : "web";
-    g_debug("Markdown editor [%s]: %s", component, message);
+    if (g_str_equal(component, "attachment/paste"))
+      emit_error(self, message);
+    else
+      g_debug("Markdown editor [%s]: %s", component, message);
   }
 }
 

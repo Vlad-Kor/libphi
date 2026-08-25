@@ -15,6 +15,17 @@ export function clipboardImageFile(data: DataTransfer | null): File | null {
     .find((candidate) => candidate.type.startsWith("image/")) ?? null;
 }
 
+export function clipboardMayContainNativeImage(data: DataTransfer | null): boolean {
+  if (!data) return false;
+  const items = Array.from(data.items ?? []);
+  const files = Array.from(data.files ?? []);
+  const types = Array.from(data.types ?? []);
+  return items.some((item) => item.type.startsWith("image/")) ||
+    files.some((file) => file.type.startsWith("image/")) ||
+    types.some((type) => type.startsWith("image/") || type === "Files") ||
+    (items.length === 0 && files.length === 0 && types.length === 0);
+}
+
 function safeDestination(value: string | null): string {
   const destination = (value ?? "").trim();
   if (!destination || /^(?:javascript|vbscript|data):/i.test(destination)) return "";

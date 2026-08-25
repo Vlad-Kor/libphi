@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clipboardHtmlToMarkdown,
   clipboardImageFile,
+  clipboardMayContainNativeImage,
   markdownClipboardHtml,
 } from "../src/clipboard";
 
@@ -39,5 +40,14 @@ describe("clipboard interoperability", () => {
     const files = { 0: file, length: 1 } as unknown as FileList;
     expect(clipboardImageFile({ items: [], files } as unknown as DataTransfer))
       .toBe(file);
+  });
+
+  it("uses the native fallback for WebKitGTK's empty image paste event", () => {
+    const empty = { items: [], files: [], types: [] } as unknown as DataTransfer;
+    expect(clipboardMayContainNativeImage(empty)).toBe(true);
+    const text = {
+      items: [], files: [], types: ["text/plain"],
+    } as unknown as DataTransfer;
+    expect(clipboardMayContainNativeImage(text)).toBe(false);
   });
 });
