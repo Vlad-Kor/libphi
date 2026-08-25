@@ -23,6 +23,32 @@ function surround(open: string, close = open, placeholder = ""): Command {
   };
 }
 
+const cycleAsteriskSelection: Command = (view) => {
+  if (view.state.selection.ranges.some((range) => range.empty)) return false;
+  const transaction = view.state.changeByRange((range) => {
+    const selected = view.state.sliceDoc(range.from, range.to);
+    const double = range.from >= 2 && range.to + 2 <= view.state.doc.length &&
+      view.state.sliceDoc(range.from - 2, range.from) === "**" &&
+      view.state.sliceDoc(range.to, range.to + 2) === "**";
+    const single = !double && range.from >= 1 &&
+      range.to + 1 <= view.state.doc.length &&
+      view.state.sliceDoc(range.from - 1, range.from) === "*" &&
+      view.state.sliceDoc(range.to, range.to + 1) === "*";
+    if (double) return { range };
+    const stars = single ? "**" : "*";
+    const from = range.from - (single ? 1 : 0);
+    const to = range.to + (single ? 1 : 0);
+    return {
+      changes: { from, to, insert: `${stars}${selected}${stars}` },
+      range: EditorSelection.range(from + stars.length,
+        from + stars.length + selected.length),
+    };
+  });
+  view.dispatch({ ...transaction, userEvent: "input" });
+  view.focus();
+  return true;
+};
+
 function prefixLines(prefix: string, ordered = false): Command {
   return (view) => {
     const changes: { from: number; insert: string }[] = [];
@@ -89,6 +115,7 @@ export function runEditingCommand(id: string, view: Parameters<Command>[0]): boo
 }
 
 export const formattingKeymap = [
+  { key: "*", run: cycleAsteriskSelection },
   { key: "Mod-b", run: commands["editor.bold"] },
   { key: "Mod-i", run: commands["editor.italic"] },
   { key: "Mod-k", run: commands["editor.link"] },

@@ -366,15 +366,30 @@ const automaticPlugin = ViewPlugin.fromClass(class {
 const indentList: Command = (view) => adjustListIndent(view, false);
 const outdentList: Command = (view) => adjustListIndent(view, true);
 
-const continueTaskList: Command = (view) => {
+const continueList: Command = (view) => {
   const range = view.state.selection.main;
   if (!range.empty || view.state.selection.ranges.length !== 1)
     return false;
   const line = view.state.doc.lineAt(range.head);
-  const match = /^(\s*)([-+*])[ \t]+\[[^\]]\]([ \t]?)/.exec(line.text);
+  const match = /^(\s*)([-+*]|(\d+)([.)]))([ \t]+)(?:\[([^\]])\]([ \t]*))?/.exec(
+    line.text,
+  );
   if (!match || range.head < line.from + match[0].length)
     return false;
-  const prefix = `${match[1]}${match[2]} [ ] `;
+  const content = line.text.slice(match[0].length);
+  if (range.head === line.to && !content.trim()) {
+    view.dispatch({
+      changes: { from: line.from, to: line.from + match[0].length, insert: "" },
+      selection: { anchor: line.from },
+      annotations: Transaction.userEvent.of("input.type"),
+    });
+    return true;
+  }
+  const marker = match[3]
+    ? `${Number(match[3]) + 1}${match[4]}`
+    : match[2];
+  const task = match[6] == null ? "" : "[ ] ";
+  const prefix = `${match[1]}${marker} ${task}`;
   view.dispatch({
     changes: { from: range.head, insert: `\n${prefix}` },
     selection: { anchor: range.head + prefix.length + 1 },
@@ -393,11 +408,32 @@ function adjustListIndent(view: EditorView, outdent: boolean): boolean {
   const lines = [...lineNumbers].map((number) => view.state.doc.line(number));
   if (!lines.length || !lines.every((line) => /^\s*(?:[-+*]|\d+[.)])\s+/.test(line.text)))
     return false;
-  const changes = lines.flatMap((line) => {
-    if (!outdent) return [{ from: line.from, insert: "    " }];
-    const leading = /^(?: {1,4}|\t)/.exec(line.text)?.[0];
-    return leading ? [{ from: line.from, to: line.from + leading.length, insert: "" }] : [];
-  });
+  const changes: { from: number; to?: number; insert: string }[] = [];
+  let ordered = 0;
+  for (const line of lines) {
+    if (outdent) {
+      const leading = /^(?: {1,4}|\t)/.exec(line.text)?.[0];
+      if (leading)
+        changes.push({
+          from: line.from,
+          to: line.from + leading.length,
+          insert: "",
+        });
+      continue;
+    }
+
+    changes.push({ from: line.from, insert: "    " });
+    const marker = /^(\s*)(\d+)([.)])(?=[ \t]+)/.exec(line.text);
+    if (!marker) {
+      ordered = 0;
+      continue;
+    }
+    changes.push({
+      from: line.from + marker[1].length,
+      to: line.from + marker[1].length + marker[2].length,
+      insert: String(++ordered),
+    });
+  }
   if (!changes.length) return false;
   view.dispatch({ changes, annotations: Transaction.userEvent.of("input.indent") });
   return true;
@@ -422,7 +458,7 @@ export const latexSuite = [
     { key: "Shift-Tab", run: previousTabstop },
     { key: "Shift-Tab", run: outdentList },
     { key: "Shift-Tab", run: indentLess },
-    { key: "Enter", run: continueTaskList },
+    { key: "Enter", run: continueList },
     { key: "Enter", run: matrixEnter },
     { key: "Shift-Enter", run: matrixShiftEnter },
   ])),

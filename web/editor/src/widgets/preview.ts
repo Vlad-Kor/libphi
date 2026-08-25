@@ -61,6 +61,39 @@ function reveal(view: EditorView, position: number): void {
   view.focus();
 }
 
+function revealAt(view: EditorView, position: number): void {
+  view.dispatch({
+    selection: { anchor: Math.max(0, Math.min(position, view.state.doc.length)) },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+function selectedSourceOffset(root: Node, source: string): number | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.anchorNode ||
+      !root.contains(selection.anchorNode)) return null;
+  const selected = selection.toString();
+  if (!selected) return null;
+  const offset = source.indexOf(selected);
+  return offset >= 0 ? offset : null;
+}
+
+function calloutBodyPosition(
+  view: EditorView,
+  from: number,
+  body: string,
+  bodyOffset: number,
+): number {
+  const before = body.slice(0, bodyOffset);
+  const lines = before.split("\n");
+  const header = view.state.doc.lineAt(from);
+  const number = Math.min(header.number + lines.length, view.state.doc.lines);
+  const line = view.state.doc.line(number);
+  const quote = /^ {0,3}>[ \t]?/.exec(line.text)?.[0].length ?? 0;
+  return line.from + quote + lines.at(-1)!.length;
+}
+
 function vaultUri(path: string): string {
   return `vault:///${path.split("/").map(encodeURIComponent).join("/")}`;
 }
@@ -79,10 +112,14 @@ export class HiddenWidget extends WidgetType {
 }
 
 export class BulletWidget extends WidgetType {
+  constructor(readonly label = "•", readonly ordered = false) { super(); }
+
   toDOM(): HTMLElement {
     const bullet = document.createElement("span");
-    bullet.className = "list-bullet";
-    bullet.textContent = "•";
+    bullet.className = this.ordered
+      ? "list-marker list-number"
+      : "list-marker list-bullet";
+    bullet.textContent = this.label;
     bullet.setAttribute("aria-hidden", "true");
     return bullet;
   }
@@ -522,7 +559,11 @@ export class HtmlPreviewWidget extends WidgetType {
     container.className = this.className;
     container.innerHTML = renderMarkdown(this.source);
     wireRenderedContent(container);
-    container.addEventListener("dblclick", () => reveal(view, this.from));
+    container.addEventListener("dblclick", () => {
+      const selected = selectedSourceOffset(container, this.source);
+      const firstContent = this.source.indexOf("\n") + 1;
+      revealAt(view, this.from + (selected ?? Math.max(1, firstContent)));
+    });
     return container;
   }
 
@@ -559,7 +600,9 @@ export class CalloutWidget extends WidgetType {
     wireRenderedContent(body);
     details.append(title, body);
     details.addEventListener("dblclick", (event) => {
-      if (event.target !== title) reveal(view, this.from);
+      if (event.target instanceof Node && title.contains(event.target)) return;
+      const selected = selectedSourceOffset(body, this.body) ?? 0;
+      revealAt(view, calloutBodyPosition(view, this.from, this.body, selected));
     });
     return details;
   }

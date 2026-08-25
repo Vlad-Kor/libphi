@@ -52,7 +52,7 @@ export async function markdownCompletion(
     const typed = callout.text.split("!").pop() ?? "";
     return {
       from: callout.to - typed.length,
-      options: callouts.map((label) => ({ label, type: "keyword" })),
+      options: callouts.map((label) => ({ label })),
       validFor: /^[\w-]*$/,
     };
   }

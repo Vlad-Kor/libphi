@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { CompletionContext } from "@codemirror/autocomplete";
+import { EditorState } from "@codemirror/state";
+import { markdownCompletion } from "../src/markdown/completion";
 import { mathModeAt, parseMarkdownNodes, selectionTouches } from "../src/markdown/parser";
 
 describe("Markdown extension parser precedence", () => {
@@ -101,6 +104,33 @@ $$`;
       meta: { type: "info", title: "test" },
     });
     expect(source.slice(callout!.from, callout!.to)).toBe("> [!info] test\n> test");
+  });
+
+  it("parses unordered, task, and ordered list marker geometry", () => {
+    const nodes = parseMarkdownNodes(
+      "- bullet\n- [ ] task\n10. ordered\n    1) nested\n- [x]compact",
+    ).filter((node) => node.kind === "list-item");
+    expect(nodes).toHaveLength(5);
+    expect(nodes[0].meta).toMatchObject({
+      marker: "-", markerFrom: 0, contentFrom: 2, ordered: false,
+    });
+    expect(nodes[1].meta).toMatchObject({ task: true, contentFrom: 15 });
+    expect(nodes[2].meta).toMatchObject({
+      marker: "10.", contentFrom: 24, ordered: true, number: 10,
+    });
+    expect(nodes[3].meta).toMatchObject({
+      marker: "1)", indentColumns: 4, ordered: true, number: 1,
+    });
+    expect(nodes[4].meta).toMatchObject({ task: true, contentFrom: 51 });
+  });
+
+  it("offers callout types without the generic keyword icon", async () => {
+    const source = "> [!wa";
+    const result = await markdownCompletion(new CompletionContext(
+      EditorState.create({ doc: source }), source.length, false,
+    ));
+    expect(result?.options.some((option) => option.label === "warning")).toBe(true);
+    expect(result?.options.every((option) => option.type == null)).toBe(true);
   });
 
   it("parses linked HTML images, linked Markdown images, and fenced code", () => {

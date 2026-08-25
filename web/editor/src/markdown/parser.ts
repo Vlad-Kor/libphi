@@ -355,23 +355,36 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     }
   }
 
-  for (const match of text.matchAll(/^([ \t]*)([-+*])(?=[ \t]+)/gm)) {
+  for (const match of text.matchAll(
+    /^([ \t]*)(?:([-+*])|(\d+)([.)]))([ \t]+)/gm,
+  )) {
     if (inside(match.index, protectedRanges)) continue;
     const markerFrom = match.index + match[1].length;
+    const marker = match[2] ?? `${match[3]}${match[4]}`;
     const to = lineEnd(text, markerFrom);
+    const markerContentFrom = match.index + match[0].length;
+    const taskMatch = match[2]
+      ? /^\[([^\]])\]([ \t]*)/.exec(text.slice(markerContentFrom, to))
+      : null;
+    const contentFrom = markerContentFrom + (taskMatch?.[0].length ?? 0);
     nodes.push({
       kind: "list-item",
       from: match.index,
       to,
-      text: match[2],
+      text: marker,
       meta: {
+        marker,
         markerFrom,
+        markerTo: markerFrom + marker.length,
+        contentFrom,
         indentColumns: [...match[1]].reduce(
           (columns, character) => character === "\t"
             ? columns + (4 - columns % 4) : columns + 1,
           0,
         ),
-        task: /^\s*\[[^\]]\]/.test(text.slice(markerFrom + 1, to)),
+        ordered: Boolean(match[3]),
+        number: Number(match[3] ?? 0),
+        task: Boolean(taskMatch),
       },
     });
   }
@@ -379,12 +392,17 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   for (const match of text.matchAll(/^[ \t]*[-*+][ \t]+\[([^\]])\]/gm)) {
     if (!inside(match.index, protectedRanges)) {
       const marker = match[0].lastIndexOf("[");
+      const from = match.index + marker;
       nodes.push({
         kind: "task",
-        from: match.index + marker,
-        to: match.index + marker + 3,
+        from,
+        to: from + 3,
         text: match[1],
-        meta: { status: match[1] },
+        meta: {
+          status: match[1],
+          prefixFrom: match.index,
+          prefixTo: from + 3,
+        },
       });
     }
   }

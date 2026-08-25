@@ -26,13 +26,25 @@ const strike = Decoration.mark({ class: "cm-live-strike" });
 const highlight = Decoration.mark({ class: "cm-live-highlight" });
 const tag = Decoration.mark({ class: "cm-live-tag" });
 const blockId = Decoration.mark({ class: "cm-live-block-id" });
+const htmlTag = Decoration.mark({ class: "cm-html-tag" });
+const htmlAttribute = Decoration.mark({ class: "cm-html-attribute" });
+const htmlValue = Decoration.mark({ class: "cm-html-value" });
+const htmlPunctuation = Decoration.mark({ class: "cm-html-punctuation" });
 export const refreshLivePreview = StateEffect.define<null>();
 
 function active(node: MarkdownNode, state: EditorState): boolean {
   return state.selection.ranges.some((selection) => {
+    if (node.kind === "task") {
+      const from = Number(node.meta?.prefixFrom ?? node.from);
+      const to = Number(node.meta?.prefixTo ?? node.to);
+      return selection.from === selection.to
+        ? selection.from >= from && selection.from < to
+        : selection.from < to && selection.to > from;
+    }
     /* A click in the empty area after the final callout line maps to node.to.
      * Keep that endpoint editable; the next document line starts at to + 1. */
-    if (node.kind === "callout" && selection.from === selection.to)
+    if ((node.kind === "callout" || node.kind === "code-block") &&
+        selection.from === selection.to)
       return selection.from >= node.from && selection.from <= node.to;
     return selectionTouches(node, selection);
   });
@@ -119,6 +131,30 @@ function addDelimited(
   if (node.contentTo < node.to) builder.add(node.contentTo, node.to, hidden);
 }
 
+function addHtmlSyntax(builder: DecorationSink, node: MarkdownNode): void {
+  for (const tagMatch of node.text.matchAll(/<\/?([A-Za-z][\w:-]*)([^<>]*)>/g)) {
+    const tagFrom = node.from + tagMatch.index;
+    const nameAt = tagMatch[0].indexOf(tagMatch[1]);
+    builder.add(tagFrom, tagFrom + nameAt, htmlPunctuation);
+    builder.add(tagFrom + nameAt, tagFrom + nameAt + tagMatch[1].length,
+      htmlTag);
+    builder.add(tagFrom + tagMatch[0].length - 1,
+      tagFrom + tagMatch[0].length, htmlPunctuation);
+
+    const attributes = tagMatch[2];
+    const attributesFrom = tagFrom + nameAt + tagMatch[1].length;
+    const pattern = /([:@A-Za-z_][\w:.-]*)(\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+)/g;
+    for (const attribute of attributes.matchAll(pattern)) {
+      const from = attributesFrom + attribute.index;
+      builder.add(from, from + attribute[1].length, htmlAttribute);
+      builder.add(from + attribute[1].length,
+        from + attribute[1].length + attribute[2].length, htmlPunctuation);
+      builder.add(from + attribute[1].length + attribute[2].length,
+        from + attribute[0].length, htmlValue);
+    }
+  }
+}
+
 function buildDecorations(state: EditorState): DecorationSet {
   const nodes = parseMarkdownNodes(state.doc.toString());
   const ranges: Range<Decoration>[] = [];
@@ -154,20 +190,45 @@ function buildDecorations(state: EditorState): DecorationSet {
       }
       case "list-item": {
         const indentColumns = Number(node.meta?.indentColumns ?? 0);
-        const contentIndent = indentColumns * 0.25 +
-          (node.meta?.task ? 2.05 : 1.1);
+        const marker = String(node.meta?.marker ?? node.text);
+        const ordered = Boolean(node.meta?.ordered);
+        const markerIndent = node.meta?.task ? 1.95 : ordered
+          ? 0.56 * Math.max(1, marker.length - 1) + 0.62
+          : 1.1;
+        const contentIndent = indentColumns * 0.25 + markerIndent;
         builder.add(node.from, node.from, Decoration.line({
           attributes: {
-            class: "cm-live-list-item",
-            style: `--phi-list-content-indent:${contentIndent}em`,
+            class: `cm-live-list-item${ordered ? " cm-live-ordered-list-item" : ""}`,
+            style: `--phi-list-content-indent:${Number(contentIndent.toFixed(2))}em`,
           },
         }));
         if (!isActive) {
           const markerFrom = Number(node.meta?.markerFrom ?? node.from);
-          const marker = node.meta?.task
-            ? hidden
-            : Decoration.replace({ widget: new BulletWidget() });
-          builder.add(markerFrom, markerFrom + 1, marker);
+          if (node.meta?.task) {
+            builder.add(markerFrom, Number(node.meta?.markerTo ?? markerFrom + 1),
+              hidden);
+          } else {
+            builder.add(node.from, Number(node.meta?.contentFrom ?? markerFrom + marker.length),
+              Decoration.replace({
+                widget: new BulletWidget(ordered ? marker : "•", ordered),
+              }));
+          }
+        } else if (ordered) {
+          builder.add(Number(node.meta?.markerFrom ?? node.from),
+            Number(node.meta?.markerTo ?? node.from + marker.length),
+            Decoration.mark({ class: "cm-live-list-number" }));
+        }
+        if (node.meta?.task) {
+          const prefixTo = Number(node.meta?.contentFrom ?? node.to);
+          const prefixActive = state.selection.ranges.some((selection) =>
+            selection.from === selection.to
+              ? selection.from >= node.from && selection.from < prefixTo
+              : selection.from < prefixTo && selection.to > node.from);
+          if (isActive && !prefixActive) {
+            builder.add(Number(node.meta?.markerFrom ?? node.from),
+              Number(node.meta?.markerTo ?? node.from + marker.length),
+              hidden);
+          }
         }
         break;
       }
@@ -178,6 +239,7 @@ function buildDecorations(state: EditorState): DecorationSet {
       case "comment": if (!isActive) builder.add(node.from, node.to, hidden); break;
       case "tag": builder.add(node.from, node.to, tag); break;
       case "block-id": builder.add(node.from, node.to, blockId); break;
+      case "html": if (isActive) addHtmlSyntax(builder, node); break;
     }
   }
   return Decoration.set(ranges, true);

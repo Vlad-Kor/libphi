@@ -250,6 +250,58 @@ $$`;
     expect(editor.getDocument()).toBe("- A long item that wraps beneath its content");
   });
 
+  it("aligns task and ordered list continuations with their first line", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "all-list-layouts",
+      path: "all-list-layouts.md",
+      text: "- bullet text\n- [ ] task text\n10. ordered text",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: editor.view.state.doc.length } });
+    const lines = [...parent.querySelectorAll<HTMLElement>(".cm-line")];
+    expect(lines).toHaveLength(3);
+    expect(lines[0].style.getPropertyValue("--phi-list-content-indent"))
+      .toBe("1.1em");
+    expect(lines[1].style.getPropertyValue("--phi-list-content-indent"))
+      .toBe("1.95em");
+    expect(lines[2].classList.contains("cm-live-ordered-list-item")).toBe(true);
+    expect(lines[2].querySelector(".list-number")?.textContent).toBe("10.");
+
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    expect(css).toMatch(/\.task-checkbox\s*\{[^}]*translateY\(1px\)/s);
+    expect(css).toMatch(/\.list-number, \.cm-live-list-number\s*\{[^}]*var\(--editor-muted\)/s);
+    expect(css).toMatch(/\.cm-tooltip-autocomplete\s*\{[^}]*border-radius: 12px/s);
+    expect(css).toMatch(/\.cm-completionIcon\s*\{\s*display: none/s);
+  });
+
+  it("reveals the complete task prefix only when the cursor enters it", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "- [ ] task text";
+    editor.openDocument({
+      documentId: "task-prefix",
+      path: "task-prefix.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    editor.view.dispatch({ selection: { anchor: text.indexOf("text") } });
+    expect(parent.querySelector(".task-checkbox")).not.toBeNull();
+    expect(parent.querySelector(".cm-line")?.textContent).not.toContain("-");
+
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    expect(parent.querySelector(".task-checkbox")).toBeNull();
+    expect(parent.querySelector(".cm-line")?.textContent).toContain("- [ ] task text");
+  });
+
   it("renders a standalone triple-dash line as a horizontal rule", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -343,6 +395,67 @@ $$`;
     expect(parent.querySelector(".callout")).toBeNull();
     editor.view.dispatch({ selection: { anchor: text.lastIndexOf("test") + 2 } });
     expect(parent.querySelector(".callout")).toBeNull();
+  });
+
+  it("reveals the selected source word instead of the front of rich blocks", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "```text\nfirst second\n```\n\n> [!note] Title\n> alpha beta\n\nOutside";
+    editor.openDocument({
+      documentId: "block-cursor-mapping",
+      path: "block-cursor-mapping.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.length } });
+
+    const selectWord = (root: Element, word: string) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode() as Text | null;
+      while (node && !node.data.includes(word))
+        node = walker.nextNode() as Text | null;
+      expect(node).not.toBeNull();
+      const at = node!.data.indexOf(word);
+      const range = document.createRange();
+      range.setStart(node!, at);
+      range.setEnd(node!, at + word.length);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    };
+
+    const code = parent.querySelector(".code-block-widget")!;
+    selectWord(code, "second");
+    code.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(editor.view.state.selection.main.head).toBe(text.indexOf("second"));
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    const callout = parent.querySelector(".callout-content")!;
+    selectWord(callout, "beta");
+    callout.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(editor.view.state.selection.main.head).toBe(text.indexOf("beta"));
+  });
+
+  it("syntax-highlights an HTML span while its source is active", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "<span style=color:#8279fc>value</span>\n\nOutside";
+    editor.openDocument({
+      documentId: "html-source-highlighting",
+      path: "html-source-highlighting.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.indexOf("#8279fc") } });
+    expect(parent.querySelectorAll(".cm-html-tag")).toHaveLength(2);
+    expect(parent.querySelector(".cm-html-attribute")?.textContent).toBe("style");
+    expect(parent.querySelector(".cm-html-value")?.textContent).toBe("color:#8279fc");
   });
 
   it("renders inline LaTeX in Live Preview callout titles", async () => {
@@ -505,6 +618,53 @@ $$`;
     expect(key(spaced, "Enter")).toBe(true);
     expect(spaced.state.doc.toString())
       .toBe("    - [x] finished\n    - [ ] ");
+  });
+
+  it("continues every list type without a blank line and advances numbers", () => {
+    const bullet = viewFor("- first", 7, 7, latexSuite);
+    expect(key(bullet, "Enter")).toBe(true);
+    expect(bullet.state.doc.toString()).toBe("- first\n- ");
+
+    const task = viewFor("- [x] done", 10, 10, latexSuite);
+    expect(key(task, "Enter")).toBe(true);
+    expect(task.state.doc.toString()).toBe("- [x] done\n- [ ] ");
+
+    const ordered = viewFor("9. ninth", 8, 8, latexSuite);
+    expect(key(ordered, "Enter")).toBe(true);
+    expect(ordered.state.doc.toString()).toBe("9. ninth\n10. ");
+  });
+
+  it("starts an indented ordered sublist at one", () => {
+    const view = viewFor("1. first\n2. second", 18, 18, latexSuite);
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.doc.toString()).toBe("1. first\n    1. second");
+
+    const multiple = viewFor("7. alpha\n8. beta", 0, 16, latexSuite);
+    expect(key(multiple, "Tab")).toBe(true);
+    expect(multiple.state.doc.toString()).toBe("    1. alpha\n    2. beta");
+  });
+
+  it("cycles selected text from emphasis to strong with asterisks", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "asterisk-cycle",
+      path: "asterisk-cycle.md",
+      text: "this",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 0, head: 4 } });
+    expect(key(editor.view, "*", true)).toBe(true);
+    expect(editor.getDocument()).toBe("*this*");
+    expect(editor.view.state.sliceDoc(
+      editor.view.state.selection.main.from,
+      editor.view.state.selection.main.to,
+    )).toBe("this");
+    expect(key(editor.view, "*", true)).toBe(true);
+    expect(editor.getDocument()).toBe("**this**");
   });
 });
 
