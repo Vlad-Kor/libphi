@@ -22,6 +22,7 @@ describe("lazy preview renderers", () => {
       scrollLeft: { value: 100, writable: true },
     });
     wireMathScroll(equation);
+    expect(equation.classList.contains("math-overflow")).toBe(true);
     const bubbled = vi.fn();
     parent.addEventListener("wheel", bubbled);
 
@@ -109,6 +110,7 @@ describe("lazy preview renderers", () => {
       scrollLeft: { value: 0, writable: true },
     });
     wireMathScroll(equation);
+    expect(equation.classList.contains("math-overflow")).toBe(false);
     const bubbled = vi.fn();
     parent.addEventListener("wheel", bubbled);
 

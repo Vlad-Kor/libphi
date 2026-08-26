@@ -341,7 +341,8 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .math-widget mjx-container[jax="SVG"] svg { fill: currentColor; stroke: currentColor; }
 .math-widget mjx-container[jax="SVG"] [data-c] { stroke: none; }
 .math-loading { color: var(--editor-muted); opacity: .7; }
-.math-display { display: block; width: 100%; overflow-x: auto; padding: .55em 0; text-align: center; }
+.math-display { display: block; width: 100%; padding: .55em 0; text-align: center; }
+.math-widget.math-overflow { overflow-x: auto; }
 .cm-latex-delimiter { color: color-mix(in srgb, #2ec27e 82%, var(--editor-fg)); font-weight: 650; }
 .cm-latex-command { color: color-mix(in srgb, #c061cb 78%, var(--editor-fg)); }
 .cm-latex-number { color: color-mix(in srgb, #e66100 82%, var(--editor-fg)); }
@@ -389,12 +390,15 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
   font-variant-numeric: tabular-nums;
 }
 .horizontal-rule-widget {
+  box-sizing: content-box;
   display: block;
   width: 100%;
   height: 1px;
-  margin: .8em 0;
+  margin: 0;
+  padding: .8em 0;
   border: 0;
   background: var(--editor-border);
+  background-clip: content-box;
 }
 .task-checkbox { margin: 0 .4em 0 0; transform: translateY(-1px); }
 .cm-live-inline-code {
@@ -442,7 +446,7 @@ pre code { padding: 0; background: transparent; }
 .embed-title { border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
 .embed-body { min-width: 0; max-width: 100%; overflow: hidden; }
 .embed-body .math-display { box-sizing: border-box; max-width: 100%; }
-.embed-body .math-inline { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: middle; }
+.embed-body .math-inline { display: inline-block; max-width: 100%; vertical-align: middle; }
 .image-widget { position: relative; max-width: 100%; margin: 0; line-height: 0; vertical-align: top; }
 .cm-line:has(.image-widget-block) { line-height: 0; }
 .image-widget-block { display: block; width: fit-content; }
@@ -487,7 +491,7 @@ pre code { padding: 0; background: transparent; }
 .image-widget:focus-within .image-source-button, .image-resize-handle:focus-visible { opacity: 1; }
 .markdown-link img { display: inline-block; max-width: 100%; vertical-align: middle; }
 .remote-image-blocked { min-width: 12em; min-height: 3em; border: 1px dashed var(--editor-border); background: var(--editor-code-bg); cursor: pointer; }
-.media-embed { display: block; max-width: 100%; margin: .4em 0; }
+.media-embed { display: block; max-width: 100%; margin: 0; padding: .4em 0; }
 .attachment-embed, .property-source-button { border: 1px solid var(--editor-border); border-radius: 6px; background: var(--editor-code-bg); color: var(--editor-fg); padding: .4em .65em; cursor: pointer; }
 .properties-widget { display: block; border-bottom: 1px solid var(--editor-border); padding: .4em 0 .7em; }
 .properties-heading { color: var(--editor-muted); font-size: .85em; font-weight: 700; margin-bottom: .3em; }

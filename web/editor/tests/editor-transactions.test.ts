@@ -298,7 +298,9 @@ $$`;
     expect(css).toMatch(/\.cm-tooltip-autocomplete\s*\{[^}]*border-radius: 12px/s);
     expect(css).toMatch(/\.cm-completionIcon\s*\{\s*display: none/s);
     expect(css).toMatch(/\.note-embed\s*\{[^}]*max-width: 100%[^}]*overflow: hidden/s);
-    expect(css).toMatch(/\.embed-body \.math-inline\s*\{[^}]*max-width: 100%[^}]*overflow-x: auto/s);
+    expect(css).toMatch(/\.embed-body \.math-inline\s*\{[^}]*max-width: 100%/s);
+    expect(css).not.toMatch(/\.math-display\s*\{[^}]*overflow-x: auto/s);
+    expect(css).toMatch(/\.math-widget\.math-overflow\s*\{[^}]*overflow-x: auto/s);
   });
 
   it("reveals the complete task prefix only when the cursor enters it", () => {
@@ -337,6 +339,16 @@ $$`;
       lineEnding: "LF",
     });
     expect(parent.querySelector("hr.horizontal-rule-widget")).not.toBeNull();
+
+    /* CodeMirror explicitly forbids vertical margins on block widgets: they
+     * are outside the measured box and make clicks below the rule resolve to
+     * the following document line. Keep the same visual spacing inside the
+     * widget's measured padding instead. */
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    const rule = /\.horizontal-rule-widget\s*\{([^}]*)\}/s.exec(css)?.[1] ?? "";
+    expect(rule).toMatch(/margin:\s*0/);
+    expect(rule).toMatch(/padding:\s*\.8em 0/);
+    expect(rule).not.toMatch(/margin:\s*\.8em/);
   });
 
   it("keeps standalone images in line geometry and remeasures after loading", () => {

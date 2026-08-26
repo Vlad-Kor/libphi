@@ -125,8 +125,13 @@ export function wireMathScroll(target: HTMLElement): void {
    * web process instead of keeping it entirely on the asynchronous scrolling
    * path.  Only install one when the equation really needs horizontal
    * scrolling; ordinary equations should never affect document momentum. */
-  if (scrollWired.has(target) || target.scrollWidth <= target.clientWidth)
-    return;
+  if (scrollWired.has(target)) return;
+  /* `overflow-x: auto` also makes the element a nested asynchronous scroll
+   * container in WebKit, even when its contents fit. Touchpad momentum can
+   * then stop when it crosses an ordinary display equation. Only create that
+   * nested scroller after measuring a genuinely overflowing expression. */
+  if (target.scrollWidth <= target.clientWidth) return;
+  target.classList.add("math-overflow");
   scrollWired.add(target);
   target.addEventListener("wheel", (event) => {
     // Pinch zoom is exposed as a Ctrl-modified wheel gesture by WebKit. Leave it
