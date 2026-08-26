@@ -103,6 +103,7 @@ function isExternal(target: string): boolean {
 }
 
 const FALLBACK_BLOCK_IMAGE_HEIGHT = 360;
+const FALLBACK_NOTE_EMBED_HEIGHT = 360;
 
 function targetIsImage(target: string): boolean {
   return /\.(?:png|jpe?g|gif|webp|svg|avif)(?:$|[|?#])/i.test(target);
@@ -116,6 +117,35 @@ function estimatedBlockImageHeight(...sources: string[]): number {
     return Math.max(80, Math.min(600, Number(size[1]) * 0.6));
   }
   return FALLBACK_BLOCK_IMAGE_HEIGHT;
+}
+
+const noteEmbedHeights = new Map<string, number>();
+const widgetResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
+
+function observeNoteEmbedResize(
+  view: EditorView,
+  target: string,
+  element: HTMLElement,
+): void {
+  const measure = () => view.requestMeasure({
+    key: element,
+    read: () => element.isConnected
+      ? element.getBoundingClientRect().height
+      : 0,
+    write: (height) => {
+      if (height > 0) noteEmbedHeights.set(target, height);
+    },
+  });
+  measure();
+  if (typeof ResizeObserver === "undefined") return;
+  const observer = new ResizeObserver(measure);
+  observer.observe(element);
+  widgetResizeObservers.set(element, observer);
+}
+
+function stopObservingWidgetResize(element: HTMLElement): void {
+  widgetResizeObservers.get(element)?.disconnect();
+  widgetResizeObservers.delete(element);
 }
 
 export class HiddenWidget extends WidgetType {
@@ -295,9 +325,10 @@ export class LinkWidget extends WidgetType {
   }
 
   get estimatedHeight(): number {
-    return this.embed && this.block && targetIsImage(this.target)
+    if (!this.embed || !this.block) return -1;
+    return targetIsImage(this.target)
       ? estimatedBlockImageHeight(this.target)
-      : -1;
+      : noteEmbedHeights.get(this.target) ?? FALLBACK_NOTE_EMBED_HEIGHT;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -376,6 +407,9 @@ export class LinkWidget extends WidgetType {
     }
     const container = document.createElement("section");
     container.className = "note-embed";
+    const reservedHeight = noteEmbedHeights.get(this.target) ??
+      FALLBACK_NOTE_EMBED_HEIGHT;
+    container.style.minHeight = `${reservedHeight}px`;
     const title = document.createElement("button");
     title.type = "button";
     title.className = "embed-title";
@@ -392,10 +426,14 @@ export class LinkWidget extends WidgetType {
         body.classList.remove("dimmed");
         body.innerHTML = renderMarkdown(result?.text ?? "");
         wireRenderedContent(body, result?.path ?? "");
+        container.style.removeProperty("min-height");
+        observeNoteEmbedResize(view, this.target, container);
       })
       .catch((error) => {
         body.className = "embed-body render-error";
         body.textContent = error instanceof Error ? error.message : String(error);
+        container.style.removeProperty("min-height");
+        view.requestMeasure();
       });
     container.addEventListener("dblclick", (event) => {
       if (event.target === container || event.target === body) reveal(view, this.from);
@@ -404,6 +442,10 @@ export class LinkWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean { return this.embed; }
+
+  destroy(dom: HTMLElement): void {
+    stopObservingWidgetResize(dom);
+  }
 }
 
 export class MarkdownLinkWidget extends WidgetType {

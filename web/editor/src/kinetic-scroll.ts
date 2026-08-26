@@ -22,6 +22,8 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
   let momentumTimer = 0;
   let animationFrame = 0;
   let lastFrameAt = 0;
+  let nativeTouchActive = false;
+  let nativeTouchUntil = 0;
 
   const cancelMomentum = () => {
     window.clearTimeout(momentumTimer);
@@ -81,11 +83,12 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
   const onWheel = (event: WheelEvent) => {
     /* Pinch zoom is represented as Ctrl+wheel. Horizontal-dominant gestures
      * may belong to an overflowing equation and remain on the native path. */
-    if (event.ctrlKey || event.defaultPrevented ||
+    const now = performance.now();
+    if (nativeTouchActive || now < nativeTouchUntil ||
+        event.ctrlKey || event.defaultPrevented ||
         event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
         Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
 
-    const now = performance.now();
     const gap = now - lastWheelAt;
     window.clearTimeout(momentumTimer);
     momentumTimer = 0;
@@ -113,13 +116,27 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
 
   const onPointerDown = () => cancelMomentum();
   const onKeyDown = () => cancelMomentum();
+  const onTouchStart = () => {
+    cancelMomentum();
+    nativeTouchActive = true;
+  };
+  const onTouchFinish = () => {
+    nativeTouchActive = false;
+    nativeTouchUntil = performance.now() + 500;
+  };
   scroller.addEventListener("wheel", onWheel, { passive: false });
   scroller.addEventListener("pointerdown", onPointerDown, { passive: true });
   scroller.addEventListener("keydown", onKeyDown, { passive: true });
+  scroller.addEventListener("touchstart", onTouchStart, { passive: true });
+  scroller.addEventListener("touchend", onTouchFinish, { passive: true });
+  scroller.addEventListener("touchcancel", onTouchFinish, { passive: true });
   return () => {
     cancelMomentum();
     scroller.removeEventListener("wheel", onWheel);
     scroller.removeEventListener("pointerdown", onPointerDown);
     scroller.removeEventListener("keydown", onKeyDown);
+    scroller.removeEventListener("touchstart", onTouchStart);
+    scroller.removeEventListener("touchend", onTouchFinish);
+    scroller.removeEventListener("touchcancel", onTouchFinish);
   };
 }

@@ -24,6 +24,27 @@ function wheel(
   return event;
 }
 
+function touch(
+  target: HTMLElement,
+  type: string,
+  y: number,
+  active = true,
+): Event {
+  const point = {
+    identifier: 7,
+    clientX: 20,
+    clientY: y,
+    target,
+  } as unknown as Touch;
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    touches: { value: active ? [point] : [] },
+    changedTouches: { value: [point] },
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
 describe("WebKitGTK kinetic scrolling workaround", () => {
   it("eases pixel-precision vertical gestures on animation frames", () => {
     const scroller = document.createElement("div");
@@ -105,5 +126,19 @@ describe("WebKitGTK kinetic scrolling workaround", () => {
     vi.advanceTimersByTime(100);
     expect(requestFrame).toHaveBeenCalledTimes(1);
     expect(cancelFrame).toHaveBeenCalledWith(1);
+  });
+
+  it("leaves touchscreen gestures and their synthesized wheels native", () => {
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    vi.spyOn(performance, "now").mockReturnValue(100);
+    installKineticScroll(scroller);
+
+    touch(scroller, "touchstart", 100);
+    const duringTouch = wheel(scroller, 20);
+    touch(scroller, "touchend", 140, false);
+    const touchMomentum = wheel(scroller, 20);
+    expect(duringTouch.defaultPrevented).toBe(false);
+    expect(touchMomentum.defaultPrevented).toBe(false);
   });
 });

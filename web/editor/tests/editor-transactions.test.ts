@@ -7,6 +7,7 @@ import { EditorView, runScopeHandlers, showTooltip, type Tooltip } from "@codemi
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runEditingCommand } from "../src/commands";
+import { acceptNativeResponse } from "../src/bridge";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
@@ -91,7 +92,73 @@ describe("CodeMirror document transactions", () => {
       .estimatedHeight).toBe(180);
     expect(new MarkdownLinkWidget("diagram.png", "Diagram", 0, true, 10, false)
       .estimatedHeight).toBe(-1);
+    expect(new LinkWidget("Long note", "Long note", 0, 10, true, true)
+      .estimatedHeight).toBe(360);
     expect(new MathWidget("x", true, 0).estimatedHeight).toBe(64);
+  });
+
+  it("remeasures a note embed when its asynchronous body arrives", async () => {
+    let view: EditorView;
+    const requestMeasure = vi.fn((request?: {
+      read(view: EditorView): unknown;
+      write?(measurement: unknown, view: EditorView): void;
+    }) => {
+      if (request)
+        request.write?.(request.read(view), view);
+    });
+    view = { requestMeasure } as unknown as EditorView;
+    let request: CustomEvent | undefined;
+    window.addEventListener("phi-native-message", (event) => {
+      request = event as CustomEvent;
+    }, { once: true });
+
+    const widget = new LinkWidget("Long note", "Long note", 0, 13, true, true);
+    const dom = widget.toDOM(view);
+    expect(dom.style.minHeight).toBe("360px");
+    vi.spyOn(dom, "getBoundingClientRect").mockReturnValue({
+      height: 840,
+    } as DOMRect);
+    document.body.append(dom);
+    const message = request?.detail as {
+      protocol: number;
+      type: string;
+      id: string;
+    };
+    expect(message.type).toBe("embed/read");
+    acceptNativeResponse({
+      protocol: 1,
+      type: "request/response",
+      id: message.id,
+      payload: { result: { text: "# Loaded\n\nA much taller body.", path: "Long note.md" } },
+    });
+    await settle();
+
+    expect(dom.querySelector(".embed-body")?.textContent)
+      .toContain("A much taller body.");
+    expect(dom.style.minHeight).toBe("");
+    expect(requestMeasure).toHaveBeenCalled();
+    expect(new LinkWidget("Long note", "Long note", 0, 13, true, true)
+      .estimatedHeight).toBe(840);
+    widget.destroy(dom);
+
+    let remountRequest: CustomEvent | undefined;
+    window.addEventListener("phi-native-message", (event) => {
+      remountRequest = event as CustomEvent;
+    }, { once: true });
+    const remountedWidget = new LinkWidget(
+      "Long note", "Long note", 0, 13, true, true,
+    );
+    const remounted = remountedWidget.toDOM(view);
+    expect(remounted.style.minHeight).toBe("840px");
+    const remountMessage = remountRequest?.detail as { id: string };
+    acceptNativeResponse({
+      protocol: 1,
+      type: "request/response",
+      id: remountMessage.id,
+      payload: { result: { text: "# Loaded again", path: "Long note.md" } },
+    });
+    await settle();
+    remountedWidget.destroy(remounted);
   });
 
   it("round-trips untouched CRLF and Unicode byte-for-byte", () => {
