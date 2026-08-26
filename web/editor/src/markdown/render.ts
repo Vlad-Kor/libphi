@@ -289,10 +289,10 @@ function wireRenderedMath(root: HTMLElement): void {
       element.className = display ? "math-widget math-display" : "math-widget math-inline";
       element.tabIndex = 0;
       element.setAttribute("aria-label", `LaTeX: ${latex}`);
-      if (display || root.classList.contains("embed-body"))
-        wireMathScroll(element);
       fragment.append(element);
-      void renderMath(latex, display, element);
+      const rendered = renderMath(latex, display, element);
+      if (display || root.classList.contains("embed-body"))
+        void rendered.then(() => wireMathScroll(element));
       cursor = match.index + match[0].length;
     }
     if (cursor) {

@@ -16,6 +16,7 @@ interface MathJaxWindow extends Window {
 }
 
 const cache = new Map<string, string>();
+const scrollWired = new WeakSet<HTMLElement>();
 let preamble = "";
 let preambleRevision = 0;
 let mathJaxScript: Promise<void> | undefined;
@@ -120,6 +121,13 @@ export function getMathRevision(): number { return preambleRevision; }
  * outer scroller, which makes the document jump while the formula moves.
  */
 export function wireMathScroll(target: HTMLElement): void {
+  /* A non-passive wheel listener makes WebKitGTK send the gesture through the
+   * web process instead of keeping it entirely on the asynchronous scrolling
+   * path.  Only install one when the equation really needs horizontal
+   * scrolling; ordinary equations should never affect document momentum. */
+  if (scrollWired.has(target) || target.scrollWidth <= target.clientWidth)
+    return;
+  scrollWired.add(target);
   target.addEventListener("wheel", (event) => {
     // Pinch zoom is exposed as a Ctrl-modified wheel gesture by WebKit. Leave it
     // to the browser, as well as ordinary vertical document scrolling.
@@ -131,8 +139,12 @@ export function wireMathScroll(target: HTMLElement): void {
     const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
       event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? target.clientWidth : 1;
     const maximum = target.scrollWidth - target.clientWidth;
-    target.scrollLeft = Math.max(0, Math.min(maximum,
+    const next = Math.max(0, Math.min(maximum,
       target.scrollLeft + event.deltaX * scale));
+    /* Do not trap the rest of a kinetic gesture at either edge.  Let WebKit
+     * hand it back to CodeMirror's outer scroller instead. */
+    if (next === target.scrollLeft) return;
+    target.scrollLeft = next;
     event.preventDefault();
     event.stopPropagation();
   }, { passive: false });

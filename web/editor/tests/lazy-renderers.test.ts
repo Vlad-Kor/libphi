@@ -73,6 +73,57 @@ describe("lazy preview renderers", () => {
     expect(bubbled).toHaveBeenCalledTimes(2);
   });
 
+  it("releases horizontal momentum at an equation boundary", () => {
+    const parent = document.createElement("div");
+    const equation = document.createElement("div");
+    parent.append(equation);
+    Object.defineProperties(equation, {
+      clientWidth: { value: 300 },
+      scrollWidth: { value: 900 },
+      scrollLeft: { value: 600, writable: true },
+    });
+    wireMathScroll(equation);
+    const bubbled = vi.fn();
+    parent.addEventListener("wheel", bubbled);
+
+    const pan = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 48,
+      deltaY: 3,
+    });
+    equation.dispatchEvent(pan);
+
+    expect(equation.scrollLeft).toBe(600);
+    expect(pan.defaultPrevented).toBe(false);
+    expect(bubbled).toHaveBeenCalledOnce();
+  });
+
+  it("does not intercept gestures on equations that fit", () => {
+    const parent = document.createElement("div");
+    const equation = document.createElement("div");
+    parent.append(equation);
+    Object.defineProperties(equation, {
+      clientWidth: { value: 300 },
+      scrollWidth: { value: 300 },
+      scrollLeft: { value: 0, writable: true },
+    });
+    wireMathScroll(equation);
+    const bubbled = vi.fn();
+    parent.addEventListener("wheel", bubbled);
+
+    const pan = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 48,
+      deltaY: 3,
+    });
+    equation.dispatchEvent(pan);
+
+    expect(pan.defaultPrevented).toBe(false);
+    expect(bubbled).toHaveBeenCalledOnce();
+  });
+
   it("loads the offline MathJax runtime only when requested", async () => {
     expect(document.querySelector('script[data-phi-renderer="mathjax"]')).toBeNull();
     const ready = ensureMathJaxReady();

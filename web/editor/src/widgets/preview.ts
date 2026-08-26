@@ -156,8 +156,8 @@ export class MathWidget extends WidgetType {
     element.tabIndex = 0;
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
     element.addEventListener("click", () => reveal(view, this.from));
-    if (this.display) wireMathScroll(element);
-    void renderMath(this.latex, this.display, element);
+    const rendered = renderMath(this.latex, this.display, element);
+    if (this.display) void rendered.then(() => wireMathScroll(element));
     return element;
   }
 
