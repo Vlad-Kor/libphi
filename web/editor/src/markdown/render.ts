@@ -17,7 +17,7 @@ import "prismjs/components/prism-python";
 import "prismjs/components/prism-rust";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-yaml";
-import { sendNative } from "../bridge";
+import { requestNative, sendNative } from "../bridge";
 import { renderMath, wireMathScroll } from "../math/mathjax";
 import { remoteImagesAllowed } from "../settings";
 
@@ -45,12 +45,26 @@ function escapeAttribute(value: string): string {
   return escapeHtml(value);
 }
 
-function prepare(source: string): { source: string; html: string[] } {
+interface PreparedMarkdown {
+  source: string;
+  html: string[];
+  math: string[];
+}
+
+function prepare(source: string): PreparedMarkdown {
   const html: string[] = [];
+  const math: string[] = [];
   let value = source.replace(protectedHtml, (match) => {
     const index = html.push(match) - 1;
     return `<phi-raw-html data-index="${index}"></phi-raw-html>`;
   });
+  value = value.replace(
+    /(?<!\\)(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$[^\n$]+?\$)/g,
+    (match) => {
+      const index = math.push(match) - 1;
+      return `<phi-math-source data-index="${index}"></phi-math-source>`;
+    },
+  );
   value = value
     .replace(/%%[\s\S]*?%%/g, "")
     .replace(/==([^\n=]+)==/g, "<mark>$1</mark>")
@@ -64,7 +78,23 @@ function prepare(source: string): { source: string; html: string[] } {
         return `<button type="button" class="internal-embed" ${attributes}>${escapeAttribute(label)}</button>`;
       return `<a href="#" class="internal-link" ${attributes}>${escapeAttribute(label)}</a>`;
     });
-  return { source: value, html };
+  return { source: value, html, math };
+}
+
+function restorePrepared(rendered: string,
+                         prepared: PreparedMarkdown): string {
+  let restored = rendered.replace(
+    /<phi-raw-html data-index="(\d+)"><\/phi-raw-html>/g,
+    (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
+      .replace(/^<([a-z][\w-]*)(?=\s|>)/i,
+        '<$1 data-phi-raw-html=""'),
+  );
+  restored = restored.replace(
+    /<phi-math-source data-index="(\d+)"><\/phi-math-source>/g,
+    (_match: string, index: string) =>
+      escapeHtml(prepared.math[Number(index)] ?? ""),
+  );
+  return restored;
 }
 
 function sanitize(html: string, allowFrames: boolean): string {
@@ -89,23 +119,14 @@ export function sanitizeHtml(html: string): string {
 
 export function renderMarkdown(source: string): string {
   const prepared = prepare(source);
-  let rendered = md.render(prepared.source);
-  rendered = rendered.replace(
-    /<phi-raw-html data-index="(\d+)"><\/phi-raw-html>/g,
-    (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
-      .replace(/^<([a-z][\w-]*)(?=\s|>)/i, '<$1 data-phi-raw-html=""'),
-  );
+  const rendered = restorePrepared(md.render(prepared.source), prepared);
   return applyRemoteContentPolicy(sanitize(rendered, true));
 }
 
 export function renderMarkdownInline(source: string): string {
   const prepared = prepare(source);
-  let rendered = md.renderInline(prepared.source);
-  rendered = rendered.replace(
-    /<phi-raw-html data-index="(\d+)"><\/phi-raw-html>/g,
-    (_match: string, index: string) => (prepared.html[Number(index)] ?? "")
-      .replace(/^<([a-z][\w-]*)(?=\s|>)/i, '<$1 data-phi-raw-html=""'),
-  );
+  const rendered = restorePrepared(md.renderInline(prepared.source),
+                                   prepared);
   return applyRemoteContentPolicy(sanitize(rendered, true));
 }
 
@@ -268,7 +289,8 @@ function wireRenderedMath(root: HTMLElement): void {
       element.className = display ? "math-widget math-display" : "math-widget math-inline";
       element.tabIndex = 0;
       element.setAttribute("aria-label", `LaTeX: ${latex}`);
-      if (display) wireMathScroll(element);
+      if (display || root.classList.contains("embed-body"))
+        wireMathScroll(element);
       fragment.append(element);
       void renderMath(latex, display, element);
       cursor = match.index + match[0].length;
@@ -278,6 +300,46 @@ function wireRenderedMath(root: HTMLElement): void {
       node.replaceWith(fragment);
     }
   }
+}
+
+function vaultUri(path: string): string {
+  return `vault:///${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function renderedImageError(error: unknown): HTMLElement {
+  const message = document.createElement("span");
+  message.className = "render-error image-error";
+  message.textContent = `Image unavailable: ${
+    error instanceof Error ? error.message : String(error)}`;
+  return message;
+}
+
+function wireLocalImages(root: HTMLElement, sourcePath: string): void {
+  if (!sourcePath) return;
+  root.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
+    const target = image.getAttribute("src") ?? "";
+    if (!target || /^(?:[a-z][a-z\d+.-]*:|\/|#)/i.test(target)) return;
+    image.removeAttribute("src");
+    image.classList.add("image-embed", "dimmed");
+    const alt = image.alt;
+    const size = alt.match(/\|(\d+)(?:x(\d+))?$/);
+    if (size) {
+      image.style.width = `${size[1]}px`;
+      if (size[2]) image.style.height = `${size[2]}px`;
+      image.alt = alt.replace(/\|\d+(?:x\d+)?$/, "");
+    }
+    requestNative<{ path?: string }>("attachment/resolve", {
+      target,
+      relative: true,
+      sourcePath,
+    })
+      .then((result) => {
+        if (!result.path) throw new Error("Image was not found in the vault");
+        image.src = vaultUri(result.path);
+        image.classList.remove("dimmed");
+      })
+      .catch((error) => image.replaceWith(renderedImageError(error)));
+  });
 }
 
 function wireRemoteImages(root: HTMLElement): void {
@@ -314,10 +376,12 @@ function wireRemoteIframes(root: HTMLElement): void {
   });
 }
 
-export function wireRenderedContent(root: HTMLElement): void {
+export function wireRenderedContent(root: HTMLElement,
+                                    sourcePath = ""): void {
   wireRenderedCallouts(root);
   wireRenderedLinks(root);
   wireRenderedMath(root);
+  wireLocalImages(root, sourcePath);
   wireRemoteImages(root);
   wireRemoteIframes(root);
 }

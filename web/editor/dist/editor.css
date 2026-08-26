@@ -438,8 +438,11 @@ pre code { padding: 0; background: transparent; }
 .callout-title::-webkit-details-marker { display: none; }
 .callout-icon { width: 1em; height: 1em; flex: 0 0 auto; color: var(--callout-color, var(--editor-accent)); }
 .callout-content > :last-child { margin-bottom: .2em; }
-.note-embed { display: block; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
+.note-embed { display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
 .embed-title { border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
+.embed-body { min-width: 0; max-width: 100%; overflow: hidden; }
+.embed-body .math-display { box-sizing: border-box; max-width: 100%; }
+.embed-body .math-inline { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: middle; }
 .image-widget { position: relative; max-width: 100%; margin: 0; line-height: 0; vertical-align: top; }
 .cm-line:has(.image-widget-block) { line-height: 0; }
 .image-widget-block { display: block; width: fit-content; }

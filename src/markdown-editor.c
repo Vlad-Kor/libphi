@@ -700,9 +700,12 @@ static void handle_attachment_paste(PdfvMarkdownEditor *self,
 static GFile *resolve_vault_attachment(PdfvMarkdownEditor *self,
                                        const gchar *target,
                                        gboolean relative_to_note,
+                                       const gchar *source_path,
                                        GError **error) {
   return pdfv_markdown_vault_adapter_resolve_attachment(
-      self->vault, self->relative_path, target, relative_to_note, error);
+      self->vault, source_path && *source_path ? source_path
+                                              : self->relative_path,
+      target, relative_to_note, error);
 }
 
 static void handle_attachment_action(PdfvMarkdownEditor *self,
@@ -713,8 +716,13 @@ static void handle_attachment_action(PdfvMarkdownEditor *self,
                                 : "";
   gboolean relative = payload && json_object_get_boolean_member_with_default(
                                      payload, "relative", FALSE);
+  const gchar *source_path = payload
+      ? json_object_get_string_member_with_default(payload, "sourcePath",
+                                                    self->relative_path)
+      : self->relative_path;
   GError *error = NULL;
-  GFile *file = resolve_vault_attachment(self, target, relative, &error);
+  GFile *file = resolve_vault_attachment(self, target, relative, source_path,
+                                         &error);
   if (!file) {
     if (id && *id)
       send_response_error(self, id, error);

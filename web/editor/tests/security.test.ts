@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
+import { acceptNativeResponse } from "../src/bridge";
 import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../src/markdown/render";
 import { defaultSettings, updateRuntimeSettings } from "../src/settings";
 
@@ -115,5 +116,47 @@ describe("rendering security", () => {
     expect(root.querySelector('[data-callout="tip"]')?.hasAttribute("open")).toBe(false);
     expect(root.querySelectorAll(".math-widget")).toHaveLength(1);
     expect(root.querySelector("[data-phi-raw-html]")?.textContent).toBe("$not-math$");
+  });
+
+  it("protects rendered LaTeX from Markdown emphasis parsing", () => {
+    const latex = String.raw`$\displaystyle S^{-1} A_{n} = E_{\lambda}$`;
+    const value = renderMarkdown(`Formula ${latex}`);
+    expect(value).toContain(latex);
+    expect(value).not.toContain("<em>");
+    const root = document.createElement("div");
+    root.innerHTML = value;
+    wireRenderedContent(root);
+    expect(root.querySelector(".math-widget")?.getAttribute("aria-label"))
+      .toBe(String.raw`LaTeX: \displaystyle S^{-1} A_{n} = E_{\lambda}`);
+  });
+
+  it("resolves rendered images relative to the embedded note", async () => {
+    const root = document.createElement("div");
+    root.innerHTML = renderMarkdown(
+      "![Diagram|197](<../~Images/My diagram.png>)",
+    );
+    let request: { id?: string; payload?: Record<string, unknown> } | undefined;
+    const respond = (event: Event) => {
+      request = (event as CustomEvent).detail;
+      acceptNativeResponse({
+        protocol: 1,
+        type: "request/response",
+        id: request?.id,
+        payload: { result: { path: "~Images/My diagram.png" } },
+      });
+    };
+    window.addEventListener("phi-native-message", respond, { once: true });
+    wireRenderedContent(root, "Nested/Embedded note.md");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(request?.payload).toMatchObject({
+      target: "../~Images/My%20diagram.png",
+      relative: true,
+      sourcePath: "Nested/Embedded note.md",
+    });
+    const image = root.querySelector<HTMLImageElement>("img");
+    expect(image?.getAttribute("src")).toBe("vault:///~Images/My%20diagram.png");
+    expect(image?.style.width).toBe("197px");
+    expect(image?.alt).toBe("Diagram");
   });
 });

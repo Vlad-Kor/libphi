@@ -297,6 +297,8 @@ $$`;
     expect(css).toMatch(/\.list-number\s*\{[^}]*ui-monospace[^}]*tabular-nums/s);
     expect(css).toMatch(/\.cm-tooltip-autocomplete\s*\{[^}]*border-radius: 12px/s);
     expect(css).toMatch(/\.cm-completionIcon\s*\{\s*display: none/s);
+    expect(css).toMatch(/\.note-embed\s*\{[^}]*max-width: 100%[^}]*overflow: hidden/s);
+    expect(css).toMatch(/\.embed-body \.math-inline\s*\{[^}]*max-width: 100%[^}]*overflow-x: auto/s);
   });
 
   it("reveals the complete task prefix only when the cursor enters it", () => {

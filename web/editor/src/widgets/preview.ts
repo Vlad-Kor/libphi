@@ -361,11 +361,13 @@ export class LinkWidget extends WidgetType {
     body.className = "embed-body dimmed";
     body.textContent = "Loading embed…";
     container.append(title, body);
-    requestNative<{ text?: string }>("embed/read", { target: this.target, depth: 1 })
+    requestNative<{ text?: string; path?: string }>(
+      "embed/read", { target: this.target, depth: 1 },
+    )
       .then((result) => {
         body.classList.remove("dimmed");
         body.innerHTML = renderMarkdown(result?.text ?? "");
-        wireRenderedContent(body);
+        wireRenderedContent(body, result?.path ?? "");
       })
       .catch((error) => {
         body.className = "embed-body render-error";
