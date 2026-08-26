@@ -4830,6 +4830,8 @@ static void action_reopen_closed_tab(GSimpleAction *action,
     else
       open_file_in_tab_async(self, closed->file, page, closed->page_number,
                              FALSE, TRUE, 0);
+  } else if (closed->empty) {
+    adw_tab_page_set_title(page, "New Tab");
   }
   closed_tab_free(closed);
 }
