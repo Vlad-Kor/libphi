@@ -102,6 +102,22 @@ function isExternal(target: string): boolean {
   return /^(?:https?|mailto|obsidian):/i.test(target);
 }
 
+const FALLBACK_BLOCK_IMAGE_HEIGHT = 360;
+
+function targetIsImage(target: string): boolean {
+  return /\.(?:png|jpe?g|gif|webp|svg|avif)(?:$|[|?#])/i.test(target);
+}
+
+function estimatedBlockImageHeight(...sources: string[]): number {
+  for (const source of sources) {
+    const size = source.match(/\|(\d+)(?:x(\d+))?(?:$|[?#])/);
+    if (!size) continue;
+    if (size[2]) return Math.max(40, Math.min(900, Number(size[2])));
+    return Math.max(80, Math.min(600, Number(size[1]) * 0.6));
+  }
+  return FALLBACK_BLOCK_IMAGE_HEIGHT;
+}
+
 export class HiddenWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement("span");
@@ -148,6 +164,8 @@ export class MathWidget extends WidgetType {
       other.from === this.from && other.mathRevision === this.mathRevision &&
       other.editing === this.editing;
   }
+
+  get estimatedHeight(): number { return this.display ? 64 : -1; }
 
   toDOM(view: EditorView): HTMLElement {
     const element = document.createElement(this.display ? "div" : "span");
@@ -276,6 +294,12 @@ export class LinkWidget extends WidgetType {
       other.embed === this.embed && other.block === this.block;
   }
 
+  get estimatedHeight(): number {
+    return this.embed && this.block && targetIsImage(this.target)
+      ? estimatedBlockImageHeight(this.target)
+      : -1;
+  }
+
   toDOM(view: EditorView): HTMLElement {
     if (this.embed) return this.embedDOM(view);
     const link = document.createElement("a");
@@ -396,6 +420,12 @@ export class MarkdownLinkWidget extends WidgetType {
     return other.target === this.target && other.label === this.label &&
       other.from === this.from && other.image === this.image &&
       other.to === this.to && other.block === this.block;
+  }
+
+  get estimatedHeight(): number {
+    return this.image && this.block
+      ? estimatedBlockImageHeight(this.label, this.target)
+      : -1;
   }
 
   toDOM(view: EditorView): HTMLElement {

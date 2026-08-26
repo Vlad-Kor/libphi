@@ -15,6 +15,7 @@ import {
   markdownClipboardHtml,
 } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
+import { installKineticScroll } from "./kinetic-scroll";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
@@ -90,6 +91,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       parent,
       state: this.createState(""),
     });
+    installKineticScroll(this.view.scrollDOM);
   }
 
   private createState(text: string): EditorState {

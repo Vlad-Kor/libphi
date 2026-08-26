@@ -10,7 +10,13 @@ import { runEditingCommand } from "../src/commands";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
-import { resizeImageMarkdown, TaskWidget } from "../src/widgets/preview";
+import {
+  LinkWidget,
+  MarkdownLinkWidget,
+  MathWidget,
+  resizeImageMarkdown,
+  TaskWidget,
+} from "../src/widgets/preview";
 
 const views: EditorView[] = [];
 afterEach(() => {
@@ -74,6 +80,18 @@ describe("CodeMirror document transactions", () => {
       .toBe("![Diagram|275](<images/my diagram.png>)");
     expect(resizeImageMarkdown("![Diagram|200](image.png)", 20))
       .toBe("![Diagram|40](image.png)");
+  });
+
+  it("reserves realistic heights for unmounted block media", () => {
+    expect(new LinkWidget("diagram.png", "diagram.png", 0, 10, true, true)
+      .estimatedHeight).toBe(360);
+    expect(new LinkWidget("diagram.png|400", "diagram.png", 0, 10, true, true)
+      .estimatedHeight).toBe(240);
+    expect(new MarkdownLinkWidget("diagram.png", "Diagram|300x180", 0, true, 10, true)
+      .estimatedHeight).toBe(180);
+    expect(new MarkdownLinkWidget("diagram.png", "Diagram", 0, true, 10, false)
+      .estimatedHeight).toBe(-1);
+    expect(new MathWidget("x", true, 0).estimatedHeight).toBe(64);
   });
 
   it("round-trips untouched CRLF and Unicode byte-for-byte", () => {
