@@ -9,6 +9,7 @@
  */
 
 #include "pdfv-window.h"
+#include "document-history.h"
 #include "pdfv-document-view.h"
 #include "pdfv-document-properties.h"
 #include "pdfv-page-selector.h"
@@ -166,6 +167,7 @@ struct _PdfvWindow {
 
   /* Global preferences, mirrored into every window/editor. */
   PdfvSettings *settings;
+  PdfvDocumentHistory *document_history;
   guint settings_update_timeout_id;
 
   /* Outline data for current document */
@@ -178,15 +180,18 @@ static GtkWidget *create_tab_content(PdfvWindow *self);
 static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                                    AdwTabPage *page, gint target_page,
                                    gboolean preview, gboolean fit_width,
-                                   guint generation);
+                                   guint generation,
+                                   gboolean restore_position);
 static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
                                            gboolean fit_width);
 static void open_file_in_new_window_at_page(PdfvWindow *self, GFile *file,
-                                            gint target_page);
+                                            gint target_page,
+                                            gboolean restore_position);
 static AdwTabPage *workspace_open_file(PdfvWindow *self, GFile *file,
                                        gboolean persistent);
 static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
-                                       AdwTabPage *page);
+                                       AdwTabPage *page,
+                                       gboolean restore_position);
 static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file);
 static void workspace_search_close(PdfvWindow *self, gboolean commit);
 static void workspace_search_schedule(PdfvWindow *self, guint delay_ms);
@@ -265,6 +270,66 @@ static ClosedTab *closed_tab_snapshot(AdwTabPage *page) {
   if (file && view && pdfv_document_view_get_document(view))
     tab->page_number = pdfv_document_view_get_current_page(view);
   return tab;
+}
+
+static void remember_tab_position_ordered(PdfvWindow *self,
+                                          AdwTabPage *page,
+                                          guint64 update_order) {
+  if (!page || !self->document_history ||
+      !pdfv_document_history_get_enabled(self->document_history) ||
+      update_order == 0 ||
+      g_object_get_data(G_OBJECT(page), "skip-document-position-history"))
+    return;
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  if (!GTK_IS_STACK(stack))
+    return;
+  GFile *file = g_object_get_data(G_OBJECT(stack), "document-file");
+  if (!file)
+    return;
+
+  PdfvMarkdownEditor *editor =
+      g_object_get_data(G_OBJECT(stack), "markdown-editor");
+  if (editor) {
+    /* During a fast same-vault replacement the stack already names the
+     * incoming file while the reusable editor still shows the outgoing one. */
+    file = pdfv_markdown_editor_get_file(editor);
+    if (!file)
+      return;
+    PdfvDocumentPosition position = {
+        .kind = PDFV_DOCUMENT_POSITION_MARKDOWN,
+    };
+    if (!pdfv_markdown_editor_get_scroll_state(
+            editor, &position.anchor, &position.offset,
+            &position.horizontal))
+      return;
+    pdfv_document_history_remember_ordered(
+        self->document_history, file, &position, update_order);
+    return;
+  }
+
+  PdfvDocumentView *view =
+      g_object_get_data(G_OBJECT(stack), "document-view");
+  if (!view || !pdfv_document_view_get_document(view) ||
+      g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(stack)),
+                "document") != 0)
+    return;
+  PdfvDocumentPosition position = {
+      .kind = PDFV_DOCUMENT_POSITION_PDF,
+  };
+  gint page_number = 0;
+  pdfv_document_view_get_scroll_state(
+      view, &page_number, &position.offset, &position.horizontal);
+  position.anchor = page_number;
+  pdfv_document_history_remember_ordered(
+      self->document_history, file, &position, update_order);
+}
+
+static void remember_tab_position(PdfvWindow *self, AdwTabPage *page) {
+  remember_tab_position_ordered(
+      self, page,
+      self->document_history
+          ? pdfv_document_history_reserve_update(self->document_history)
+          : 0);
 }
 
 static void closed_tab_push(PdfvWindow *self, ClosedTab *tab) {
@@ -706,6 +771,8 @@ static void on_markdown_dirty_changed(PdfvMarkdownEditor *editor,
   if (dirty && page == self->workspace_browse_tab)
     self->workspace_browse_tab = NULL;
   if (dirty && page == self->workspace_preview_tab) {
+    g_object_set_data(G_OBJECT(page), "skip-document-position-history",
+                      NULL);
     self->workspace_preview_tab = NULL;
     g_clear_object(&self->workspace_preview_file);
     workspace_preview_cancel_load(self);
@@ -1585,6 +1652,9 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
     self->workspace_preview_tab = add_related_tab(
         self, content, self->workspace_return_tab);
     adw_tab_page_set_title(self->workspace_preview_tab, "Loading…");
+    g_object_set_data(G_OBJECT(self->workspace_preview_tab),
+                      "skip-document-position-history",
+                      GINT_TO_POINTER(1));
   }
   self->workspace_preview_page = match->page;
 
@@ -1592,7 +1662,7 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
     workspace_preview_cancel_load(self);
     g_set_object(&self->workspace_preview_file, group->file);
     open_markdown_in_tab_async(self, group->file,
-                               self->workspace_preview_tab);
+                               self->workspace_preview_tab, FALSE);
     adw_tab_view_set_selected_page(self->tab_view,
                                    self->workspace_preview_tab);
     return;
@@ -1651,7 +1721,7 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
                                    self->workspace_return_tab);
   open_file_in_tab_async(self, group->file, self->workspace_preview_tab,
                          match->page, TRUE, TRUE,
-                         self->workspace_preview_generation);
+                         self->workspace_preview_generation, FALSE);
 }
 
 static gboolean workspace_preview_delay_elapsed(gpointer user_data) {
@@ -2401,7 +2471,8 @@ static gboolean on_workspace_search_key(GtkEventControllerKey *controller,
       if (state & GDK_CONTROL_MASK) {
         PdfvWorkspaceResultGroup *group = workspace_selected_group(self);
         PdfvWorkspaceMatch *match = workspace_selected_match(self);
-        open_file_in_new_window_at_page(self, group->file, match->page);
+        open_file_in_new_window_at_page(self, group->file, match->page,
+                                        FALSE);
         workspace_search_close(self, FALSE);
       } else {
         workspace_search_close(self, TRUE);
@@ -2508,6 +2579,8 @@ static void workspace_search_close(PdfvWindow *self, gboolean commit) {
     g_cancellable_cancel(self->workspace_search_cancellable);
 
   if (commit && self->workspace_preview_tab) {
+    g_object_set_data(G_OBJECT(self->workspace_preview_tab),
+                      "skip-document-position-history", NULL);
     adw_tab_view_set_selected_page(self->tab_view,
                                    self->workspace_preview_tab);
     self->workspace_preview_tab = NULL;
@@ -2613,6 +2686,8 @@ static gboolean prepare_tab_for_open(PdfvWindow *self, AdwTabPage *page) {
   if (editor && pdfv_markdown_editor_get_dirty(editor))
     return FALSE;
 
+  remember_tab_position(self, page);
+
   GCancellable *opening =
       g_object_get_data(G_OBJECT(stack), "open-cancellable");
   if (opening)
@@ -2642,10 +2717,14 @@ typedef struct {
   gboolean preview;
   gboolean fit_width;
   guint generation;
+  gboolean has_position;
+  PdfvDocumentPosition position;
 } OpenRequest;
 
 typedef struct {
   guint settled_frames;
+  gboolean has_position;
+  PdfvDocumentPosition position;
 } FitWidthRequest;
 
 typedef struct {
@@ -2668,8 +2747,13 @@ static gboolean fit_width_after_allocate(GtkWidget *widget,
     return G_SOURCE_CONTINUE;
 
   PdfvDocumentView *view = PDFV_DOCUMENT_VIEW(widget);
-  if (pdfv_document_view_get_document(view))
+  if (pdfv_document_view_get_document(view)) {
     pdfv_document_view_zoom_fit_width(view);
+    if (request->has_position)
+      pdfv_document_view_restore_scroll_state(
+          view, (gint)request->position.anchor, request->position.offset,
+          request->position.horizontal);
+  }
   return G_SOURCE_REMOVE;
 }
 
@@ -2721,8 +2805,14 @@ static gboolean finish_document_load_idle(gpointer user_data) {
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
     if (request->fit_width) {
       FitWidthRequest *fit_request = g_new0(FitWidthRequest, 1);
+      fit_request->has_position = request->has_position;
+      fit_request->position = request->position;
       gtk_widget_add_tick_callback(GTK_WIDGET(view), fit_width_after_allocate,
                                    fit_request, g_free);
+    } else if (request->has_position) {
+      pdfv_document_view_restore_scroll_state(
+          view, (gint)request->position.anchor, request->position.offset,
+          request->position.horizontal);
     }
     g_object_set_data_full(G_OBJECT(stack), "document-file",
                            g_object_ref(request->file), g_object_unref);
@@ -2786,7 +2876,8 @@ static void on_document_loaded(GObject *source, GAsyncResult *result,
 static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                                    AdwTabPage *page, gint target_page,
                                    gboolean preview, gboolean fit_width,
-                                   guint generation) {
+                                   guint generation,
+                                   gboolean restore_position) {
   GtkWidget *stack = adw_tab_page_get_child(page);
   if (!prepare_tab_for_open(self, page))
     return;
@@ -2799,14 +2890,17 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
   gchar *basename = g_file_get_basename(file);
   adw_tab_page_set_title(page, basename);
   g_free(basename);
-  g_object_set_data(G_OBJECT(stack), "open-target-page",
-                    GINT_TO_POINTER(target_page + 1));
 
   OpenRequest *request = g_new0(OpenRequest, 1);
   request->window = g_object_ref(self);
   request->page = g_object_ref(page);
   request->file = g_object_ref(file);
-  request->target_page = target_page;
+  request->has_position = restore_position &&
+      pdfv_document_history_lookup(
+          self->document_history, file, PDFV_DOCUMENT_POSITION_PDF,
+          &request->position);
+  request->target_page = request->has_position
+      ? (gint)request->position.anchor : target_page;
   request->preview = preview;
   request->fit_width = fit_width;
   request->generation = generation;
@@ -2815,8 +2909,11 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
               : g_cancellable_new();
   g_object_set_data_full(G_OBJECT(stack), "open-cancellable",
                          g_object_ref(request->cancellable), g_object_unref);
-  pdfv_workspace_load_document_async(file, target_page, request->cancellable,
-                                     on_document_loaded, request);
+  g_object_set_data(G_OBJECT(stack), "open-target-page",
+                    GINT_TO_POINTER(request->target_page + 1));
+  pdfv_workspace_load_document_async(
+      file, request->target_page, request->cancellable, on_document_loaded,
+      request);
 }
 
 typedef struct {
@@ -2921,8 +3018,11 @@ static GFile *markdown_vault_root_for_file(PdfvWindow *self, GFile *file) {
 }
 
 static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
-                                       AdwTabPage *page) {
+                                       AdwTabPage *page,
+                                       gboolean restore_position) {
   GtkWidget *stack = adw_tab_page_get_child(page);
+  gchar *fragment = g_strdup(g_object_get_data(
+      G_OBJECT(file), "markdown-link-target"));
   GFile *root = markdown_vault_root_for_file(self, file);
   PdfvMarkdownEditor *editor =
       g_object_get_data(G_OBJECT(stack), "markdown-editor");
@@ -2932,6 +3032,7 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
       self->markdown_editor_spare_root &&
       g_file_equal(self->markdown_editor_spare_root, root);
   if (reuse) {
+    remember_tab_position(self, page);
     GCancellable *opening =
         g_object_get_data(G_OBJECT(stack), "open-cancellable");
     if (opening)
@@ -2939,6 +3040,7 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
     g_object_set_data(G_OBJECT(stack), "document-file", NULL);
   } else if (!prepare_tab_for_open(self, page)) {
+    g_free(fragment);
     g_object_unref(root);
     return;
   }
@@ -2969,6 +3071,16 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
   }
   g_object_unref(root);
   apply_preferences_to_editor(self, editor);
+  PdfvDocumentPosition position = {0};
+  if (restore_position && !fragment &&
+      pdfv_document_history_lookup(
+          self->document_history, file, PDFV_DOCUMENT_POSITION_MARKDOWN,
+          &position)) {
+    pdfv_markdown_editor_set_initial_scroll_state(
+        editor, position.anchor, position.offset, position.horizontal);
+  } else {
+    pdfv_markdown_editor_clear_initial_scroll_state(editor);
+  }
 
   MarkdownOpenRequest *request = g_new0(MarkdownOpenRequest, 1);
   request->window = g_object_ref(self);
@@ -2976,8 +3088,7 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
   request->file = g_object_ref(file);
   request->editor = g_object_ref(editor);
   request->cancellable = g_cancellable_new();
-  request->fragment = g_strdup(g_object_get_data(
-      G_OBJECT(file), "markdown-link-target"));
+  request->fragment = fragment;
   g_object_set_data_full(G_OBJECT(stack), "open-cancellable",
                          g_object_ref(request->cancellable), g_object_unref);
   pdfv_markdown_editor_open_file_async(editor, file, request->cancellable,
@@ -3078,6 +3189,7 @@ typedef struct {
   PdfvMarkdownEditor *editor;
   AdwTabPage *return_page;
   ClosedTab *closed_tab;
+  guint64 position_update_order;
   gboolean restore_return_page;
 } MarkdownCloseRequest;
 
@@ -3103,6 +3215,8 @@ static void finish_markdown_close(MarkdownCloseRequest *request,
   if (!close_page) {
     self->closing_window = FALSE;
   } else {
+    remember_tab_position_ordered(
+        self, request->page, request->position_update_order);
     g_signal_handlers_disconnect_by_data(request->editor, self);
     if (self->current_editor == request->editor)
       self->current_editor = NULL;
@@ -3215,6 +3329,8 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
     request->return_page = g_steal_pointer(&return_page);
     request->restore_return_page = restore_return_page;
     request->closed_tab = remember ? closed_tab_snapshot(page) : NULL;
+    request->position_update_order =
+        pdfv_document_history_reserve_update(self->document_history);
     if (pdfv_markdown_editor_get_dirty(editor)) {
       pdfv_markdown_editor_save_async(editor, NULL, on_close_save_done,
                                       request);
@@ -3232,6 +3348,7 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
 
   if (remember)
     closed_tab_push(self, closed_tab_snapshot(page));
+  remember_tab_position(self, page);
 
   adw_tab_view_close_page_finish(tab_view, page, TRUE);
   restore_tab_after_close(self, g_steal_pointer(&return_page));
@@ -4068,10 +4185,11 @@ static void workspace_move_execute(WorkspaceMoveRequest *request) {
     if (adw_tab_view_get_page_position(tab->window->tab_view, tab->page) < 0)
       continue;
     if (tab->editor)
-      open_markdown_in_tab_async(tab->window, tab->new_file, tab->page);
+      open_markdown_in_tab_async(tab->window, tab->new_file, tab->page,
+                                 FALSE);
     else
       open_file_in_tab_async(tab->window, tab->new_file, tab->page,
-                             tab->page_number, FALSE, FALSE, 0);
+                             tab->page_number, FALSE, FALSE, 0, FALSE);
   }
 
   gchar *basename = g_file_get_basename(destination);
@@ -4510,13 +4628,14 @@ static void open_file_in_new_tab(PdfvWindow *self, GFile *file) {
   AdwTabPage *page = add_tab_after_selected(self, content);
   adw_tab_view_set_selected_page(self->tab_view, page);
   if (file_is_markdown(file))
-    open_markdown_in_tab_async(self, file, page);
+    open_markdown_in_tab_async(self, file, page, TRUE);
   else
-    open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0);
+    open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0, TRUE);
 }
 
 static void open_file_in_new_window_at_page(PdfvWindow *self, GFile *file,
-                                            gint target_page) {
+                                            gint target_page,
+                                            gboolean restore_position) {
   GtkApplication *application = gtk_window_get_application(GTK_WINDOW(self));
   if (!application)
     return;
@@ -4532,15 +4651,15 @@ static void open_file_in_new_window_at_page(PdfvWindow *self, GFile *file,
     page = add_tab_after_selected(window, content);
   }
   if (file_is_markdown(file))
-    open_markdown_in_tab_async(window, file, page);
+    open_markdown_in_tab_async(window, file, page, restore_position);
   else
     open_file_in_tab_async(window, file, page, MAX(0, target_page), FALSE,
-                           TRUE, 0);
+                           TRUE, 0, restore_position);
   gtk_window_present(GTK_WINDOW(window));
 }
 
 static void open_file_in_new_window(PdfvWindow *self, GFile *file) {
-  open_file_in_new_window_at_page(self, file, 0);
+  open_file_in_new_window_at_page(self, file, 0, TRUE);
 }
 
 static void on_default_file_launched(GObject *source, GAsyncResult *result,
@@ -4826,10 +4945,10 @@ static void action_reopen_closed_tab(GSimpleAction *action,
   adw_tab_view_set_selected_page(self->tab_view, page);
   if (closed->file) {
     if (file_is_markdown(closed->file))
-      open_markdown_in_tab_async(self, closed->file, page);
+      open_markdown_in_tab_async(self, closed->file, page, TRUE);
     else
       open_file_in_tab_async(self, closed->file, page, closed->page_number,
-                             FALSE, TRUE, 0);
+                             FALSE, TRUE, 0, TRUE);
   } else if (closed->empty) {
     adw_tab_page_set_title(page, "New Tab");
   }
@@ -4906,6 +5025,15 @@ static void on_preferences_remote_changed(AdwSwitchRow *row,
   pdfv_settings_set_allow_remote_images(
       self->settings, adw_switch_row_get_active(row));
   schedule_preferences_update(self, 80);
+}
+
+static void on_preferences_document_positions_changed(
+    AdwSwitchRow *row, GParamSpec *pspec, PdfvWindow *self) {
+  (void)pspec;
+  gboolean enabled = adw_switch_row_get_active(row);
+  pdfv_settings_set_remember_document_positions(self->settings, enabled);
+  pdfv_document_history_set_enabled(self->document_history, enabled);
+  propagate_markdown_preferences(self);
 }
 
 static void on_preferences_latex_conceal_changed(AdwSwitchRow *row,
@@ -5286,6 +5414,25 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   adw_preferences_group_add(appearance, GTK_WIDGET(remote));
   g_signal_connect_object(remote, "notify::active",
                           G_CALLBACK(on_preferences_remote_changed), self, 0);
+
+  AdwPreferencesGroup *history = ADW_PREFERENCES_GROUP(
+      adw_preferences_group_new());
+  adw_preferences_group_set_title(history, "Document history");
+  adw_preferences_page_add(general_page, history);
+
+  AdwSwitchRow *positions = ADW_SWITCH_ROW(adw_switch_row_new());
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(positions), "Remember document positions");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(positions),
+      "Restore positions when reopening; turning this off clears the history");
+  adw_switch_row_set_active(
+      positions,
+      pdfv_settings_get_remember_document_positions(self->settings));
+  adw_preferences_group_add(history, GTK_WIDGET(positions));
+  g_signal_connect_object(
+      positions, "notify::active",
+      G_CALLBACK(on_preferences_document_positions_changed), self, 0);
 
   AdwPreferencesGroup *attachments = ADW_PREFERENCES_GROUP(
       adw_preferences_group_new());
@@ -6276,6 +6423,15 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->view_menu_section);
   g_clear_object(&self->open_workspace_menu);
   g_queue_clear_full(&self->closed_tabs, (GDestroyNotify)closed_tab_free);
+  if (self->document_history) {
+    GError *error = NULL;
+    if (!pdfv_document_history_flush(self->document_history, &error)) {
+      g_warning("Could not save document positions: %s",
+                error ? error->message : "unknown error");
+      g_clear_error(&error);
+    }
+  }
+  g_clear_object(&self->document_history);
   g_clear_pointer(&self->settings, pdfv_settings_free);
 
   if (self->current_outline) {
@@ -6293,6 +6449,10 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->settings = pdfv_settings_new();
+  self->document_history = pdfv_document_history_get_default();
+  pdfv_document_history_set_enabled(
+      self->document_history,
+      pdfv_settings_get_remember_document_positions(self->settings));
   self->open_workspace_menu = g_menu_new();
   self->workspace_result_headers = g_ptr_array_new();
   self->workspace_expanded_paths =
@@ -7001,9 +7161,9 @@ static AdwTabPage *workspace_open_file(PdfvWindow *self, GFile *file,
     self->workspace_browse_tab = page;
   adw_tab_view_set_selected_page(self->tab_view, page);
   if (file_is_markdown(file))
-    open_markdown_in_tab_async(self, file, page);
+    open_markdown_in_tab_async(self, file, page, TRUE);
   else
-    open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0);
+    open_file_in_tab_async(self, file, page, 0, FALSE, TRUE, 0, TRUE);
   return page;
 }
 
@@ -7030,9 +7190,9 @@ static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
     adw_tab_view_set_selected_page(self->tab_view, page);
   }
   if (file_is_markdown(file))
-    open_markdown_in_tab_async(self, file, page);
+    open_markdown_in_tab_async(self, file, page, TRUE);
   else
-    open_file_in_tab_async(self, file, page, 0, FALSE, fit_width, 0);
+    open_file_in_tab_async(self, file, page, 0, FALSE, fit_width, 0, TRUE);
 }
 
 void pdfv_window_open_file(PdfvWindow *self, GFile *file) {

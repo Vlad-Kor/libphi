@@ -76,6 +76,15 @@ test_settings = executable('test-settings',
 
 test('settings-test', test_settings)
 
+test_document_history = executable('test-document-history',
+	'test-document-history.c',
+	'../src/document-history.c',
+	include_directories: [inc, include_directories('../src')],
+	dependencies: [gio_dep],
+)
+
+test('document-history-test', test_document_history)
+
 test_document_view = executable('test-document-view',
 	'test-document-view.c',
 	'../src/pdfv-document-view.c',

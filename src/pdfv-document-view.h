@@ -27,6 +27,15 @@ PhiDocument* pdfv_document_view_get_document(PdfvDocumentView* self);
 void pdfv_document_view_go_to_page(PdfvDocumentView* self, gint page);
 gint pdfv_document_view_get_current_page(PdfvDocumentView* self);
 
+/* A zoom-independent position suitable for persistent document history. */
+void pdfv_document_view_get_scroll_state(PdfvDocumentView* self,
+                                         gint* page,
+                                         gdouble* page_fraction,
+                                         gdouble* horizontal_center);
+void pdfv_document_view_restore_scroll_state(
+    PdfvDocumentView* self, gint page, gdouble page_fraction,
+    gdouble horizontal_center);
+
 void pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom);
 gdouble pdfv_document_view_get_zoom(PdfvDocumentView* self);
 void pdfv_document_view_zoom_in(PdfvDocumentView* self);

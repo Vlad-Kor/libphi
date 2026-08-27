@@ -24,6 +24,13 @@ export interface OpenDocument {
   revision: number;
   lineEnding: "LF" | "CRLF";
   preamble?: string;
+  scrollState?: DocumentScrollState;
+}
+
+export interface DocumentScrollState {
+  anchor: number;
+  offset: number;
+  top: number;
 }
 
 export interface EditorTheme {
@@ -53,6 +60,7 @@ export interface DocumentSnapshot {
   baseRevision: number;
   editorRevision: number;
   text: string;
+  scrollState: DocumentScrollState;
 }
 
 export interface NativeMarkdownEditor {

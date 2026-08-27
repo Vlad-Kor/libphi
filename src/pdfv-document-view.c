@@ -2646,6 +2646,46 @@ pdfv_document_view_get_current_page(PdfvDocumentView* self)
 }
 
 void
+pdfv_document_view_get_scroll_state(PdfvDocumentView* self,
+                                    gint* page,
+                                    gdouble* page_fraction,
+                                    gdouble* horizontal_center)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    VerticalAnchor anchor = vertical_anchor_at(self, self->scroll_y);
+    if (page)
+        *page = anchor.page;
+    if (page_fraction)
+        *page_fraction = CLAMP(anchor.page_fraction, 0.0, 1.0);
+    if (horizontal_center)
+        *horizontal_center =
+            self->zoom > 0 ? self->scroll_x / self->zoom : 0;
+}
+
+void
+pdfv_document_view_restore_scroll_state(PdfvDocumentView* self,
+                                        gint page,
+                                        gdouble page_fraction,
+                                        gdouble horizontal_center)
+{
+    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    if (!self->document || self->page_offsets->len == 0)
+        return;
+
+    gint n_pages = phi_document_get_n_pages(self->document);
+    page = CLAMP(page, 0, n_pages - 1);
+    pdfv_document_view_go_to_page(self, page);
+    VerticalAnchor anchor = {
+        .page = page,
+        .page_fraction = CLAMP(page_fraction, 0.0, 1.0),
+    };
+    self->scroll_y = vertical_anchor_position(self, &anchor);
+    self->scroll_x = horizontal_center * self->zoom;
+    update_adjustments(self);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void
 pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));

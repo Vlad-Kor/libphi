@@ -22,7 +22,7 @@ import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { applyTheme, defaultSettings, updateRuntimeSettings } from "./settings";
-import type { DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
+import type { DocumentScrollState, DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
@@ -82,6 +82,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private lineEnding: "LF" | "CRLF" = "LF";
   private settings: Required<EditorSettings> = { ...defaultSettings };
   private snapshotTimer = 0;
+  private scrollTimer = 0;
   private documentClasses: string[] = [];
   private darkTheme = document.documentElement.dataset.theme === "dark";
 
@@ -92,6 +93,16 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       state: this.createState(""),
     });
     installKineticScroll(this.view.scrollDOM);
+    this.view.scrollDOM.addEventListener("scroll", () => {
+      window.clearTimeout(this.scrollTimer);
+      if (!this.documentId) return;
+      this.scrollTimer = window.setTimeout(() => {
+        sendNative("document/scroll", {
+          documentId: this.documentId,
+          scrollState: this.scrollState(),
+        });
+      }, 160);
+    }, { passive: true });
   }
 
   private createState(text: string): EditorState {
@@ -284,7 +295,43 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       baseRevision: this.baseRevision,
       editorRevision: this.editorRevision,
       text: this.getDocument(),
+      scrollState: this.scrollState(),
     };
+  }
+
+  private scrollState(): DocumentScrollState {
+    const top = Math.max(0, this.view.scrollDOM.scrollTop);
+    const block = this.view.lineBlockAtHeight(top);
+    return {
+      anchor: block.from,
+      offset: Math.max(0, top - block.top),
+      top,
+    };
+  }
+
+  private restoreScrollState(state: DocumentScrollState): void {
+    const rawAnchor = Number(state.anchor);
+    const rawOffset = Number(state.offset);
+    const rawTop = Number(state.top);
+    const anchor = Number.isFinite(rawAnchor)
+      ? Math.max(0, Math.min(this.view.state.doc.length, rawAnchor)) : 0;
+    const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+    const fallback = Number.isFinite(rawTop) ? Math.max(0, rawTop) : 0;
+    const restore = () => {
+      const block = this.view.lineBlockAt(anchor);
+      const top = Number.isFinite(block.top) ? block.top + offset : fallback;
+      this.view.scrollDOM.scrollTop = Math.max(0, top);
+      sendNative("document/scroll", {
+        documentId: this.documentId,
+        scrollState: this.scrollState(),
+      });
+    };
+    /* Live-preview decorations finish their first measurement just after the
+     * state is installed. Re-apply the source anchor once after that pass. */
+    window.requestAnimationFrame(() => {
+      restore();
+      window.requestAnimationFrame(restore);
+    });
   }
 
   private sendSnapshot(type: string, id?: string): DocumentSnapshot {
@@ -420,6 +467,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
 
   openDocument(document: OpenDocument): void {
     window.clearTimeout(this.snapshotTimer);
+    window.clearTimeout(this.scrollTimer);
     this.documentId = document.documentId;
     this.documentPath = document.path;
     this.baseRevision = document.revision;
@@ -432,7 +480,16 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
     this.view.setState(this.createState(document.text));
     this.view.focus();
-    sendNative("document/state", { documentId: this.documentId, dirty: false, editorRevision: 0 });
+    if (document.scrollState)
+      this.restoreScrollState(document.scrollState);
+    else
+      this.view.scrollDOM.scrollTop = 0;
+    sendNative("document/state", {
+      documentId: this.documentId,
+      dirty: false,
+      editorRevision: 0,
+      scrollState: this.scrollState(),
+    });
   }
 
   updateSettings(settings: EditorSettings): void {
@@ -495,6 +552,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       sourceMode: this.settings.sourceMode,
       editorRevision: this.editorRevision,
       selection: { anchor: selection.anchor, head: selection.head },
+      scrollState: this.scrollState(),
       scrollTop: this.view.scrollDOM.scrollTop,
     };
   }

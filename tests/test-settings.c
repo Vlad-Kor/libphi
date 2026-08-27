@@ -18,6 +18,8 @@ static void test_workspace_attachment_policy(void) {
   g_assert_true(pdfv_settings_get_readable_line_width(settings));
   g_assert_false(pdfv_settings_get_latex_conceal(settings));
   g_assert_false(pdfv_settings_get_pdf_inverted(settings));
+  g_assert_false(
+      pdfv_settings_get_remember_document_positions(settings));
   pdfv_settings_set_workspace_attachment_policy(
       settings, workspace_a, TRUE, folder_uri);
   pdfv_settings_set_workspace_attachment_policy(
@@ -32,6 +34,7 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_readable_line_width(settings, FALSE);
   pdfv_settings_set_latex_conceal(settings, TRUE);
   pdfv_settings_set_pdf_inverted(settings, TRUE);
+  pdfv_settings_set_remember_document_positions(settings, TRUE);
   pdfv_settings_set_latex_snippets(settings, "[{trigger:'x'}]");
   pdfv_settings_set_latex_snippet_variables(settings,
                                              "{GREEK:'alpha'}");
@@ -53,6 +56,8 @@ static void test_workspace_attachment_policy(void) {
   g_assert_false(pdfv_settings_get_readable_line_width(settings));
   g_assert_true(pdfv_settings_get_latex_conceal(settings));
   g_assert_true(pdfv_settings_get_pdf_inverted(settings));
+  g_assert_true(
+      pdfv_settings_get_remember_document_positions(settings));
   g_assert_cmpstr(pdfv_settings_get_latex_snippets(settings), ==,
                   "[{trigger:'x'}]");
   g_assert_cmpstr(pdfv_settings_get_latex_snippet_variables(settings), ==,

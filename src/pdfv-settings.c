@@ -8,6 +8,7 @@
 #include <errno.h>
 
 #define SETTINGS_GROUP "Markdown"
+#define GENERAL_GROUP "General"
 
 struct _PdfvSettings {
   gdouble markdown_font_scale;
@@ -15,6 +16,7 @@ struct _PdfvSettings {
   gboolean allow_remote_images;
   gboolean latex_conceal;
   gboolean pdf_inverted;
+  gboolean remember_document_positions;
   gchar *latex_snippets;
   gchar *latex_snippet_variables;
   GKeyFile *file;
@@ -71,6 +73,11 @@ PdfvSettings *pdfv_settings_new(void) {
     if (!error)
       self->pdf_inverted = inverted;
     g_clear_error(&error);
+    gboolean remember = g_key_file_get_boolean(
+        self->file, GENERAL_GROUP, "remember-document-positions", &error);
+    if (!error)
+      self->remember_document_positions = remember;
+    g_clear_error(&error);
     gchar *snippets = g_key_file_get_string(self->file, SETTINGS_GROUP,
                                              "latex-snippets", NULL);
     if (snippets) {
@@ -109,6 +116,9 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
                          self->latex_conceal);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "pdf-inverted",
                          self->pdf_inverted);
+  g_key_file_set_boolean(self->file, GENERAL_GROUP,
+                         "remember-document-positions",
+                         self->remember_document_positions);
   /* This used to control two incompatible fullscreen behaviors. Fullscreen
    * and presentation are explicit actions now, so discard the obsolete key
    * when rewriting an older settings file. */
@@ -188,6 +198,18 @@ void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
                                     gboolean inverted) {
   g_return_if_fail(self != NULL);
   self->pdf_inverted = inverted;
+}
+
+gboolean pdfv_settings_get_remember_document_positions(
+    PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, FALSE);
+  return self->remember_document_positions;
+}
+
+void pdfv_settings_set_remember_document_positions(
+    PdfvSettings *self, gboolean enabled) {
+  g_return_if_fail(self != NULL);
+  self->remember_document_positions = enabled;
 }
 
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self) {
@@ -339,6 +361,8 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->allow_remote_images = source->allow_remote_images;
   destination->latex_conceal = source->latex_conceal;
   destination->pdf_inverted = source->pdf_inverted;
+  destination->remember_document_positions =
+      source->remember_document_positions;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   pdfv_settings_set_latex_snippet_variables(
       destination, source->latex_snippet_variables);

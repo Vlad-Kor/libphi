@@ -96,11 +96,43 @@ static void test_presentation_zoom_floor(void) {
   g_object_unref(document);
 }
 
+static void test_scroll_state_survives_zoom(void) {
+  PhiDocument *document = open_fixture();
+  PdfvDocumentView *view = pdfv_document_view_new();
+  g_object_ref_sink(view);
+  GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
+  GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
+  g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
+               NULL);
+  pdfv_document_view_set_document(view, document);
+
+  gtk_adjustment_set_value(vertical, 250);
+  gint page = -1;
+  gdouble fraction = -1;
+  gdouble center = -1;
+  pdfv_document_view_get_scroll_state(view, &page, &fraction, &center);
+  g_assert_cmpint(page, ==, 0);
+  g_assert_cmpfloat(fraction, >, 0);
+
+  pdfv_document_view_set_zoom(view, 2.0);
+  pdfv_document_view_go_to_page(view, 0);
+  pdfv_document_view_restore_scroll_state(view, page, fraction, center);
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 500,
+                                 0.01);
+
+  g_object_unref(horizontal);
+  g_object_unref(vertical);
+  g_object_unref(view);
+  g_object_unref(document);
+}
+
 int main(int argc, char **argv) {
   gtk_test_init(&argc, &argv, NULL);
   g_test_add_func("/document-view/internal-link-history",
                   test_internal_link_history);
   g_test_add_func("/document-view/presentation-zoom-floor",
                   test_presentation_zoom_floor);
+  g_test_add_func("/document-view/scroll-state-survives-zoom",
+                  test_scroll_state_survives_zoom);
   return g_test_run();
 }

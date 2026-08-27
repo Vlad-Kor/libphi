@@ -30,6 +30,9 @@ void pdfv_settings_set_latex_conceal(PdfvSettings *self,
 gboolean pdfv_settings_get_pdf_inverted(PdfvSettings *self);
 void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
                                     gboolean inverted);
+gboolean pdfv_settings_get_remember_document_positions(PdfvSettings *self);
+void pdfv_settings_set_remember_document_positions(PdfvSettings *self,
+                                                   gboolean enabled);
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self);
 void pdfv_settings_set_latex_snippets(PdfvSettings *self,
                                       const gchar *snippets);

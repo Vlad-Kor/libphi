@@ -65,6 +65,12 @@ GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self);
 GFile *pdfv_markdown_editor_get_vault_root(PdfvMarkdownEditor *self);
 const gchar *pdfv_markdown_editor_get_relative_path(
     PdfvMarkdownEditor *self);
+void pdfv_markdown_editor_set_initial_scroll_state(
+    PdfvMarkdownEditor *self, gint64 anchor, gdouble offset, gdouble top);
+void pdfv_markdown_editor_clear_initial_scroll_state(
+    PdfvMarkdownEditor *self);
+gboolean pdfv_markdown_editor_get_scroll_state(
+    PdfvMarkdownEditor *self, gint64 *anchor, gdouble *offset, gdouble *top);
 GFile *pdfv_markdown_editor_resolve_new_note(PdfvMarkdownEditor *self,
                                              const gchar *target,
                                              GError **error);

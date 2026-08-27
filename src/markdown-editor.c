@@ -16,6 +16,7 @@
 #include <webkit/webkit.h>
 
 #include <string.h>
+#include <math.h>
 
 #define MAX_ATTACHMENT_BYTES (20 * 1024 * 1024)
 #define MAX_EMBED_DEPTH 4
@@ -50,6 +51,14 @@ struct _PdfvMarkdownEditor {
   gchar *etag;
   guint64 revision;
   guint64 editor_revision;
+  gboolean has_scroll_state;
+  gint64 scroll_anchor;
+  gdouble scroll_offset;
+  gdouble scroll_top;
+  gboolean has_initial_scroll_state;
+  gint64 initial_scroll_anchor;
+  gdouble initial_scroll_offset;
+  gdouble initial_scroll_top;
   gboolean ready;
   gboolean dirty;
   gboolean saving;
@@ -148,9 +157,19 @@ static void send_open_document(PdfvMarkdownEditor *self,
   json_object_set_int_member(payload, "revision", (gint64)self->revision);
   json_object_set_string_member(payload, "lineEnding",
                                 line_ending_for_text(self->current_text));
+  if (self->has_initial_scroll_state) {
+    JsonObject *scroll = json_object_new_owned();
+    json_object_set_int_member(scroll, "anchor",
+                               self->initial_scroll_anchor);
+    json_object_set_double_member(scroll, "offset",
+                                  self->initial_scroll_offset);
+    json_object_set_double_member(scroll, "top", self->initial_scroll_top);
+    json_object_set_object_member(payload, "scrollState", scroll);
+  }
   gchar *preamble = read_preamble(self);
   json_object_set_string_member(payload, "preamble", preamble);
   pdfv_markdown_editor_bridge_send(self->bridge, message_type, NULL, payload);
+  self->has_initial_scroll_state = FALSE;
   g_free(preamble);
   json_object_unref(payload);
 }
@@ -216,6 +235,25 @@ static void update_snapshot(PdfvMarkdownEditor *self, JsonObject *payload) {
   }
   self->editor_revision = (guint64)json_object_get_int_member_with_default(
       payload, "editorRevision", (gint64)self->editor_revision);
+  if (json_object_has_member(payload, "scrollState")) {
+    JsonObject *scroll = json_object_get_object_member(payload,
+                                                       "scrollState");
+    if (scroll) {
+      gint64 anchor = json_object_get_int_member_with_default(
+          scroll, "anchor", 0);
+      gdouble offset = json_object_get_double_member_with_default(
+          scroll, "offset", 0);
+      gdouble top = json_object_get_double_member_with_default(
+          scroll, "top", 0);
+      if (anchor >= 0 && isfinite(offset) && offset >= 0 &&
+          isfinite(top) && top >= 0) {
+        self->has_scroll_state = TRUE;
+        self->scroll_anchor = anchor;
+        self->scroll_offset = offset;
+        self->scroll_top = top;
+      }
+    }
+  }
 }
 
 static JsonNode *string_array_node(GPtrArray *values) {
@@ -826,7 +864,10 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     pdfv_markdown_editor_save_async(self, NULL, save_requested_done, NULL);
   } else if (g_str_equal(type, "document/flush")) {
     complete_flush(self, id, payload);
+  } else if (g_str_equal(type, "document/scroll")) {
+    update_snapshot(self, payload);
   } else if (g_str_equal(type, "document/state")) {
+    update_snapshot(self, payload);
     if (payload && json_object_get_boolean_member_with_default(
                        payload, "conflict", FALSE))
       g_signal_emit(self, editor_signals[SIGNAL_CONFLICT], 0);
@@ -1278,6 +1319,12 @@ static void open_file_loaded(GObject *source, GAsyncResult *result,
   self->etag = etag;
   self->revision++;
   self->editor_revision = 0;
+  self->has_scroll_state = self->has_initial_scroll_state;
+  if (self->has_initial_scroll_state) {
+    self->scroll_anchor = self->initial_scroll_anchor;
+    self->scroll_offset = self->initial_scroll_offset;
+    self->scroll_top = self->initial_scroll_top;
+  }
   set_dirty(self, FALSE);
   setup_monitors(self);
   send_open_document(self, "document/open");
@@ -1616,6 +1663,38 @@ gboolean pdfv_markdown_editor_get_ready(PdfvMarkdownEditor *self) {
 GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self) {
   g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
   return self->file;
+}
+
+void pdfv_markdown_editor_set_initial_scroll_state(
+    PdfvMarkdownEditor *self, gint64 anchor, gdouble offset, gdouble top) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  g_return_if_fail(anchor >= 0);
+  g_return_if_fail(isfinite(offset) && offset >= 0);
+  g_return_if_fail(isfinite(top) && top >= 0);
+  self->has_initial_scroll_state = TRUE;
+  self->initial_scroll_anchor = anchor;
+  self->initial_scroll_offset = offset;
+  self->initial_scroll_top = top;
+}
+
+void pdfv_markdown_editor_clear_initial_scroll_state(
+    PdfvMarkdownEditor *self) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  self->has_initial_scroll_state = FALSE;
+}
+
+gboolean pdfv_markdown_editor_get_scroll_state(
+    PdfvMarkdownEditor *self, gint64 *anchor, gdouble *offset, gdouble *top) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), FALSE);
+  if (!self->has_scroll_state)
+    return FALSE;
+  if (anchor)
+    *anchor = self->scroll_anchor;
+  if (offset)
+    *offset = self->scroll_offset;
+  if (top)
+    *top = self->scroll_top;
+  return TRUE;
 }
 
 GFile *pdfv_markdown_editor_get_vault_root(PdfvMarkdownEditor *self) {

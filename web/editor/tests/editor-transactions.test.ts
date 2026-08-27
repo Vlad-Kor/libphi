@@ -54,6 +54,40 @@ async function settle(): Promise<void> {
 }
 
 describe("CodeMirror document transactions", () => {
+  it("safely restores an anchor beyond a shortened document", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback) => {
+        callback(0);
+        return 1;
+      },
+    );
+
+    expect(() => editor.openDocument({
+      documentId: "shortened",
+      path: "shortened.md",
+      text: "The replacement is much shorter.",
+      revision: 2,
+      lineEnding: "LF",
+      scrollState: {
+        anchor: 500_000,
+        offset: Number.POSITIVE_INFINITY,
+        top: Number.NaN,
+      },
+    })).not.toThrow();
+    const state = editor.getState() as {
+      scrollState: { anchor: number; offset: number; top: number };
+    };
+    expect(state.scrollState.anchor)
+      .toBeLessThanOrEqual(editor.view.state.doc.length);
+    expect(Number.isFinite(state.scrollState.offset)).toBe(true);
+    expect(Number.isFinite(state.scrollState.top)).toBe(true);
+    frame.mockRestore();
+  });
+
   it("formats selections and undoes without touching unrelated text", () => {
     const view = viewFor("before hello after", 7, 12);
     expect(runEditingCommand("editor.bold", view)).toBe(true);
