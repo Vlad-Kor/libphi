@@ -970,6 +970,63 @@ describe("LaTeX Suite transactions", () => {
       .toBe("${\\displaystyle x_{b} }$${\\displaystyle  }$");
   });
 
+  it("indents a continued list after tabbing out of inline math", async () => {
+    setCustomSnippets(JSON.stringify([
+      {
+        trigger: "ml",
+        replacement: "${\\displaystyle $0 }$$1",
+        options: "tA",
+      },
+    ]));
+    const view = viewFor("- ", 2, 2, latexSuite);
+    view.dispatch({
+      changes: { from: 2, insert: "ml" },
+      selection: { anchor: 4 },
+      userEvent: "input.type",
+    });
+    await settle();
+    let cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "test" },
+      selection: { anchor: cursor + 4 },
+      userEvent: "input.type",
+    });
+    await settle();
+
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+    expect(key(view, "Enter")).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "- ${\\displaystyle test }$\n- ",
+    );
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "- ${\\displaystyle test }$\n    - ",
+    );
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+  });
+
+  it("ends remaining snippet navigation when continuing a list", () => {
+    setCustomSnippets(JSON.stringify([
+      {
+        trigger: "field",
+        replacement: "<span>$0</span>${1:tail}",
+        options: "t",
+      },
+    ]));
+    const view = viewFor("- field", 7, 7, latexSuite);
+    expect(key(view, "Tab")).toBe(true);
+    expect(key(view, "Tab")).toBe(true);
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+
+    expect(key(view, "Enter")).toBe(true);
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "- <span></span>tail\n    - ",
+    );
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+  });
+
   it("starts a manual snippet after tabbing out of a previous snippet", () => {
     setCustomSnippets(JSON.stringify([
       {

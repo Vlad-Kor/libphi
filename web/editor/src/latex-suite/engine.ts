@@ -435,6 +435,7 @@ const continueList: Command = (view) => {
     view.dispatch({
       changes: { from: line.from, to: line.from + match[0].length, insert: "" },
       selection: { anchor: line.from },
+      effects: setTabstops.of(null),
       annotations: Transaction.userEvent.of("input.type"),
     });
     return true;
@@ -447,6 +448,7 @@ const continueList: Command = (view) => {
   view.dispatch({
     changes: { from: range.head, insert: `\n${prefix}` },
     selection: { anchor: range.head + prefix.length + 1 },
+    effects: setTabstops.of(null),
     annotations: Transaction.userEvent.of("input.type"),
   });
   return true;
