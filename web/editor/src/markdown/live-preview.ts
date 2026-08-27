@@ -18,6 +18,7 @@ import {
   TaskWidget,
 } from "../widgets/preview";
 import { rawHtmlIsBlock } from "./render";
+import { pinPreviewSource, previewSourceLine } from "./source-edit";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
 const emphasis = Decoration.mark({ class: "cm-live-emphasis" });
@@ -34,6 +35,8 @@ const htmlPunctuation = Decoration.mark({ class: "cm-html-punctuation" });
 export const refreshLivePreview = StateEffect.define<null>();
 
 function active(node: MarkdownNode, state: EditorState): boolean {
+  const pinned = state.field(previewSourceLine, false);
+  if (pinned && node.from <= pinned.to && node.to >= pinned.from) return true;
   return state.selection.ranges.some((selection) => {
     if (node.kind === "task") {
       const from = Number(node.meta?.prefixFrom ?? node.from);
@@ -47,6 +50,11 @@ function active(node: MarkdownNode, state: EditorState): boolean {
     if ((node.kind === "callout" || node.kind === "code-block") &&
         selection.from === selection.to)
       return selection.from >= node.from && selection.from <= node.to;
+    if (node.kind === "embed" || node.kind === "markdown-image") {
+      return selection.from === selection.to
+        ? selectionTouches(node, selection)
+        : selection.from >= node.from && selection.to <= node.to;
+    }
     return selectionTouches(node, selection);
   });
 }
@@ -206,8 +214,8 @@ function buildDecorations(state: EditorState): DecorationSet {
           ? 0.62 * marker.length + 0.35
           : 1.1;
         const contentIndent = node.meta?.task
-          ? `calc(${indentColumns ? `${indentColumns * 0.25}em + ` : ""}18px + 0.4em)`
-          : `${Number((indentColumns * 0.25 + markerIndent).toFixed(2))}em`;
+          ? `calc(${indentColumns ? `${indentColumns * 0.375}em + ` : ""}18px + 0.4em)`
+          : `${Number((indentColumns * 0.375 + markerIndent).toFixed(2))}em`;
         builder.add(node.from, node.from, Decoration.line({
           attributes: {
             class: `cm-live-list-item${ordered ? " cm-live-ordered-list-item" : ""}`,
@@ -292,11 +300,12 @@ function buildMathTooltips(state: EditorState): readonly Tooltip[] {
   return tooltips;
 }
 
-export const livePreview = StateField.define<DecorationSet>({
+const livePreviewDecorations = StateField.define<DecorationSet>({
   create: buildDecorations,
   update(value, transaction) {
     if (transaction.docChanged || transaction.selection ||
-        transaction.effects.some((effect) => effect.is(refreshLivePreview)))
+        transaction.effects.some((effect) =>
+          effect.is(refreshLivePreview) || effect.is(pinPreviewSource)))
       return buildDecorations(transaction.state);
     return value;
   },
@@ -305,3 +314,5 @@ export const livePreview = StateField.define<DecorationSet>({
     showTooltip.computeN([field], (state) => buildMathTooltips(state)),
   ],
 });
+
+export const livePreview = [previewSourceLine, livePreviewDecorations];

@@ -1,6 +1,6 @@
-import { Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Prec, StateEffect, StateField, Transaction, type Line } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
-import { indentLess, indentMore, isolateHistory } from "@codemirror/commands";
+import { indentLess, isolateHistory } from "@codemirror/commands";
 import defaultSnippets from "./default-snippets.txt?raw";
 import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
 import { codeModeAt, mathModeAt } from "../markdown/parser";
@@ -420,6 +420,27 @@ const automaticPlugin = ViewPlugin.fromClass(class {
 const indentList: Command = (view) => adjustListIndent(view, false);
 const outdentList: Command = (view) => adjustListIndent(view, true);
 
+function selectedLines(view: EditorView): Line[] {
+  const lines = new Map<number, Line>();
+  for (const range of view.state.selection.ranges) {
+    const first = view.state.doc.lineAt(range.from).number;
+    const last = view.state.doc.lineAt(range.to).number;
+    for (let number = first; number <= last; number++)
+      lines.set(number, view.state.doc.line(number));
+  }
+  return [...lines.values()];
+}
+
+function leadingIndent(text: string): { text: string; columns: number } {
+  const leading = /^[ \t]*/.exec(text)?.[0] ?? "";
+  const columns = [...leading].reduce(
+    (total, character) => character === "\t"
+      ? total + (4 - total % 4) : total + 1,
+    0,
+  );
+  return { text: leading, columns };
+}
+
 const continueList: Command = (view) => {
   const range = view.state.selection.main;
   if (!range.empty || view.state.selection.ranges.length !== 1)
@@ -455,30 +476,29 @@ const continueList: Command = (view) => {
 };
 
 function adjustListIndent(view: EditorView, outdent: boolean): boolean {
-  const lineNumbers = new Set<number>();
-  for (const range of view.state.selection.ranges) {
-    const first = view.state.doc.lineAt(range.from).number;
-    const last = view.state.doc.lineAt(range.to).number;
-    for (let number = first; number <= last; number++) lineNumbers.add(number);
-  }
-  const lines = [...lineNumbers].map((number) => view.state.doc.line(number));
+  const lines = selectedLines(view);
   if (!lines.length || !lines.every((line) => /^\s*(?:[-+*]|\d+[.)])\s+/.test(line.text)))
     return false;
   const changes: { from: number; to?: number; insert: string }[] = [];
   let ordered = 0;
   for (const line of lines) {
+    const leading = leadingIndent(line.text);
     if (outdent) {
-      const leading = /^(?: {1,4}|\t)/.exec(line.text)?.[0];
-      if (leading)
+      if (leading.columns > 0) {
+        const target = leading.columns - (leading.columns % 4 || 4);
         changes.push({
           from: line.from,
-          to: line.from + leading.length,
-          insert: "",
+          to: line.from + leading.text.length,
+          insert: " ".repeat(target),
         });
+      }
       continue;
     }
 
-    changes.push({ from: line.from, insert: "    " });
+    changes.push({
+      from: line.from,
+      insert: " ".repeat(4 - leading.columns % 4),
+    });
     const marker = /^(\s*)(\d+)([.)])(?=[ \t]+)/.exec(line.text);
     if (!marker) {
       ordered = 0;
@@ -495,6 +515,41 @@ function adjustListIndent(view: EditorView, outdent: boolean): boolean {
   return true;
 }
 
+const indentToNextStop: Command = (view) => {
+  const changes = selectedLines(view).map((line) => {
+    const leading = leadingIndent(line.text);
+    return {
+      from: line.from,
+      insert: " ".repeat(4 - leading.columns % 4),
+    };
+  });
+  if (!changes.length) return false;
+  view.dispatch({
+    changes,
+    annotations: Transaction.userEvent.of("input.indent"),
+  });
+  return true;
+};
+
+const outdentToPreviousStop: Command = (view) => {
+  const changes = selectedLines(view).flatMap((line) => {
+    const leading = leadingIndent(line.text);
+    if (!leading.columns) return [];
+    const target = leading.columns - (leading.columns % 4 || 4);
+    return [{
+      from: line.from,
+      to: line.from + leading.text.length,
+      insert: " ".repeat(target),
+    }];
+  });
+  if (!changes.length) return false;
+  view.dispatch({
+    changes,
+    annotations: Transaction.userEvent.of("input.indent"),
+  });
+  return true;
+};
+
 export const latexSuite = [
   tabstopState,
   automaticPlugin,
@@ -510,9 +565,10 @@ export const latexSuite = [
     { key: "Tab", run: matrixTab },
     { key: "Tab", run: tabOut },
     { key: "Tab", run: indentList },
-    { key: "Tab", run: indentMore },
+    { key: "Tab", run: indentToNextStop },
     { key: "Shift-Tab", run: previousTabstop },
     { key: "Shift-Tab", run: outdentList },
+    { key: "Shift-Tab", run: outdentToPreviousStop },
     { key: "Shift-Tab", run: indentLess },
     { key: "Enter", run: continueList },
     { key: "Enter", run: matrixEnter },

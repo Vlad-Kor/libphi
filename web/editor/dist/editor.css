@@ -42,7 +42,9 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   margin: 0 auto !important;
   padding: 32px 40px 45vh !important;
   color: var(--editor-fg);
-  caret-color: var(--editor-fg) !important;
+  /* drawSelection supplies CodeMirror's single measured caret. Showing the
+   * browser caret as well produces a second, stale-looking cursor at widgets. */
+  caret-color: transparent !important;
   font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif !important;
 }
 .full-width-editor .cm-content {

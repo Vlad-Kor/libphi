@@ -146,7 +146,7 @@ describe("CodeMirror document transactions", () => {
       requestMeasure,
       dispatch,
       focus,
-      state: { doc: { length: 100 } },
+      state: EditorState.create({ doc: " ".repeat(100) }),
     } as unknown as EditorView;
     let request: CustomEvent | undefined;
     window.addEventListener("phi-native-message", (event) => {
@@ -162,7 +162,8 @@ describe("CodeMirror document transactions", () => {
     expect(sourceButton?.getAttribute("aria-label"))
       .toBe("Edit note embed source");
     sourceButton?.click();
-    expect(dispatch).toHaveBeenCalledWith({
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
       selection: { anchor: 1 },
       scrollIntoView: true,
     });
@@ -401,8 +402,24 @@ $$`;
     editor.view.dispatch({ selection: { anchor: 8 } });
     expect(key(editor.view, "Tab")).toBe(true);
     expect(editor.getDocument()).toBe("    - A long item that wraps beneath its content");
+    expect(parent.querySelector<HTMLElement>(".cm-line")?.style
+      .getPropertyValue("--phi-list-content-indent")).toBe("2.6em");
     expect(key(editor.view, "Tab", true)).toBe(true);
     expect(editor.getDocument()).toBe("- A long item that wraps beneath its content");
+  });
+
+  it("snaps indentation to four-column stops", () => {
+    const list = viewFor("  - item", 8, 8, latexSuite);
+    expect(key(list, "Tab")).toBe(true);
+    expect(list.state.doc.toString()).toBe("    - item");
+
+    const text = viewFor("  plain", 7, 7, latexSuite);
+    expect(key(text, "Tab")).toBe(true);
+    expect(text.state.doc.toString()).toBe("    plain");
+
+    const outdent = viewFor("      plain", 11, 11, latexSuite);
+    expect(key(outdent, "Tab", true)).toBe(true);
+    expect(outdent.state.doc.toString()).toBe("    plain");
   });
 
   it("aligns task and ordered list continuations with their first line", () => {
@@ -434,6 +451,7 @@ $$`;
     expect(css).toMatch(/\.list-number\s*\{[^}]*ui-monospace[^}]*tabular-nums/s);
     expect(css).toMatch(/\.cm-tooltip-autocomplete\s*\{[^}]*border-radius: 12px/s);
     expect(css).toMatch(/\.cm-completionIcon\s*\{\s*display: none/s);
+    expect(css).toMatch(/\.cm-content\s*\{[^}]*caret-color: transparent !important/s);
     expect(css).toMatch(/\.note-embed\s*\{[^}]*max-width: 100%[^}]*overflow: hidden/s);
     expect(css).toMatch(/\.embed-body \.math-inline\s*\{[^}]*max-width: 100%/s);
     expect(css).not.toMatch(/\.math-display\s*\{[^}]*overflow-x: auto/s);
@@ -506,6 +524,55 @@ $$`;
     expect(widget?.tagName).toBe("SPAN");
     widget?.querySelector("img")?.dispatchEvent(new Event("load"));
     expect(measure).toHaveBeenCalled();
+  });
+
+  it("keeps rendered images stable while selecting across them", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "![[diagram.png]]\n\nText below";
+    editor.openDocument({
+      documentId: "image-selection",
+      path: "image-selection.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".image-widget")).not.toBeNull();
+
+    editor.view.dispatch({
+      selection: EditorSelection.range(text.length, 0),
+    });
+    expect(parent.querySelector(".image-widget")).not.toBeNull();
+  });
+
+  it("keeps image source open while editing its line", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "![[diagram.png]]";
+    const text = `${source}\n\nText below`;
+    editor.openDocument({
+      documentId: "image-source-pin",
+      path: "image-source-pin.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    const edit = parent.querySelector<HTMLButtonElement>(".image-source-button");
+    expect(edit).not.toBeNull();
+    edit?.click();
+    expect(parent.querySelector(".image-widget")).toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: source.length } });
+    expect(parent.querySelector(".image-widget")).toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".image-widget")).not.toBeNull();
   });
 
   it("keeps an image at the end of a paragraph inline", () => {

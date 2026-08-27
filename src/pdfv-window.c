@@ -778,11 +778,6 @@ static void on_markdown_dirty_changed(PdfvMarkdownEditor *editor,
       g_object_get_data(G_OBJECT(editor), "markdown-tab-page");
   if (!page)
     return;
-  GIcon *icon = dirty ? g_themed_icon_new("document-save-symbolic") : NULL;
-  adw_tab_page_set_indicator_icon(page, icon);
-  adw_tab_page_set_indicator_tooltip(page,
-                                     dirty ? "Unsaved Markdown changes" : "");
-  g_clear_object(&icon);
   if (dirty && page == self->workspace_browse_tab)
     self->workspace_browse_tab = NULL;
   if (dirty && page == self->workspace_preview_tab) {

@@ -12,6 +12,7 @@ import {
 } from "../markdown/render";
 import { remoteImagesAllowed } from "../settings";
 import { calloutIcon } from "../markdown/callout-icons";
+import { pinPreviewSource } from "../markdown/source-edit";
 
 let mermaidSequence = 0;
 interface MermaidApi {
@@ -56,8 +57,15 @@ function ensureMermaidReady(): Promise<MermaidApi> {
   return mermaidReady;
 }
 
-function reveal(view: EditorView, position: number): void {
-  view.dispatch({ selection: { anchor: Math.min(position + 1, view.state.doc.length) }, scrollIntoView: true });
+function reveal(view: EditorView, position: number, pinLine = false): void {
+  const line = view.state.doc.lineAt(
+    Math.max(0, Math.min(position, view.state.doc.length)),
+  );
+  view.dispatch({
+    selection: { anchor: Math.min(position + 1, view.state.doc.length) },
+    effects: pinLine ? pinPreviewSource.of({ from: line.from, to: line.to }) : [],
+    scrollIntoView: true,
+  });
   view.focus();
 }
 
@@ -253,7 +261,7 @@ function sourceEditButton(
   source.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    reveal(view, from);
+    reveal(view, from, true);
   });
   return source;
 }
