@@ -867,12 +867,87 @@ describe("LaTeX Suite transactions", () => {
     await settle();
     expect(view.state.doc.toString()).toBe("$\\sqrt{}$");
     expect(undo(view)).toBe(true);
-    expect(view.state.doc.toString()).toBe("$s$");
+    expect(view.state.doc.toString()).toBe("$sq$");
 
     const fraction = viewFor("$x$", 2, 2, latexSuite);
     fraction.dispatch({ changes: { from: 2, insert: "/" }, selection: { anchor: 3 }, userEvent: "input.type" });
     await settle();
     expect(fraction.state.doc.toString()).toBe("$\\frac{x}{}$");
+  });
+
+  it("keeps nested snippet tabstops and resumes text snippets after math", async () => {
+    setCustomSnippets(JSON.stringify([
+      {
+        trigger: "ml",
+        replacement: "${\\displaystyle $0 }$$1",
+        options: "tA",
+      },
+      { trigger: "_", replacement: "_{$0}$1", options: "mA" },
+    ]));
+
+    const undoView = viewFor("", 0, 0, latexSuite);
+    undoView.dispatch({
+      changes: { from: 0, insert: "m" },
+      selection: { anchor: 1 },
+      userEvent: "input.type",
+    });
+    await settle();
+    undoView.dispatch({
+      changes: { from: 1, insert: "l" },
+      selection: { anchor: 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(undoView.state.doc.toString()).toBe("${\\displaystyle  }$");
+    expect(undo(undoView)).toBe(true);
+    expect(undoView.state.doc.toString()).toBe("ml");
+
+    const view = viewFor("m", 1, 1, latexSuite);
+    view.dispatch({
+      changes: { from: 1, insert: "l" },
+      selection: { anchor: 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(view.state.doc.toString()).toBe("${\\displaystyle  }$");
+
+    let cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "x" },
+      selection: { anchor: cursor + 1 },
+      userEvent: "input.type",
+    });
+    await settle();
+    cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "_" },
+      selection: { anchor: cursor + 1 },
+      userEvent: "input.type",
+    });
+    await settle();
+    cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "b" },
+      selection: { anchor: cursor + 1 },
+      userEvent: "input.type",
+    });
+
+    expect(view.state.doc.toString()).toBe("${\\displaystyle x_{b} }$");
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head)
+      .toBe(view.state.doc.toString().indexOf("}", cursor) + 1);
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+
+    cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "ml" },
+      selection: { anchor: cursor + 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(view.state.doc.toString())
+      .toBe("${\\displaystyle x_{b} }$${\\displaystyle  }$");
   });
 
   it("supports regex variables and visual selections", async () => {

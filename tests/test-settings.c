@@ -20,6 +20,8 @@ static void test_workspace_attachment_policy(void) {
   g_assert_false(pdfv_settings_get_pdf_inverted(settings));
   g_assert_false(
       pdfv_settings_get_remember_document_positions(settings));
+  g_assert_cmpint(pdfv_settings_get_image_paste_style(settings), ==,
+                  PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED);
   pdfv_settings_set_workspace_attachment_policy(
       settings, workspace_a, TRUE, folder_uri);
   pdfv_settings_set_workspace_attachment_policy(
@@ -35,6 +37,8 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_latex_conceal(settings, TRUE);
   pdfv_settings_set_pdf_inverted(settings, TRUE);
   pdfv_settings_set_remember_document_positions(settings, TRUE);
+  pdfv_settings_set_image_paste_style(
+      settings, PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK);
   pdfv_settings_set_latex_snippets(settings, "[{trigger:'x'}]");
   pdfv_settings_set_latex_snippet_variables(settings,
                                              "{GREEK:'alpha'}");
@@ -58,6 +62,8 @@ static void test_workspace_attachment_policy(void) {
   g_assert_true(pdfv_settings_get_pdf_inverted(settings));
   g_assert_true(
       pdfv_settings_get_remember_document_positions(settings));
+  g_assert_cmpint(pdfv_settings_get_image_paste_style(settings), ==,
+                  PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK);
   g_assert_cmpstr(pdfv_settings_get_latex_snippets(settings), ==,
                   "[{trigger:'x'}]");
   g_assert_cmpstr(pdfv_settings_get_latex_snippet_variables(settings), ==,

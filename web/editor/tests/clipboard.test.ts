@@ -5,6 +5,7 @@ import {
   clipboardImageFile,
   clipboardMayContainNativeImage,
   markdownClipboardHtml,
+  pastedImageMarkdown,
 } from "../src/clipboard";
 
 describe("clipboard interoperability", () => {
@@ -49,5 +50,18 @@ describe("clipboard interoperability", () => {
       items: [], files: [], types: ["text/plain"],
     } as unknown as DataTransfer;
     expect(clipboardMayContainNativeImage(text)).toBe(false);
+  });
+
+  it("uses filename embeds only inside workspaces", () => {
+    const image = {
+      name: "Pasted image 20260827183304.png",
+      path: "../../../~Images/Pasted image 20260827183304.png",
+    };
+    expect(pastedImageMarkdown(image, "wiki-embed", true))
+      .toBe("![[Pasted image 20260827183304.png]]");
+    expect(pastedImageMarkdown(image, "markdown-link", true))
+      .toBe("![Pasted image 20260827183304](<../../../~Images/Pasted image 20260827183304.png>)");
+    expect(pastedImageMarkdown(image, "wiki-embed", false))
+      .toBe("![Pasted image 20260827183304](<../../../~Images/Pasted image 20260827183304.png>)");
   });
 });

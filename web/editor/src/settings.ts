@@ -7,6 +7,8 @@ export const defaultSettings: Required<EditorSettings> = {
   readableLineWidth: true,
   allowRemoteImages: false,
   executableSnippets: false,
+  imagePasteStyle: "wiki-embed",
+  workspaceMode: false,
   snippets: "",
   snippetVariables: "",
 };

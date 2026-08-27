@@ -11,6 +11,11 @@ G_BEGIN_DECLS
 
 typedef struct _PdfvSettings PdfvSettings;
 
+typedef enum {
+  PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED,
+  PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK,
+} PdfvImagePasteStyle;
+
 PdfvSettings *pdfv_settings_new(void);
 void pdfv_settings_free(PdfvSettings *self);
 gboolean pdfv_settings_save(PdfvSettings *self, GError **error);
@@ -33,6 +38,10 @@ void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
 gboolean pdfv_settings_get_remember_document_positions(PdfvSettings *self);
 void pdfv_settings_set_remember_document_positions(PdfvSettings *self,
                                                    gboolean enabled);
+PdfvImagePasteStyle pdfv_settings_get_image_paste_style(
+    PdfvSettings *self);
+void pdfv_settings_set_image_paste_style(
+    PdfvSettings *self, PdfvImagePasteStyle style);
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self);
 void pdfv_settings_set_latex_snippets(PdfvSettings *self,
                                       const gchar *snippets);

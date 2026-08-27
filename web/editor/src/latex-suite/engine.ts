@@ -1,6 +1,6 @@
 import { Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
-import { indentLess, indentMore } from "@codemirror/commands";
+import { indentLess, indentMore, isolateHistory } from "@codemirror/commands";
 import defaultSnippets from "./default-snippets.txt?raw";
 import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
 import { codeModeAt, mathModeAt } from "../markdown/parser";
@@ -17,18 +17,37 @@ interface Tabstop { index: number; from: number; to: number }
 interface TabstopState { stops: Tabstop[]; active: number }
 
 const setTabstops = StateEffect.define<TabstopState | null>();
+const startTabstops = StateEffect.define<Tabstop[]>();
 const tabstopState = StateField.define<TabstopState | null>({
   create: () => null,
   update(value, transaction) {
-    for (const effect of transaction.effects)
-      if (effect.is(setTabstops)) return effect.value;
-    if (!value) return null;
-    const stops = value.stops.map((stop) => ({
-      ...stop,
-      from: transaction.changes.mapPos(stop.from, 1),
-      to: transaction.changes.mapPos(stop.to, -1),
-    }));
-    return { ...value, stops };
+    if (transaction.isUserEvent("undo") ||
+        transaction.isUserEvent("redo")) return null;
+
+    let current = value && {
+      ...value,
+      stops: value.stops.map((stop) => ({
+        ...stop,
+        from: transaction.changes.mapPos(stop.from, 1),
+        to: transaction.changes.mapPos(stop.to, -1),
+      })),
+    };
+    for (const effect of transaction.effects) {
+      if (effect.is(setTabstops)) {
+        current = effect.value;
+      } else if (effect.is(startTabstops)) {
+        /* A snippet may expand while the cursor is inside another snippet.
+         * Visit its stops first, then resume at the unvisited outer stops. */
+        const remaining = current
+          ? current.stops.slice(current.active + 1)
+          : [];
+        const stops = [...effect.value, ...remaining];
+        current = stops.length
+          ? { stops, active: effect.value.length ? 0 : -1 }
+          : null;
+      }
+    }
+    return current;
   },
 });
 
@@ -210,8 +229,11 @@ function applyMatch(view: EditorView, match: Match, to: number, visual = "",
   view.dispatch({
     changes: { from: match.from, to, insert: expanded.text },
     selection: { anchor: first.from, head: first.to },
-    effects: setTabstops.of(stops.length ? { stops, active: 0 } : null),
-    annotations: Transaction.userEvent.of(automatic ? "input.type" : "input.complete"),
+    effects: startTabstops.of(stops),
+    annotations: [
+      Transaction.userEvent.of(automatic ? "input.type" : "input.complete"),
+      ...(automatic ? [isolateHistory.of("before")] : []),
+    ],
   });
   return true;
 }

@@ -412,6 +412,21 @@ static void apply_preferences_to_editor(PdfvWindow *self,
       pdfv_settings_get_latex_snippet_variables(self->settings));
   GFile *workspace_root = self->workspace
       ? pdfv_workspace_get_folder(self->workspace) : NULL;
+  AdwTabPage *editor_page = g_object_get_data(
+      G_OBJECT(editor), "markdown-tab-page");
+  GtkWidget *editor_stack = editor_page
+      ? adw_tab_page_get_child(editor_page) : NULL;
+  GFile *editor_file = GTK_IS_STACK(editor_stack)
+      ? g_object_get_data(G_OBJECT(editor_stack), "document-file") : NULL;
+  if (!editor_file)
+    editor_file = pdfv_markdown_editor_get_file(editor);
+  gboolean workspace_mode = workspace_root && editor_file &&
+      pdfv_workspace_file_is_within(workspace_root, editor_file);
+  pdfv_markdown_editor_set_image_paste_style(
+      editor,
+      pdfv_settings_get_image_paste_style(self->settings) ==
+          PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED,
+      workspace_mode);
   GFile *attachment_folder = NULL;
   if (workspace_root &&
       pdfv_settings_get_workspace_attachment_fixed(self->settings,
@@ -5036,6 +5051,16 @@ static void on_preferences_document_positions_changed(
   propagate_markdown_preferences(self);
 }
 
+static void on_preferences_image_paste_style_changed(
+    AdwComboRow *row, GParamSpec *pspec, PdfvWindow *self) {
+  (void)pspec;
+  PdfvImagePasteStyle style = adw_combo_row_get_selected(row) == 0
+      ? PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED
+      : PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK;
+  pdfv_settings_set_image_paste_style(self->settings, style);
+  propagate_markdown_preferences(self);
+}
+
 static void on_preferences_latex_conceal_changed(AdwSwitchRow *row,
                                                  GParamSpec *pspec,
                                                  PdfvWindow *self) {
@@ -5445,6 +5470,29 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
 
   GFile *workspace = self->workspace
       ? pdfv_workspace_get_folder(self->workspace) : NULL;
+
+  const gchar *paste_style_names[] = {
+      "Wiki embed", "Markdown image link", NULL};
+  GtkStringList *paste_styles = gtk_string_list_new(paste_style_names);
+  AdwComboRow *paste_style = ADW_COMBO_ROW(adw_combo_row_new());
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(paste_style), "Default image paste style");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(paste_style),
+      "Wiki embeds use filename lookup in workspaces; standalone notes "
+      "always use Markdown links");
+  adw_combo_row_set_model(paste_style, G_LIST_MODEL(paste_styles));
+  adw_combo_row_set_selected(
+      paste_style,
+      pdfv_settings_get_image_paste_style(self->settings) ==
+              PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED
+          ? 0 : 1);
+  adw_preferences_group_add(attachments, GTK_WIDGET(paste_style));
+  g_signal_connect_object(
+      paste_style, "notify::selected",
+      G_CALLBACK(on_preferences_image_paste_style_changed), self, 0);
+  g_object_unref(paste_styles);
+
   gboolean fixed = workspace &&
       pdfv_settings_get_workspace_attachment_fixed(self->settings,
                                                     workspace);

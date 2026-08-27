@@ -1,5 +1,21 @@
 import { renderMarkdown } from "./markdown/render";
 
+export type ImagePasteStyle = "wiki-embed" | "markdown-link";
+
+export function pastedImageMarkdown(
+  result: { path?: string; name?: string },
+  style: ImagePasteStyle,
+  workspaceMode: boolean,
+): string {
+  if (!result.path) return "";
+  const filename = result.name ??
+    result.path.split("/").filter(Boolean).at(-1) ?? "Pasted image";
+  if (workspaceMode && style === "wiki-embed")
+    return `![[${filename.replace(/]/g, "\\]")}]]`;
+  const label = filename.replace(/\.[^.]+$/, "").replace(/]/g, "\\]");
+  return `![${label}](<${result.path}>)`;
+}
+
 export function markdownClipboardHtml(markdown: string): string {
   return renderMarkdown(markdown);
 }

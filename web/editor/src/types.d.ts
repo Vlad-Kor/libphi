@@ -51,6 +51,8 @@ export interface EditorSettings {
   readableLineWidth?: boolean;
   allowRemoteImages?: boolean;
   executableSnippets?: boolean;
+  imagePasteStyle?: "wiki-embed" | "markdown-link";
+  workspaceMode?: boolean;
   snippets?: string;
   snippetVariables?: string;
 }

@@ -13,6 +13,7 @@ import {
   clipboardImageFile,
   clipboardMayContainNativeImage,
   markdownClipboardHtml,
+  pastedImageMarkdown,
 } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
 import { installKineticScroll } from "./kinetic-scroll";
@@ -380,10 +381,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     const clipboard = event.clipboardData;
     const file = clipboardImageFile(clipboard);
     const insertAttachment = (result: { path?: string; name?: string }) => {
-      if (!result.path) return;
-      const name = (result.name ?? "Pasted image")
-        .replace(/\.[^.]+$/, "").replace(/]/g, "\\]");
-      view.dispatch(view.state.replaceSelection(`![${name}](<${result.path}>)`));
+      const markdown = pastedImageMarkdown(
+        result, this.settings.imagePasteStyle, this.settings.workspaceMode,
+      );
+      if (markdown)
+        view.dispatch(view.state.replaceSelection(markdown));
     };
     if (file) {
       event.preventDefault();

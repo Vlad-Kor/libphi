@@ -36,6 +36,12 @@ describe("Markdown extension parser precedence", () => {
     expect(nodes.some((node) => node.kind === "block-id")).toBe(true);
   });
 
+  it("leaves escaped emphasis delimiters literal", () => {
+    const source = String.raw`\_literal underscores\_ and \*literal stars\*`;
+    const nodes = parseMarkdownNodes(source);
+    expect(nodes.some((node) => node.kind === "emphasis")).toBe(false);
+  });
+
   it("recognizes frontmatter, callouts, tables, Mermaid, and both math modes", () => {
     const source = `---\ntitle: Test\n---\n# Heading\n\n> [!warning]- Careful\n> $x$\n\n| A | B |\n| --- | ---: |\n| 1 | 2 |\n\n$y$\n\n$$\nz^2\n$$\n\n\`\`\`mermaid\ngraph TD\nA-->B\n\`\`\``;
     const kinds = new Set(parseMarkdownNodes(source).map((node) => node.kind));

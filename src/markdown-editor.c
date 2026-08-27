@@ -71,6 +71,8 @@ struct _PdfvMarkdownEditor {
   gboolean allow_remote_images;
   gboolean readable_line_width;
   gboolean latex_conceal;
+  gboolean image_paste_wiki_embed;
+  gboolean workspace_mode;
   gdouble font_scale;
   gchar *snippets;
   gchar *snippet_variables;
@@ -210,6 +212,11 @@ static void send_settings(PdfvMarkdownEditor *self) {
                                  self->readable_line_width);
   json_object_set_boolean_member(payload, "latexConceal",
                                  self->latex_conceal);
+  json_object_set_string_member(
+      payload, "imagePasteStyle",
+      self->image_paste_wiki_embed ? "wiki-embed" : "markdown-link");
+  json_object_set_boolean_member(payload, "workspaceMode",
+                                 self->workspace_mode);
   json_object_set_string_member(payload, "snippets",
                                 self->snippets ? self->snippets : "");
   json_object_set_string_member(
@@ -1633,6 +1640,16 @@ void pdfv_markdown_editor_set_snippet_variables(
   send_settings(self);
 }
 
+void pdfv_markdown_editor_set_image_paste_style(
+    PdfvMarkdownEditor *self, gboolean wiki_embed,
+    gboolean workspace_mode) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  self->image_paste_wiki_embed = wiki_embed;
+  self->workspace_mode = workspace_mode;
+  self->settings_set = TRUE;
+  send_settings(self);
+}
+
 void pdfv_markdown_editor_set_attachment_folder(
     PdfvMarkdownEditor *self, GFile *folder) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
@@ -1796,6 +1813,7 @@ static void pdfv_markdown_editor_init(PdfvMarkdownEditor *self) {
   self->revision = 0;
   g_queue_init(&self->save_queue);
   self->font_scale = 1.0;
+  self->image_paste_wiki_embed = TRUE;
   self->snippets = g_strdup("");
   self->snippet_variables = g_strdup("");
   self->flush_tasks = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,

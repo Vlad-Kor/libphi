@@ -67,7 +67,8 @@ function pushInline(
   for (const match of text.matchAll(pattern)) {
     const from = match.index;
     const to = from + match[0].length;
-    if (inside(from, ranges)) continue;
+    if (inside(from, ranges) || isMarkdownEscape(text, from) ||
+        isMarkdownEscape(text, to - closeLength)) continue;
     nodes.push({
       kind,
       from,

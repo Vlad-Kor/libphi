@@ -17,6 +17,7 @@ struct _PdfvSettings {
   gboolean latex_conceal;
   gboolean pdf_inverted;
   gboolean remember_document_positions;
+  PdfvImagePasteStyle image_paste_style;
   gchar *latex_snippets;
   gchar *latex_snippet_variables;
   GKeyFile *file;
@@ -42,6 +43,7 @@ PdfvSettings *pdfv_settings_new(void) {
   PdfvSettings *self = g_new0(PdfvSettings, 1);
   self->markdown_font_scale = 1.0;
   self->readable_line_width = TRUE;
+  self->image_paste_style = PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED;
   self->latex_snippets = g_strdup("");
   self->latex_snippet_variables = g_strdup("");
   self->file = g_key_file_new();
@@ -78,6 +80,11 @@ PdfvSettings *pdfv_settings_new(void) {
     if (!error)
       self->remember_document_positions = remember;
     g_clear_error(&error);
+    gchar *paste_style = g_key_file_get_string(
+        self->file, SETTINGS_GROUP, "image-paste-style", NULL);
+    if (g_strcmp0(paste_style, "markdown-link") == 0)
+      self->image_paste_style = PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK;
+    g_free(paste_style);
     gchar *snippets = g_key_file_get_string(self->file, SETTINGS_GROUP,
                                              "latex-snippets", NULL);
     if (snippets) {
@@ -119,6 +126,10 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
   g_key_file_set_boolean(self->file, GENERAL_GROUP,
                          "remember-document-positions",
                          self->remember_document_positions);
+  g_key_file_set_string(
+      self->file, SETTINGS_GROUP, "image-paste-style",
+      self->image_paste_style == PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK
+          ? "markdown-link" : "wiki-embed");
   /* This used to control two incompatible fullscreen behaviors. Fullscreen
    * and presentation are explicit actions now, so discard the obsolete key
    * when rewriting an older settings file. */
@@ -210,6 +221,21 @@ void pdfv_settings_set_remember_document_positions(
     PdfvSettings *self, gboolean enabled) {
   g_return_if_fail(self != NULL);
   self->remember_document_positions = enabled;
+}
+
+PdfvImagePasteStyle pdfv_settings_get_image_paste_style(
+    PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL,
+                       PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED);
+  return self->image_paste_style;
+}
+
+void pdfv_settings_set_image_paste_style(
+    PdfvSettings *self, PdfvImagePasteStyle style) {
+  g_return_if_fail(self != NULL);
+  g_return_if_fail(style == PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED ||
+                   style == PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK);
+  self->image_paste_style = style;
 }
 
 const gchar *pdfv_settings_get_latex_snippets(PdfvSettings *self) {
@@ -363,6 +389,7 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->pdf_inverted = source->pdf_inverted;
   destination->remember_document_positions =
       source->remember_document_positions;
+  destination->image_paste_style = source->image_paste_style;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   pdfv_settings_set_latex_snippet_variables(
       destination, source->latex_snippet_variables);
