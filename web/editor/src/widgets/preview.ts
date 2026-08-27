@@ -238,6 +238,26 @@ function imageCodeIcon(): SVGElement {
   return svg;
 }
 
+function sourceEditButton(
+  view: EditorView,
+  from: number,
+  label: string,
+): HTMLButtonElement {
+  const source = document.createElement("button");
+  source.type = "button";
+  source.className = "image-source-button";
+  source.title = label;
+  source.setAttribute("aria-label", label);
+  source.append(imageCodeIcon());
+  source.addEventListener("pointerdown", (event) => event.stopPropagation());
+  source.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    reveal(view, from);
+  });
+  return source;
+}
+
 function interactiveImage(
   view: EditorView,
   image: HTMLImageElement,
@@ -248,18 +268,7 @@ function interactiveImage(
   const container = document.createElement("span");
   container.className = `image-widget image-widget-${block ? "block" : "inline"}`;
   image.addEventListener("load", () => view.requestMeasure());
-  const source = document.createElement("button");
-  source.type = "button";
-  source.className = "image-source-button";
-  source.title = "Edit image source";
-  source.setAttribute("aria-label", "Edit image source");
-  source.append(imageCodeIcon());
-  source.addEventListener("pointerdown", (event) => event.stopPropagation());
-  source.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    reveal(view, from);
-  });
+  const source = sourceEditButton(view, from, "Edit image source");
 
   const handle = document.createElement("span");
   handle.className = "image-resize-handle";
@@ -415,10 +424,12 @@ export class LinkWidget extends WidgetType {
     title.className = "embed-title";
     title.textContent = this.target;
     title.addEventListener("click", () => sendNative("link/open", { target: this.target }));
+    const source = sourceEditButton(view, this.from, "Edit note embed source");
+    source.classList.add("embed-source-button");
     const body = document.createElement("div");
     body.className = "embed-body dimmed";
     body.textContent = "Loading embed…";
-    container.append(title, body);
+    container.append(title, source, body);
     requestNative<{ text?: string; path?: string }>(
       "embed/read", { target: this.target, depth: 1 },
     )

@@ -442,8 +442,8 @@ pre code { padding: 0; background: transparent; }
 .callout-title::-webkit-details-marker { display: none; }
 .callout-icon { width: 1em; height: 1em; flex: 0 0 auto; color: var(--callout-color, var(--editor-accent)); }
 .callout-content > :last-child { margin-bottom: .2em; }
-.note-embed { display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
-.embed-title { border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
+.note-embed { position: relative; display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
+.embed-title { max-width: 100%; padding-right: 38px; border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
 .embed-body { min-width: 0; max-width: 100%; overflow: hidden; }
 .embed-body .math-display { box-sizing: border-box; max-width: 100%; }
 .embed-body .math-inline { display: inline-block; max-width: 100%; vertical-align: middle; }
@@ -488,7 +488,9 @@ pre code { padding: 0; background: transparent; }
   transition: opacity 120ms ease;
 }
 .image-widget:hover .image-source-button, .image-widget:hover .image-resize-handle,
+.note-embed:hover > .embed-source-button,
 .image-widget:focus-within .image-source-button, .image-resize-handle:focus-visible { opacity: 1; }
+.note-embed:focus-within > .embed-source-button { opacity: 1; }
 .markdown-link img { display: inline-block; max-width: 100%; vertical-align: middle; }
 .remote-image-blocked { min-width: 12em; min-height: 3em; border: 1px dashed var(--editor-border); background: var(--editor-code-bg); cursor: pointer; }
 .media-embed { display: block; max-width: 100%; margin: 0; padding: .4em 0; }

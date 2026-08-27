@@ -71,9 +71,11 @@ describe("WebKitGTK kinetic scrolling workaround", () => {
     installKineticScroll(scroller);
 
     const mouse = wheel(scroller, 3, { deltaMode: WheelEvent.DOM_DELTA_LINE });
+    const pixelWheel = wheel(scroller, 53);
     const horizontal = wheel(scroller, 2, { deltaX: 8 });
     const pinch = wheel(scroller, 8, { ctrlKey: true });
     expect(mouse.defaultPrevented).toBe(false);
+    expect(pixelWheel.defaultPrevented).toBe(false);
     expect(horizontal.defaultPrevented).toBe(false);
     expect(pinch.defaultPrevented).toBe(false);
     expect(scroller.scrollTop).toBe(0);
@@ -105,6 +107,25 @@ describe("WebKitGTK kinetic scrolling workaround", () => {
     expect(frame).toBeTypeOf("function");
     frame?.(108);
     expect(scroller.scrollTop).toBeGreaterThan(afterInput);
+  });
+
+  it("never adds animation or momentum to a pixel-mode wheel burst", () => {
+    vi.useFakeTimers();
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation(() => 1);
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(35);
+    installKineticScroll(scroller);
+
+    const first = wheel(scroller, 53);
+    const second = wheel(scroller, 53);
+    vi.advanceTimersByTime(500);
+    expect(first.defaultPrevented).toBe(false);
+    expect(second.defaultPrevented).toBe(false);
+    expect(requestFrame).not.toHaveBeenCalled();
   });
 
   it("cancels pending momentum when the user presses a key", () => {

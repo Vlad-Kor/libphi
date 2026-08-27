@@ -4,6 +4,7 @@ const MOMENTUM_DECAY_PER_MS = 0.0035;
 const INPUT_FOLLOW_MS = 12;
 const MIN_MOMENTUM_SPEED = 0.025;
 const MAX_MOMENTUM_SPEED = 3;
+const PIXEL_WHEEL_GESTURE_THRESHOLD = 32;
 
 /**
  * Work around WebKitGTK occasionally terminating touchpad momentum early.
@@ -24,6 +25,7 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
   let lastFrameAt = 0;
   let nativeTouchActive = false;
   let nativeTouchUntil = 0;
+  let nativeWheelGesture = false;
 
   const cancelMomentum = () => {
     window.clearTimeout(momentumTimer);
@@ -90,10 +92,18 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
         Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
 
     const gap = now - lastWheelAt;
+    const newGesture = lastWheelAt === 0 || gap <= 0 ||
+      gap > GESTURE_GAP_MS;
+    if (newGesture)
+      nativeWheelGesture = Math.abs(event.deltaY) >=
+        PIXEL_WHEEL_GESTURE_THRESHOLD;
+    lastWheelAt = now;
+    if (nativeWheelGesture) return;
+
     window.clearTimeout(momentumTimer);
     momentumTimer = 0;
     momentumActive = false;
-    if (gap <= 0 || gap > GESTURE_GAP_MS) {
+    if (newGesture) {
       pendingDelta = 0;
       velocity = 0;
       samples = 0;
@@ -110,7 +120,6 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
       ? velocity * 0.55 + instantaneous * 0.45
       : instantaneous;
     samples++;
-    lastWheelAt = now;
     momentumTimer = window.setTimeout(startMomentum, MOMENTUM_DELAY_MS);
   };
 

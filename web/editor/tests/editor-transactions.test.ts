@@ -99,6 +99,8 @@ describe("CodeMirror document transactions", () => {
 
   it("remeasures a note embed when its asynchronous body arrives", async () => {
     let view: EditorView;
+    const dispatch = vi.fn();
+    const focus = vi.fn();
     const requestMeasure = vi.fn((request?: {
       read(view: EditorView): unknown;
       write?(measurement: unknown, view: EditorView): void;
@@ -106,7 +108,12 @@ describe("CodeMirror document transactions", () => {
       if (request)
         request.write?.(request.read(view), view);
     });
-    view = { requestMeasure } as unknown as EditorView;
+    view = {
+      requestMeasure,
+      dispatch,
+      focus,
+      state: { doc: { length: 100 } },
+    } as unknown as EditorView;
     let request: CustomEvent | undefined;
     window.addEventListener("phi-native-message", (event) => {
       request = event as CustomEvent;
@@ -115,6 +122,17 @@ describe("CodeMirror document transactions", () => {
     const widget = new LinkWidget("Long note", "Long note", 0, 13, true, true);
     const dom = widget.toDOM(view);
     expect(dom.style.minHeight).toBe("360px");
+    const sourceButton = dom.querySelector<HTMLButtonElement>(
+      ".embed-source-button",
+    );
+    expect(sourceButton?.getAttribute("aria-label"))
+      .toBe("Edit note embed source");
+    sourceButton?.click();
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: { anchor: 1 },
+      scrollIntoView: true,
+    });
+    expect(focus).toHaveBeenCalled();
     vi.spyOn(dom, "getBoundingClientRect").mockReturnValue({
       height: 840,
     } as DOMRect);
