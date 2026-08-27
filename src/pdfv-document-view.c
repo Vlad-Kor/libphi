@@ -2770,24 +2770,73 @@ pdfv_document_view_zoom_out(PdfvDocumentView* self)
     pdfv_document_view_set_zoom(self, self->zoom / ZOOM_STEP);
 }
 
+static gboolean
+get_current_page_size_for_fit(PdfvDocumentView* self, gdouble* width,
+                              gdouble* height)
+{
+    if (!self->document || self->current_page < 0 ||
+        self->current_page >= (gint)self->pages->len)
+        return FALSE;
+
+    PhiPage* page = g_ptr_array_index(self->pages, self->current_page);
+    if (!page) {
+        /* The asynchronous document opener prepares both page zero and the
+         * requested page. Adopt that prepared page here so restoring a saved
+         * position on a later page cannot make the initial fit silently keep
+         * the constructor's 100% zoom. An explicit fit action may load an
+         * otherwise uncached page, which is preferable to doing nothing. */
+        page = phi_document_get_page(
+            self->document, self->current_page, NULL);
+        if (page)
+            g_ptr_array_index(self->pages, self->current_page) = page;
+    }
+
+    if (page) {
+        gfloat page_width = 0;
+        gfloat page_height = 0;
+        phi_page_get_size(page, &page_width, &page_height);
+        if (page_width > 0 && page_height > 0) {
+            if (width)
+                *width = page_width;
+            if (height)
+                *height = page_height;
+            return TRUE;
+        }
+    }
+
+    /* Retain a non-blocking fallback for an unusual page-load failure. The
+     * layout cache contains zoomed dimensions, initially estimated from page
+     * zero and refined as pages become visible. */
+    if (self->zoom <= 0 ||
+        self->current_page >= (gint)self->page_widths->len ||
+        self->current_page >= (gint)self->page_heights->len)
+        return FALSE;
+    gdouble page_width = g_array_index(
+        self->page_widths, gdouble, self->current_page) / self->zoom;
+    gdouble page_height = g_array_index(
+        self->page_heights, gdouble, self->current_page) / self->zoom;
+    if (page_width <= 0 || page_height <= 0)
+        return FALSE;
+    if (width)
+        *width = page_width;
+    if (height)
+        *height = page_height;
+    return TRUE;
+}
+
 void
 pdfv_document_view_zoom_fit_width(PdfvDocumentView* self)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
-    
-    if (!self->document)
+
+    gdouble page_width = 0;
+    if (!get_current_page_size_for_fit(self, &page_width, NULL))
         return;
-    
-    PhiPage* page = g_ptr_array_index(self->pages, self->current_page);
-    if (!page)
-        return;
-    
-    gfloat pw, ph;
-    phi_page_get_size(page, &pw, &ph);
-    
+
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
-    gdouble new_zoom = (width - 40) / pw; /* 20px padding on each side */
-    
+    gdouble new_zoom =
+        (width - 40) / page_width; /* 20px padding on each side */
+
     pdfv_document_view_set_zoom(self, new_zoom);
 }
 
@@ -2795,23 +2844,19 @@ void
 pdfv_document_view_zoom_fit_page(PdfvDocumentView* self)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
-    
-    if (!self->document)
+
+    gdouble page_width = 0;
+    gdouble page_height = 0;
+    if (!get_current_page_size_for_fit(
+            self, &page_width, &page_height))
         return;
-    
-    PhiPage* page = g_ptr_array_index(self->pages, self->current_page);
-    if (!page)
-        return;
-    
-    gfloat pw, ph;
-    phi_page_get_size(page, &pw, &ph);
-    
+
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
-    
-    gdouble zoom_w = (width - 40) / pw;
-    gdouble zoom_h = (height - 40) / ph;
-    
+
+    gdouble zoom_w = (width - 40) / page_width;
+    gdouble zoom_h = (height - 40) / page_height;
+
     pdfv_document_view_set_zoom(self, MIN(zoom_w, zoom_h));
 }
 
@@ -2820,18 +2865,16 @@ pdfv_document_view_zoom_fit_page_full(PdfvDocumentView* self)
 {
     g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
 
-    if (!self->document)
+    gdouble page_width = 0;
+    gdouble page_height = 0;
+    if (!get_current_page_size_for_fit(
+            self, &page_width, &page_height))
         return;
 
-    PhiPage* page = g_ptr_array_index(self->pages, self->current_page);
-    if (!page)
-        return;
-
-    gfloat pw, ph;
-    phi_page_get_size(page, &pw, &ph);
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
-    pdfv_document_view_set_zoom(self, MIN(width / pw, height / ph));
+    pdfv_document_view_set_zoom(
+        self, MIN(width / page_width, height / page_height));
 }
 
 void
