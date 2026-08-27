@@ -57,6 +57,13 @@ function imageIsInsideListItem(state: EditorState, node: MarkdownNode): boolean 
   return /^\s*[-+*]\s+(?:\[[^\]]\]\s+)?$/.test(prefix);
 }
 
+function imageIsStandaloneLine(state: EditorState, node: MarkdownNode): boolean {
+  if (imageIsInsideListItem(state, node)) return false;
+  const line = state.doc.lineAt(node.from);
+  return state.sliceDoc(line.from, node.from).trim() === "" &&
+    state.sliceDoc(node.to, line.to).trim() === "";
+}
+
 function targetIsImage(target: string): boolean {
   return /\.(?:png|jpe?g|gif|webp|svg|avif)(?:$|[?#])/i.test(
     target.split("|")[0],
@@ -72,7 +79,9 @@ function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | 
     case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
     case "embed": {
       const target = String(node.meta?.target ?? node.text);
-      const standalone = !imageIsInsideListItem(state, node);
+      const standalone = targetIsImage(target)
+        ? imageIsStandaloneLine(state, node)
+        : !imageIsInsideListItem(state, node);
       return Decoration.replace({
         widget: new LinkWidget(
           target,
@@ -87,7 +96,7 @@ function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | 
     }
     case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false) });
     case "markdown-image": {
-      const standalone = !imageIsInsideListItem(state, node);
+      const standalone = imageIsStandaloneLine(state, node);
       return Decoration.replace({
         widget: new MarkdownLinkWidget(
           String(node.meta?.target ?? ""),

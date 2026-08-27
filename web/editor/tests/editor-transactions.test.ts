@@ -508,6 +508,26 @@ $$`;
     expect(measure).toHaveBeenCalled();
   });
 
+  it("keeps an image at the end of a paragraph inline", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "paragraph-image",
+      path: "Triangulations.md",
+      text: "The incoming edges have this order. ![Diagram|225](<../Images/Diagram.png>)",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 0 } });
+
+    expect(parent.querySelector(".image-widget-inline")).not.toBeNull();
+    expect(parent.querySelector(".image-widget-block")).toBeNull();
+    expect(parent.querySelector(".cm-line")?.textContent)
+      .toContain("The incoming edges have this order.");
+  });
+
   it("shows the active math preview in a floating bubble above the source", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
