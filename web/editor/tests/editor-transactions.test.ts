@@ -970,6 +970,86 @@ describe("LaTeX Suite transactions", () => {
       .toBe("${\\displaystyle x_{b} }$${\\displaystyle  }$");
   });
 
+  it("starts a manual snippet after tabbing out of a previous snippet", () => {
+    setCustomSnippets(JSON.stringify([
+      {
+        trigger: "red",
+        replacement: "<span style=color:#ed4564>$0</span>$1",
+        options: "t",
+      },
+    ]));
+    const view = viewFor("red", 3, 3, latexSuite);
+
+    expect(key(view, "Tab")).toBe(true);
+    let cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "first" },
+      selection: { anchor: cursor + 5 },
+      userEvent: "input.type",
+    });
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+
+    cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: " red" },
+      selection: { anchor: cursor + 4 },
+      userEvent: "input.type",
+    });
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "<span style=color:#ed4564>first</span> <span style=color:#ed4564></span>",
+    );
+    expect(view.state.selection.main.head).toBe(
+      view.state.doc.toString().lastIndexOf("</span>"),
+    );
+  });
+
+  it("tracks typed placeholder text and abandons stale tabstops", async () => {
+    setCustomSnippets(JSON.stringify([
+      { trigger: "mark", replacement: "<i>$0</i>", options: "t" },
+      { trigger: "wrap", replacement: "<b>$0</b>$1", options: "t" },
+      { trigger: "xx", replacement: "X", options: "tA" },
+    ]));
+    const view = viewFor("mark", 4, 4, latexSuite);
+    expect(key(view, "Tab")).toBe(true);
+    let cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "value" },
+      selection: { anchor: cursor + 5 },
+      userEvent: "input.type",
+    });
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head).toBe(
+      view.state.doc.toString().indexOf("</i>"),
+    );
+
+    const stale = viewFor("mark", 4, 4, latexSuite);
+    expect(key(stale, "Tab")).toBe(true);
+    stale.dispatch({ selection: { anchor: stale.state.doc.length } });
+    cursor = stale.state.selection.main.head;
+    stale.dispatch({
+      changes: { from: cursor, insert: " mark" },
+      selection: { anchor: cursor + 5 },
+      userEvent: "input.type",
+    });
+    expect(key(stale, "Tab")).toBe(true);
+    expect(stale.state.doc.toString()).toBe("<i></i> <i></i>");
+
+    const nested = viewFor("wrap", 4, 4, latexSuite);
+    expect(key(nested, "Tab")).toBe(true);
+    cursor = nested.state.selection.main.head;
+    nested.dispatch({
+      changes: { from: cursor, insert: "xx" },
+      selection: { anchor: cursor + 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(nested.state.doc.toString()).toBe("<b>X</b>");
+    expect(key(nested, "Tab")).toBe(true);
+    expect(nested.state.selection.main.head).toBe(nested.state.doc.length);
+  });
+
   it("supports regex variables and visual selections", async () => {
     const greek = "${GREEK}";
     const selected = "${VISUAL}";

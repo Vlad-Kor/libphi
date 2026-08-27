@@ -26,11 +26,19 @@ const tabstopState = StateField.define<TabstopState | null>({
 
     let current = value && {
       ...value,
-      stops: value.stops.map((stop) => ({
-        ...stop,
-        from: transaction.changes.mapPos(stop.from, 1),
-        to: transaction.changes.mapPos(stop.to, -1),
-      })),
+      stops: value.stops.map((stop, index) => {
+        const active = index === value.active;
+        const empty = stop.from === stop.to;
+        const toAssociation = active || empty ? 1 : -1;
+        return {
+          ...stop,
+          /* Text entered at the active placeholder becomes part of that
+           * placeholder. Empty, unvisited stops at the same boundary follow
+           * the inserted text instead of turning into reversed ranges. */
+          from: transaction.changes.mapPos(stop.from, active ? -1 : 1),
+          to: transaction.changes.mapPos(stop.to, toAssociation),
+        };
+      }),
     };
     for (const effect of transaction.effects) {
       if (effect.is(setTabstops)) {
@@ -241,14 +249,38 @@ function applyMatch(view: EditorView, match: Match, to: number, visual = "",
 const nextTabstop: Command = (view) => {
   const value = view.state.field(tabstopState);
   if (!value?.stops.length) return false;
+  if (value.active < 0) {
+    /* A nested snippet without placeholders leaves us immediately before the
+     * remaining outer stops. */
+    const stop = value.stops[0];
+    const finished = value.stops.length === 1 && stop.from === stop.to;
+    view.dispatch({
+      selection: { anchor: stop.from, head: stop.to },
+      effects: setTabstops.of(finished ? null : { ...value, active: 0 }),
+    });
+    return true;
+  }
+  const current = value.stops[value.active];
+  const selection = view.state.selection.main;
+  const currentFrom = Math.min(current.from, current.to);
+  const currentTo = Math.max(current.from, current.to);
+  if (selection.from < currentFrom || selection.to > currentTo) {
+    /* A click or edit outside the active placeholder ends this snippet. Let
+     * the remaining Tab bindings handle the cursor's current location. */
+    view.dispatch({ effects: setTabstops.of(null) });
+    return false;
+  }
   if (value.active >= value.stops.length - 1) {
-    const stop = value.stops[value.active];
-    view.dispatch({ selection: { anchor: stop.to }, effects: setTabstops.of(null) });
+    view.dispatch({ selection: { anchor: current.to }, effects: setTabstops.of(null) });
     return true;
   }
   const active = Math.min(value.active + 1, value.stops.length - 1);
   const stop = value.stops[active];
-  view.dispatch({ selection: { anchor: stop.from, head: stop.to }, effects: setTabstops.of({ ...value, active }) });
+  const finished = active === value.stops.length - 1 && stop.from === stop.to;
+  view.dispatch({
+    selection: { anchor: stop.from, head: stop.to },
+    effects: setTabstops.of(finished ? null : { ...value, active }),
+  });
   return true;
 };
 
