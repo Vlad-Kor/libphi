@@ -45,6 +45,7 @@ pdfv_app = executable('pdfv', pdfv_sources,
 		phi_dep,
 		webkit_dep,
 		json_glib_dep,
+		gdk_pixbuf_dep,
 	],
 	c_args: [
 		'-DPDFV_EDITOR_DIR="' + editor_install_dir + '"',

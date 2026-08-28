@@ -371,9 +371,10 @@ static GFile *find_attachment_recursive(PdfvMarkdownVaultAdapter *self,
   return result;
 }
 
-GFile *pdfv_markdown_vault_adapter_resolve_attachment(
+static GFile *resolve_attachment(
     PdfvMarkdownVaultAdapter *self, const gchar *source_path,
-    const gchar *target, gboolean relative_to_note, GError **error) {
+    const gchar *target, gboolean relative_to_note,
+    gboolean search_vault, GError **error) {
   g_return_val_if_fail(PDFV_IS_MARKDOWN_VAULT_ADAPTER(self), NULL);
   gchar *decoded = g_uri_unescape_string(target ? target : "", NULL);
   if (!decoded || !*decoded || g_path_is_absolute(decoded) ||
@@ -419,13 +420,27 @@ GFile *pdfv_markdown_vault_adapter_resolve_attachment(
     g_clear_object(&candidate);
     g_free(path);
   }
-  if (!result && !strchr(decoded, '/'))
+  if (!result && search_vault && !strchr(decoded, '/'))
     result = find_attachment_recursive(self, self->root, decoded);
   if (!result)
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
                 "Attachment '%s' was not found in the vault", decoded);
   g_free(decoded);
   return result;
+}
+
+GFile *pdfv_markdown_vault_adapter_resolve_attachment(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gboolean relative_to_note, GError **error) {
+  return resolve_attachment(self, source_path, target, relative_to_note,
+                            TRUE, error);
+}
+
+GFile *pdfv_markdown_vault_adapter_resolve_attachment_fast(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gboolean relative_to_note) {
+  return resolve_attachment(self, source_path, target, relative_to_note,
+                            FALSE, NULL);
 }
 
 gchar *pdfv_markdown_vault_adapter_read_text(

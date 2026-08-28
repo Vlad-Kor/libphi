@@ -15,10 +15,15 @@ import { renderMath } from "../src/math/mathjax";
 import { smartPairTransaction } from "../src/markdown/pairs";
 import {
   LinkWidget,
+  LineHeightEstimateWidget,
   MarkdownLinkWidget,
   MathWidget,
-  resetPreviewImageCache,
+  estimatedHeadingHeight,
+  estimatedListLineHeight,
+  resetPreviewGeometryCaches,
   resizeImageMarkdown,
+  seedPreviewImageGeometry,
+  setPreviewGeometryContext,
   TaskWidget,
 } from "../src/widgets/preview";
 
@@ -30,6 +35,8 @@ afterEach(() => {
   delete document.documentElement.dataset.theme;
   document.documentElement.removeAttribute("style");
   delete (window as unknown as { MathJax?: unknown }).MathJax;
+  resetPreviewGeometryCaches();
+  setPreviewGeometryContext("", 780, 1);
 });
 
 function viewFor(text: string, anchor = text.length, head = anchor, extensions: unknown[] = []): EditorView {
@@ -177,6 +184,16 @@ describe("CodeMirror document transactions", () => {
     expect(new MathWidget("x", true, 0).estimatedHeight).toBe(64);
   });
 
+  it("gives cold headings and wrapped list lines realistic height-map hints", () => {
+    setPreviewGeometryContext("Geometry.md", 320, 1);
+    expect(estimatedHeadingHeight(1, "A heading")).toBeGreaterThan(50);
+    expect(estimatedListLineHeight("word ".repeat(30), 2))
+      .toBeGreaterThan(50);
+    const marker = new LineHeightEstimateWidget(72);
+    expect(marker.estimatedHeight).toBe(72);
+    expect(marker.toDOM().className).toBe("cm-height-estimate");
+  });
+
   it("reuses resolved image geometry when CodeMirror remounts a widget", async () => {
     const view = viewFor("![[Pictures/diagram.png]]");
     const requests: Array<{ id: string; type: string }> = [];
@@ -198,7 +215,11 @@ describe("CodeMirror document transactions", () => {
       protocol: 1,
       type: "request/response",
       id: requests[0].id,
-      payload: { result: { path: "Pictures/diagram.png" } },
+      payload: { result: {
+        path: "Pictures/diagram.png",
+        width: 1200,
+        height: 800,
+      } },
     });
     await settle();
 
@@ -210,9 +231,11 @@ describe("CodeMirror document transactions", () => {
     firstImage.dispatchEvent(new Event("load"));
     expect(first.style.minHeight).toBe("");
 
-    const remounted = new LinkWidget(
+    const remountedWidget = new LinkWidget(
       "Pictures/diagram.png", "diagram.png", 0, 25, true, true,
-    ).toDOM(view);
+    );
+    expect(remountedWidget.estimatedHeight).toBeCloseTo(522.67, 1);
+    const remounted = remountedWidget.toDOM(view);
     const remountedImage = remounted.querySelector<HTMLImageElement>("img")!;
     expect(requests).toHaveLength(1);
     expect(remountedImage.getAttribute("src"))
@@ -221,12 +244,32 @@ describe("CodeMirror document transactions", () => {
     expect(remountedImage.height).toBe(800);
     expect(remounted.style.minHeight).toBe("");
 
-    resetPreviewImageCache(view);
-    new LinkWidget(
+    resetPreviewGeometryCaches();
+    const coldAgain = new LinkWidget(
       "Pictures/diagram.png", "diagram.png", 0, 25, true, true,
-    ).toDOM(view);
+    );
+    expect(coldAgain.estimatedHeight).toBe(360);
+    coldAgain.toDOM(view);
     expect(requests).toHaveLength(2);
     window.removeEventListener("phi-native-message", capture);
+  });
+
+  it("uses image-header geometry before a cold off-screen widget mounts", () => {
+    setPreviewGeometryContext("Notes/Trees.md", 600, 1);
+    seedPreviewImageGeometry([{
+      target: "Pasted image.png",
+      path: "Images/Pasted image.png",
+      width: 1000,
+      height: 500,
+    }]);
+    const widget = new LinkWidget(
+      "Pasted image.png", "Pasted image.png", 0, 24, true, true,
+    );
+    expect(widget.estimatedHeight).toBeCloseTo(304, 0);
+    const view = viewFor("![[Pasted image.png]]");
+    const dom = widget.toDOM(view);
+    expect(dom.querySelector("img")?.getAttribute("src"))
+      .toBe("vault:///Images/Pasted%20image.png");
   });
 
   it("remeasures a note embed when its asynchronous body arrives", async () => {

@@ -235,6 +235,16 @@ static void test_note_metadata(VaultFixture *fixture, gconstpointer data) {
   g_free(relative);
   g_object_unref(image);
 
+  image = pdfv_markdown_vault_adapter_resolve_attachment_fast(
+      fixture->vault, "Nested/Other.md", "Images/Relative image.png", TRUE);
+  g_assert_nonnull(image);
+  g_object_unref(image);
+  /* The open-time geometry path must not fall back to a recursive vault scan.
+   * Ordinary lazy resolution above still finds this basename in ~Images. */
+  image = pdfv_markdown_vault_adapter_resolve_attachment_fast(
+      fixture->vault, "Nested/Other.md", "Diagram.png", FALSE);
+  g_assert_null(image);
+
   /* Opening a note without a workspace roots the adapter beside that note.
    * The same relative request must still resolve its sibling image folder. */
   PdfvMarkdownVaultAdapter *standalone =

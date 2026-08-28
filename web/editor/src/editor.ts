@@ -26,7 +26,10 @@ import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { smartPairs } from "./markdown/pairs";
 import { applyTheme, defaultSettings, updateRuntimeSettings } from "./settings";
 import type { DocumentScrollState, DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
-import { resetPreviewImageCache } from "./widgets/preview";
+import {
+  seedPreviewImageGeometry,
+  setPreviewGeometryContext,
+} from "./widgets/preview";
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
@@ -89,6 +92,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private scrollTimer = 0;
   private documentClasses: string[] = [];
   private darkTheme = document.documentElement.dataset.theme === "dark";
+  private fontScale = 1;
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -338,6 +342,23 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     });
   }
 
+  private updatePreviewGeometryContext(): void {
+    const style = window.getComputedStyle(this.view.contentDOM);
+    const horizontalPadding =
+      (Number.parseFloat(style.paddingLeft) || 0) +
+      (Number.parseFloat(style.paddingRight) || 0);
+    const measured = this.view.contentDOM.getBoundingClientRect().width -
+      horizontalPadding;
+    const viewportFallback = Math.max(160,
+      (window.innerWidth || 860) - horizontalPadding);
+    const width = measured > 1
+      ? measured
+      : this.settings.readableLineWidth
+        ? Math.min(780, viewportFallback)
+        : viewportFallback;
+    setPreviewGeometryContext(this.documentPath, width, this.fontScale);
+  }
+
   private sendSnapshot(type: string, id?: string): DocumentSnapshot {
     const snapshot = this.snapshot();
     this.applyDocumentClasses(snapshot.text);
@@ -494,7 +515,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     updatePreamble(document.preamble ?? "");
     this.applyDocumentClasses(document.text);
     setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
-    resetPreviewImageCache(this.view);
+    this.updatePreviewGeometryContext();
+    seedPreviewImageGeometry(document.imageGeometry ?? []);
     this.view.setState(this.createState(document.text));
     this.view.focus();
     if (document.scrollState)
@@ -524,6 +546,10 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       ));
     if (previous.allowRemoteImages !== this.settings.allowRemoteImages)
       effects.push(refreshLivePreview.of(null));
+    if (previous.readableLineWidth !== this.settings.readableLineWidth) {
+      this.updatePreviewGeometryContext();
+      effects.push(refreshLivePreview.of(null));
+    }
     if (previous.snippets !== this.settings.snippets ||
         previous.snippetVariables !== this.settings.snippetVariables)
       setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
@@ -532,14 +558,21 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   }
 
   updateTheme(theme: EditorTheme): void {
+    const previousFontScale = this.fontScale;
+    this.fontScale = theme.fontScale ?? 1;
     applyTheme(theme);
-    if (this.darkTheme === theme.dark) return;
-    this.darkTheme = theme.dark;
-    this.view.dispatch({
-      effects: themeCompartment.reconfigure(
+    const effects = [];
+    if (this.darkTheme !== theme.dark) {
+      this.darkTheme = theme.dark;
+      effects.push(themeCompartment.reconfigure(
         EditorView.theme({}, { dark: this.darkTheme }),
-      ),
-    });
+      ));
+    }
+    if (previousFontScale !== this.fontScale) {
+      this.updatePreviewGeometryContext();
+      effects.push(refreshLivePreview.of(null));
+    }
+    if (effects.length) this.view.dispatch({ effects });
   }
 
   runCommand(command: string): void {

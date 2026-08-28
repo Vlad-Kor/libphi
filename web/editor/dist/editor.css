@@ -322,6 +322,7 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .task-checkbox:indeterminate { border-color: var(--editor-accent); background: var(--editor-accent); }
 .task-checkbox:indeterminate::after { content: ""; display: block; width: 8px; height: 2px; margin: 7px 0 0 4px; border-radius: 2px; background: white; }
 .cm-concealed { display: none; }
+.cm-height-estimate { display: none; }
 .cm-live-heading, .cm-live-heading * { font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; font-weight: 780; line-height: 1.25; text-decoration: none !important; }
 .cm-live-heading { padding-top: .28em; }
 .cm-live-heading-1 { font-size: 2.25em; font-weight: 820; }

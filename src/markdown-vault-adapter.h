@@ -27,6 +27,9 @@ GFile *pdfv_markdown_vault_adapter_resolve_note(
 GFile *pdfv_markdown_vault_adapter_resolve_attachment(
     PdfvMarkdownVaultAdapter *self, const gchar *source_path,
     const gchar *target, gboolean relative_to_note, GError **error);
+GFile *pdfv_markdown_vault_adapter_resolve_attachment_fast(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gboolean relative_to_note);
 GFile *pdfv_markdown_vault_adapter_resolve_new_note(
     PdfvMarkdownVaultAdapter *self, const gchar *source_path,
     const gchar *target, GError **error);

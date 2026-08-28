@@ -112,6 +112,136 @@ function isExternal(target: string): boolean {
 
 const FALLBACK_BLOCK_IMAGE_HEIGHT = 360;
 const FALLBACK_NOTE_EMBED_HEIGHT = 360;
+const PREVIEW_IMAGE_CACHE_LIMIT = 256;
+const PREVIEW_HEIGHT_CACHE_LIMIT = 512;
+
+interface PreviewGeometryContext {
+  documentPath: string;
+  textWidth: number;
+  fontScale: number;
+  key: string;
+}
+
+let previewGeometryContext: PreviewGeometryContext = {
+  documentPath: "",
+  textWidth: 780,
+  fontScale: 1,
+  key: "\u0000w780:s100",
+};
+
+/* Geometry is deliberately bucketed. Tiny allocation differences should not
+ * invalidate otherwise useful measurements, and a 16 px width difference is
+ * smaller than the uncertainty in CodeMirror's off-screen line estimates. */
+export function setPreviewGeometryContext(
+  documentPath: string,
+  textWidth: number,
+  fontScale: number,
+): void {
+  const width = Math.max(160, Math.round((Number.isFinite(textWidth)
+    ? textWidth : 780) / 16) * 16);
+  const scale = Math.max(0.5, Math.min(3, Number.isFinite(fontScale)
+    ? fontScale : 1));
+  previewGeometryContext = {
+    documentPath,
+    textWidth: width,
+    fontScale: scale,
+    key: `${documentPath}\u0000w${width}:s${Math.round(scale * 100)}`,
+  };
+}
+
+function lruGet<T>(cache: Map<string, T>, key: string): T | undefined {
+  const value = cache.get(key);
+  if (value === undefined) return undefined;
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function lruSet<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  limit: number,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit)
+    cache.delete(cache.keys().next().value!);
+}
+
+const previewHeightCache = new Map<string, number>();
+
+function measuredHeight(context: PreviewGeometryContext, key: string): number | undefined {
+  return lruGet(previewHeightCache, `${context.key}\u0000${key}`);
+}
+
+function rememberHeight(
+  context: PreviewGeometryContext,
+  key: string,
+  height: number,
+): void {
+  if (!Number.isFinite(height) || height < 1) return;
+  lruSet(
+    previewHeightCache,
+    `${context.key}\u0000${key}`,
+    Math.max(1, Math.round(height * 2) / 2),
+    PREVIEW_HEIGHT_CACHE_LIMIT,
+  );
+}
+
+function estimateWrappedLineHeight(
+  text: string,
+  fontSize: number,
+  lineHeight: number,
+  availableWidth: number,
+  paddingTop = 0,
+): number {
+  /* Adwaita Sans averages a little over half an em for prose. This is only an
+   * off-screen estimate—the real DOM measurement replaces it on first view. */
+  const textWidth = Math.max(fontSize, text.length * fontSize * 0.54);
+  const lines = Math.max(1, Math.ceil(textWidth / Math.max(80, availableWidth)));
+  return lines * lineHeight + paddingTop;
+}
+
+export function estimatedHeadingHeight(level: number, text: string): number {
+  const factors = [2.25, 1.75, 1.42, 1.18, 1.08, 1];
+  const factor = factors[Math.max(0, Math.min(5, level - 1))];
+  const fontSize = 16 * previewGeometryContext.fontScale * factor;
+  return estimateWrappedLineHeight(
+    text,
+    fontSize,
+    fontSize * 1.25,
+    previewGeometryContext.textWidth,
+    fontSize * 0.28,
+  );
+}
+
+export function estimatedListLineHeight(text: string, indentEm: number): number {
+  const fontSize = 16 * previewGeometryContext.fontScale;
+  return estimateWrappedLineHeight(
+    text,
+    fontSize,
+    fontSize * 1.62,
+    previewGeometryContext.textWidth - indentEm * fontSize,
+  );
+}
+
+/* A zero-width widget lets CodeMirror's height map use a realistic cold
+ * estimate while leaving the actual Markdown line and all editing semantics
+ * untouched. Once the line is mounted, CodeMirror measures the real DOM. */
+export class LineHeightEstimateWidget extends WidgetType {
+  constructor(readonly height: number) { super(); }
+  eq(other: LineHeightEstimateWidget): boolean {
+    return Math.abs(other.height - this.height) < 0.5;
+  }
+  get estimatedHeight(): number { return this.height; }
+  toDOM(): HTMLElement {
+    const marker = document.createElement("span");
+    marker.className = "cm-height-estimate";
+    marker.setAttribute("aria-hidden", "true");
+    return marker;
+  }
+}
 
 interface PreviewImageCacheEntry {
   uri?: string;
@@ -120,44 +250,65 @@ interface PreviewImageCacheEntry {
   naturalHeight?: number;
 }
 
-/* CodeMirror intentionally unmounts widgets well outside the viewport. Keep
- * image resolution and intrinsic geometry for the lifetime of this document
- * so scrolling back over an image does not collapse, resolve, and flash it a
- * second time. A WeakMap also lets closed editors release the cache normally. */
-const previewImageCaches = new WeakMap<
-  EditorView,
-  Map<string, PreviewImageCacheEntry>
->();
+/* CodeMirror intentionally unmounts widgets well outside the viewport. Keep a
+ * small process-local cache across document switches and reopenings. Keys are
+ * scoped to the source note because the same relative image target can resolve
+ * to different files in different folders. */
+const previewImageCaches = new Map<string, PreviewImageCacheEntry>();
 
 function previewImageCache(
-  view: EditorView,
+  context: PreviewGeometryContext,
   key: string,
 ): PreviewImageCacheEntry {
-  let cache = previewImageCaches.get(view);
-  if (!cache) {
-    cache = new Map();
-    previewImageCaches.set(view, cache);
-  }
-  let entry = cache.get(key);
+  const scopedKey = `${context.documentPath}\u0000${key}`;
+  let entry = lruGet(previewImageCaches, scopedKey);
   if (!entry) {
     entry = {};
-    cache.set(key, entry);
+    lruSet(previewImageCaches, scopedKey, entry, PREVIEW_IMAGE_CACHE_LIMIT);
   }
   return entry;
 }
 
-export function resetPreviewImageCache(view: EditorView): void {
-  previewImageCaches.delete(view);
+export function resetPreviewGeometryCaches(): void {
+  previewImageCaches.clear();
+  previewHeightCache.clear();
+}
+
+export interface PreviewImageGeometry {
+  target: string;
+  path: string;
+  width: number;
+  height: number;
+}
+
+export function seedPreviewImageGeometry(
+  entries: readonly PreviewImageGeometry[],
+): void {
+  for (const geometry of entries.slice(0, 64)) {
+    if (!geometry.target || !geometry.path || geometry.width <= 0 ||
+        geometry.height <= 0) continue;
+    const key = `${previewGeometryContext.documentPath}\u0000local:${geometry.target}`;
+    lruSet(previewImageCaches, key, {
+      uri: vaultUri(geometry.path),
+      naturalWidth: geometry.width,
+      naturalHeight: geometry.height,
+    }, PREVIEW_IMAGE_CACHE_LIMIT);
+  }
 }
 
 function resolveLocalImage(
-  view: EditorView,
   image: HTMLImageElement,
   target: string,
   cacheKey: string,
+  context: PreviewGeometryContext,
 ): void {
-  const entry = previewImageCache(view, cacheKey);
+  const entry = previewImageCache(context, cacheKey);
   const apply = (uri: string) => {
+    if (entry.naturalWidth && entry.naturalHeight &&
+        !image.width && !image.height) {
+      image.width = entry.naturalWidth;
+      image.height = entry.naturalHeight;
+    }
     image.src = uri;
     image.classList.remove("dimmed");
   };
@@ -168,10 +319,22 @@ function resolveLocalImage(
 
   image.classList.add("dimmed");
   if (!entry.resolving) {
-    const resolving = requestNative<{ path?: string }>(
-      "attachment/resolve", { target, relative: true },
+    const resolving = requestNative<{
+      path?: string;
+      width?: number;
+      height?: number;
+    }>(
+      "attachment/resolve", {
+        target,
+        relative: true,
+        sourcePath: context.documentPath,
+      },
     ).then((result) => {
       if (!result.path) throw new Error("Image was not found in the vault");
+      if ((result.width ?? 0) > 0 && (result.height ?? 0) > 0) {
+        entry.naturalWidth = result.width;
+        entry.naturalHeight = result.height;
+      }
       const uri = vaultUri(result.path);
       entry.uri = uri;
       return uri;
@@ -202,22 +365,41 @@ function estimatedBlockImageHeight(...sources: string[]): number {
   return FALLBACK_BLOCK_IMAGE_HEIGHT;
 }
 
-const noteEmbedHeights = new Map<string, number>();
+function estimatedCachedImageHeight(
+  context: PreviewGeometryContext,
+  cacheKey: string,
+  ...sources: string[]
+): number {
+  const fallback = estimatedBlockImageHeight(...sources);
+  const scopedKey = `${context.documentPath}\u0000${cacheKey}`;
+  const entry = lruGet(previewImageCaches, scopedKey);
+  if (!entry?.naturalWidth || !entry.naturalHeight) return fallback;
+  for (const source of sources) {
+    const size = source.match(/\|(\d+)(?:x(\d+))?(?:$|[?#])/);
+    if (size?.[2]) return fallback;
+    if (size?.[1]) {
+      const width = Math.min(context.textWidth, Number(size[1]));
+      return Math.max(1, width * entry.naturalHeight / entry.naturalWidth);
+    }
+  }
+  const width = Math.min(context.textWidth, entry.naturalWidth);
+  return Math.max(1, width * entry.naturalHeight / entry.naturalWidth);
+}
+
 const widgetResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function observeNoteEmbedResize(
   view: EditorView,
-  target: string,
   element: HTMLElement,
+  context: PreviewGeometryContext,
+  geometryKey: string,
 ): void {
   const measure = () => view.requestMeasure({
     key: element,
     read: () => element.isConnected
       ? element.getBoundingClientRect().height
       : 0,
-    write: (height) => {
-      if (height > 0) noteEmbedHeights.set(target, height);
-    },
+    write: (height) => rememberHeight(context, geometryKey, height),
   });
   measure();
   if (typeof ResizeObserver === "undefined") return;
@@ -264,6 +446,8 @@ export class HorizontalRuleWidget extends WidgetType {
 }
 
 export class MathWidget extends WidgetType {
+  readonly geometryContext = previewGeometryContext;
+
   constructor(
     readonly latex: string,
     readonly display: boolean,
@@ -275,10 +459,25 @@ export class MathWidget extends WidgetType {
   eq(other: MathWidget): boolean {
     return other.latex === this.latex && other.display === this.display &&
       other.from === this.from && other.mathRevision === this.mathRevision &&
-      other.editing === this.editing;
+      other.editing === this.editing &&
+      other.geometryContext.key === this.geometryContext.key;
   }
 
-  get estimatedHeight(): number { return this.display ? 64 : -1; }
+  private get geometryKey(): string {
+    return `math:${this.mathRevision}:${this.latex}`;
+  }
+
+  get estimatedHeight(): number {
+    if (!this.display) return -1;
+    const cached = measuredHeight(this.geometryContext, this.geometryKey);
+    if (cached != null) return cached;
+    const rows = Math.max(
+      1,
+      this.latex.split(/(?:\\\\|\n|\\begin\{(?:align\*?|gather\*?|matrix|pmatrix|bmatrix)\})/).length,
+    );
+    return Math.max(64, Math.min(720,
+      (42 + (rows - 1) * 24) * this.geometryContext.fontScale));
+  }
 
   toDOM(view: EditorView): HTMLElement {
     const element = document.createElement(this.display ? "div" : "span");
@@ -288,7 +487,18 @@ export class MathWidget extends WidgetType {
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
     element.addEventListener("click", () => reveal(view, this.from));
     const rendered = renderMath(this.latex, this.display, element);
-    if (this.display) void rendered.then(() => wireMathScroll(element));
+    if (this.display) void rendered.then(() => {
+      wireMathScroll(element);
+      view.requestMeasure({
+        key: element,
+        read: () => element.isConnected
+          ? element.getBoundingClientRect().height
+          : 0,
+        write: (height) => rememberHeight(
+          this.geometryContext, this.geometryKey, height,
+        ),
+      });
+    });
     return element;
   }
 
@@ -349,10 +559,12 @@ function interactiveImage(
   block: boolean,
   cacheKey: string,
   estimatedHeight: number,
+  context: PreviewGeometryContext,
+  geometryKey: string,
 ): HTMLElement {
   const container = document.createElement("span");
   container.className = `image-widget image-widget-${block ? "block" : "inline"}`;
-  const cache = previewImageCache(view, cacheKey);
+  const cache = previewImageCache(context, cacheKey);
   if (cache.naturalWidth && cache.naturalHeight) {
     if (image.width && !image.height) {
       image.height = Math.max(1, Math.round(
@@ -375,7 +587,13 @@ function interactiveImage(
     container.style.removeProperty("min-height");
     if (measured) return;
     measured = true;
-    view.requestMeasure();
+    view.requestMeasure({
+      key: container,
+      read: () => container.isConnected
+        ? container.getBoundingClientRect().height
+        : 0,
+      write: (height) => rememberHeight(context, geometryKey, height),
+    });
   };
   image.addEventListener("load", imageLoaded);
   if (image.complete && image.naturalWidth > 0) queueMicrotask(imageLoaded);
@@ -429,6 +647,8 @@ function interactiveImage(
 }
 
 export class LinkWidget extends WidgetType {
+  readonly geometryContext = previewGeometryContext;
+
   constructor(
     readonly target: string,
     readonly label: string,
@@ -441,14 +661,24 @@ export class LinkWidget extends WidgetType {
   eq(other: LinkWidget): boolean {
     return other.target === this.target && other.label === this.label &&
       other.from === this.from && other.to === this.to &&
-      other.embed === this.embed && other.block === this.block;
+      other.embed === this.embed && other.block === this.block &&
+      other.geometryContext.key === this.geometryContext.key;
+  }
+
+  private get geometryKey(): string {
+    return `embed:${this.target}:${this.label}`;
   }
 
   get estimatedHeight(): number {
     if (!this.embed || !this.block) return -1;
+    const cached = measuredHeight(this.geometryContext, this.geometryKey);
+    if (cached != null) return cached;
+    const path = this.target.split(/[|#]/)[0];
     return targetIsImage(this.target)
-      ? estimatedBlockImageHeight(this.target)
-      : noteEmbedHeights.get(this.target) ?? FALLBACK_NOTE_EMBED_HEIGHT;
+      ? estimatedCachedImageHeight(
+        this.geometryContext, `local:${path}`, this.target,
+      )
+      : FALLBACK_NOTE_EMBED_HEIGHT;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -488,10 +718,12 @@ export class LinkWidget extends WidgetType {
         image.width = Number(size[1]);
         if (size[2]) image.height = Number(size[2]);
       }
-      resolveLocalImage(view, image, path, cacheKey);
+      resolveLocalImage(
+        image, path, cacheKey, this.geometryContext,
+      );
       return interactiveImage(
         view, image, this.from, this.to, this.block, cacheKey,
-        estimatedBlockImageHeight(this.target),
+        this.estimatedHeight, this.geometryContext, this.geometryKey,
       );
     }
     if (["mp3", "ogg", "wav", "flac", "m4a"].includes(extension ?? "")) {
@@ -518,8 +750,7 @@ export class LinkWidget extends WidgetType {
     }
     const container = document.createElement("section");
     container.className = "note-embed";
-    const reservedHeight = noteEmbedHeights.get(this.target) ??
-      FALLBACK_NOTE_EMBED_HEIGHT;
+    const reservedHeight = this.estimatedHeight;
     container.style.minHeight = `${reservedHeight}px`;
     const title = document.createElement("button");
     title.type = "button";
@@ -540,7 +771,9 @@ export class LinkWidget extends WidgetType {
         body.innerHTML = renderMarkdown(result?.text ?? "");
         wireRenderedContent(body, result?.path ?? "");
         container.style.removeProperty("min-height");
-        observeNoteEmbedResize(view, this.target, container);
+        observeNoteEmbedResize(
+          view, container, this.geometryContext, this.geometryKey,
+        );
       })
       .catch((error) => {
         body.className = "embed-body render-error";
@@ -562,6 +795,8 @@ export class LinkWidget extends WidgetType {
 }
 
 export class MarkdownLinkWidget extends WidgetType {
+  readonly geometryContext = previewGeometryContext;
+
   constructor(
     readonly target: string,
     readonly label: string,
@@ -574,24 +809,33 @@ export class MarkdownLinkWidget extends WidgetType {
   eq(other: MarkdownLinkWidget): boolean {
     return other.target === this.target && other.label === this.label &&
       other.from === this.from && other.image === this.image &&
-      other.to === this.to && other.block === this.block;
+      other.to === this.to && other.block === this.block &&
+      other.geometryContext.key === this.geometryContext.key;
+  }
+
+  private get geometryKey(): string {
+    return `image:${this.target}:${this.label}`;
+  }
+
+  private get imageCacheKey(): string {
+    if (/^data:/i.test(this.target)) return `data:${this.from}:${this.to}`;
+    if (/^https?:/i.test(this.target)) return `remote:${this.target}`;
+    return `local:${this.target}`;
   }
 
   get estimatedHeight(): number {
-    return this.image && this.block
-      ? estimatedBlockImageHeight(this.label, this.target)
-      : -1;
+    if (!this.image || !this.block) return -1;
+    return measuredHeight(this.geometryContext, this.geometryKey) ??
+      estimatedCachedImageHeight(
+        this.geometryContext, this.imageCacheKey, this.label, this.target,
+      );
   }
 
   toDOM(view: EditorView): HTMLElement {
     if (this.image) {
       const image = document.createElement("img");
       const localCacheKey = `local:${this.target}`;
-      const cacheKey = /^data:/i.test(this.target)
-        ? `data:${this.from}:${this.to}`
-        : /^https?:/i.test(this.target)
-          ? `remote:${this.target}`
-          : localCacheKey;
+      const cacheKey = this.imageCacheKey;
       image.className = "image-embed";
       image.alt = this.label.split("|")[0];
       image.addEventListener("error", () => {
@@ -616,11 +860,13 @@ export class MarkdownLinkWidget extends WidgetType {
         }, { once: true });
       }
       else {
-        resolveLocalImage(view, image, this.target, localCacheKey);
+        resolveLocalImage(
+          image, this.target, localCacheKey, this.geometryContext,
+        );
       }
       return interactiveImage(
         view, image, this.from, this.to, this.block, cacheKey,
-        estimatedBlockImageHeight(this.label, this.target),
+        this.estimatedHeight, this.geometryContext, this.geometryKey,
       );
     }
 

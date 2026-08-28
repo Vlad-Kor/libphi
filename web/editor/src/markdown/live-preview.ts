@@ -8,6 +8,7 @@ import {
   HiddenWidget,
   HorizontalRuleWidget,
   HtmlPreviewWidget,
+  LineHeightEstimateWidget,
   LinkWidget,
   MarkdownLinkWidget,
   MathWidget,
@@ -16,6 +17,8 @@ import {
   RawHtmlWidget,
   TagWidget,
   TaskWidget,
+  estimatedHeadingHeight,
+  estimatedListLineHeight,
 } from "../widgets/preview";
 import { rawHtmlIsBlock } from "./render";
 import { pinPreviewSource, previewSourceLine } from "./source-edit";
@@ -203,6 +206,15 @@ function buildDecorations(state: EditorState): DecorationSet {
       case "heading": {
         const level = Number(node.meta?.level ?? 1);
         builder.add(node.from, node.from, Decoration.line({ class: `cm-live-heading cm-live-heading-${level}` }));
+        const headingText = state.sliceDoc(
+          Number(node.contentFrom ?? node.from), node.to,
+        );
+        builder.add(node.from, node.from, Decoration.widget({
+          widget: new LineHeightEstimateWidget(
+            estimatedHeadingHeight(level, headingText),
+          ),
+          side: -1,
+        }));
         if (!isActive && node.contentFrom != null) builder.add(node.from, node.contentFrom, hidden);
         break;
       }
@@ -221,6 +233,17 @@ function buildDecorations(state: EditorState): DecorationSet {
             class: `cm-live-list-item${ordered ? " cm-live-ordered-list-item" : ""}`,
             style: `--phi-list-content-indent:${contentIndent}`,
           },
+        }));
+        const listLine = state.doc.lineAt(node.from);
+        const listText = state.sliceDoc(
+          Number(node.meta?.contentFrom ?? node.from), listLine.to,
+        );
+        builder.add(node.from, node.from, Decoration.widget({
+          widget: new LineHeightEstimateWidget(estimatedListLineHeight(
+            listText,
+            indentColumns * 0.375 + (node.meta?.task ? 1.5 : markerIndent),
+          )),
+          side: -1,
         }));
         if (!isActive) {
           const markerFrom = Number(node.meta?.markerFrom ?? node.from);

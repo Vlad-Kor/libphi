@@ -12,6 +12,8 @@
 #include "markdown-resource-scheme.h"
 #include "markdown-vault-adapter.h"
 
+#include <gdk-pixbuf/gdk-pixbuf.h>
+
 #include <json-glib/json-glib.h>
 #include <webkit/webkit.h>
 
@@ -20,6 +22,7 @@
 
 #define MAX_ATTACHMENT_BYTES (20 * 1024 * 1024)
 #define MAX_EMBED_DEPTH 4
+#define MAX_PREVIEW_IMAGE_GEOMETRY 64
 
 typedef struct {
   GTask *task;
@@ -148,6 +151,116 @@ static gchar *read_preamble(PdfvMarkdownEditor *self) {
   return contents;
 }
 
+static gboolean markdown_target_is_image(const gchar *target) {
+  gchar *path = g_strdup(target);
+  gchar *suffix = strpbrk(path, "?#");
+  if (suffix)
+    *suffix = '\0';
+  const gchar *dot = strrchr(path, '.');
+  gboolean image = dot &&
+      (g_ascii_strcasecmp(dot, ".png") == 0 ||
+       g_ascii_strcasecmp(dot, ".jpg") == 0 ||
+       g_ascii_strcasecmp(dot, ".jpeg") == 0 ||
+       g_ascii_strcasecmp(dot, ".gif") == 0 ||
+       g_ascii_strcasecmp(dot, ".webp") == 0 ||
+       g_ascii_strcasecmp(dot, ".svg") == 0 ||
+       g_ascii_strcasecmp(dot, ".avif") == 0);
+  g_free(path);
+  return image;
+}
+
+static void append_preview_image_geometry(PdfvMarkdownEditor *self,
+                                          JsonArray *geometry,
+                                          GHashTable *seen,
+                                          const gchar *raw_target,
+                                          gboolean wiki_target) {
+  if (!raw_target || json_array_get_length(geometry) >=
+                         MAX_PREVIEW_IMAGE_GEOMETRY)
+    return;
+  gchar *target = g_strdup(raw_target);
+  g_strstrip(target);
+  if (wiki_target) {
+    gchar *suffix = strpbrk(target, "|#");
+    if (suffix)
+      *suffix = '\0';
+    g_strstrip(target);
+  }
+  if (!*target || !markdown_target_is_image(target) ||
+      g_hash_table_contains(seen, target)) {
+    g_free(target);
+    return;
+  }
+  g_hash_table_add(seen, g_strdup(target));
+
+  /* Opening a note must never recursively walk a vault. This fast resolver
+   * only checks beside the note, the vault root, and the configured image
+   * folder. Unusual targets retain the normal lazy 360 px estimate. */
+  GFile *file = pdfv_markdown_vault_adapter_resolve_attachment_fast(
+      self->vault, self->relative_path, target, TRUE);
+  if (!file) {
+    g_free(target);
+    return;
+  }
+  gchar *local_path = g_file_get_path(file);
+  gint width = 0;
+  gint height = 0;
+  if (local_path && gdk_pixbuf_get_file_info(local_path, &width, &height) &&
+      width > 0 && height > 0) {
+    gchar *relative = pdfv_markdown_vault_adapter_relative_path(
+        self->vault, file);
+    if (relative) {
+      JsonObject *entry = json_object_new_owned();
+      json_object_set_string_member(entry, "target", target);
+      json_object_set_string_member(entry, "path", relative);
+      json_object_set_int_member(entry, "width", width);
+      json_object_set_int_member(entry, "height", height);
+      json_array_add_object_element(geometry, entry);
+      g_free(relative);
+    }
+  }
+  g_free(local_path);
+  g_object_unref(file);
+  g_free(target);
+}
+
+static JsonArray *collect_preview_image_geometry(PdfvMarkdownEditor *self) {
+  JsonArray *geometry = json_array_new();
+  GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                                           NULL);
+  GRegex *wiki = g_regex_new("!\\[\\[([^]\\r\\n]+)\\]\\]", 0, 0,
+                             NULL);
+  GRegex *markdown = g_regex_new(
+      "!\\[[^]\\r\\n]*\\]\\((?:<([^>\\r\\n]+)>|([^\\s)\\r\\n]+))",
+      0, 0, NULL);
+  GMatchInfo *match = NULL;
+  g_regex_match(wiki, self->current_text, 0, &match);
+  while (g_match_info_matches(match) &&
+         json_array_get_length(geometry) < MAX_PREVIEW_IMAGE_GEOMETRY) {
+    gchar *target = g_match_info_fetch(match, 1);
+    append_preview_image_geometry(self, geometry, seen, target, TRUE);
+    g_free(target);
+    g_match_info_next(match, NULL);
+  }
+  g_match_info_free(match);
+  match = NULL;
+  g_regex_match(markdown, self->current_text, 0, &match);
+  while (g_match_info_matches(match) &&
+         json_array_get_length(geometry) < MAX_PREVIEW_IMAGE_GEOMETRY) {
+    gchar *angle = g_match_info_fetch(match, 1);
+    gchar *plain = g_match_info_fetch(match, 2);
+    append_preview_image_geometry(
+        self, geometry, seen, angle && *angle ? angle : plain, FALSE);
+    g_free(angle);
+    g_free(plain);
+    g_match_info_next(match, NULL);
+  }
+  g_match_info_free(match);
+  g_regex_unref(markdown);
+  g_regex_unref(wiki);
+  g_hash_table_unref(seen);
+  return geometry;
+}
+
 static void send_open_document(PdfvMarkdownEditor *self,
                                const gchar *message_type) {
   if (!self->ready || !self->file || !self->current_text)
@@ -170,6 +283,11 @@ static void send_open_document(PdfvMarkdownEditor *self,
   }
   gchar *preamble = read_preamble(self);
   json_object_set_string_member(payload, "preamble", preamble);
+  JsonArray *image_geometry = collect_preview_image_geometry(self);
+  if (json_array_get_length(image_geometry) > 0)
+    json_object_set_array_member(payload, "imageGeometry", image_geometry);
+  else
+    json_array_unref(image_geometry);
   pdfv_markdown_editor_bridge_send(self->bridge, message_type, NULL, payload);
   self->has_initial_scroll_state = FALSE;
   g_free(preamble);
@@ -783,9 +901,20 @@ static void handle_attachment_action(PdfvMarkdownEditor *self,
         self->vault, file);
     JsonObject *value = json_object_new_owned();
     json_object_set_string_member(value, "path", relative_path);
+    gchar *local_path = g_file_get_path(file);
+    if (local_path) {
+      gint width = 0;
+      gint height = 0;
+      if (gdk_pixbuf_get_file_info(local_path, &width, &height) &&
+          width > 0 && height > 0) {
+        json_object_set_int_member(value, "width", width);
+        json_object_set_int_member(value, "height", height);
+      }
+    }
     JsonNode *node = json_node_new(JSON_NODE_OBJECT);
     json_node_take_object(node, value);
     send_response_node(self, id, node, NULL);
+    g_free(local_path);
     g_free(relative_path);
   }
   g_clear_error(&error);

@@ -24,6 +24,12 @@ export interface OpenDocument {
   revision: number;
   lineEnding: "LF" | "CRLF";
   preamble?: string;
+  imageGeometry?: Array<{
+    target: string;
+    path: string;
+    width: number;
+    height: number;
+  }>;
   scrollState?: DocumentScrollState;
 }
 

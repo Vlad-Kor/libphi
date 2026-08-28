@@ -26,6 +26,7 @@ gio_dep = dependency('gio-2.0')
 mupdf_dep = dependency('mupdf')
 webkit_dep = dependency('webkitgtk-6.0', version: '>= 2.40')
 json_glib_dep = dependency('json-glib-1.0')
+gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0')
 m_dep = cc.find_library('m', required: false)
 
 inc = include_directories('.')
