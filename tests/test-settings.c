@@ -20,6 +20,11 @@ static void test_workspace_attachment_policy(void) {
   g_assert_false(pdfv_settings_get_pdf_inverted(settings));
   g_assert_false(
       pdfv_settings_get_remember_document_positions(settings));
+  gint window_width = 0;
+  gint window_height = 0;
+  pdfv_settings_get_window_size(settings, &window_width, &window_height);
+  g_assert_cmpint(window_width, ==, 900);
+  g_assert_cmpint(window_height, ==, 700);
   g_assert_cmpint(pdfv_settings_get_image_paste_style(settings), ==,
                   PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED);
   pdfv_settings_set_workspace_attachment_policy(
@@ -37,6 +42,7 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_latex_conceal(settings, TRUE);
   pdfv_settings_set_pdf_inverted(settings, TRUE);
   pdfv_settings_set_remember_document_positions(settings, TRUE);
+  pdfv_settings_set_window_size(settings, 1280, 840);
   pdfv_settings_set_image_paste_style(
       settings, PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK);
   pdfv_settings_set_latex_snippets(settings, "[{trigger:'x'}]");
@@ -62,6 +68,9 @@ static void test_workspace_attachment_policy(void) {
   g_assert_true(pdfv_settings_get_pdf_inverted(settings));
   g_assert_true(
       pdfv_settings_get_remember_document_positions(settings));
+  pdfv_settings_get_window_size(settings, &window_width, &window_height);
+  g_assert_cmpint(window_width, ==, 1280);
+  g_assert_cmpint(window_height, ==, 840);
   g_assert_cmpint(pdfv_settings_get_image_paste_style(settings), ==,
                   PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK);
   g_assert_cmpstr(pdfv_settings_get_latex_snippets(settings), ==,

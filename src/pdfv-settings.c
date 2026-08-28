@@ -9,6 +9,11 @@
 
 #define SETTINGS_GROUP "Markdown"
 #define GENERAL_GROUP "General"
+#define DEFAULT_WINDOW_WIDTH 900
+#define DEFAULT_WINDOW_HEIGHT 700
+#define MIN_WINDOW_WIDTH 480
+#define MIN_WINDOW_HEIGHT 320
+#define MAX_WINDOW_SIZE 32768
 
 struct _PdfvSettings {
   gdouble markdown_font_scale;
@@ -17,6 +22,8 @@ struct _PdfvSettings {
   gboolean latex_conceal;
   gboolean pdf_inverted;
   gboolean remember_document_positions;
+  gint window_width;
+  gint window_height;
   PdfvImagePasteStyle image_paste_style;
   gchar *latex_snippets;
   gchar *latex_snippet_variables;
@@ -43,6 +50,8 @@ PdfvSettings *pdfv_settings_new(void) {
   PdfvSettings *self = g_new0(PdfvSettings, 1);
   self->markdown_font_scale = 1.0;
   self->readable_line_width = TRUE;
+  self->window_width = DEFAULT_WINDOW_WIDTH;
+  self->window_height = DEFAULT_WINDOW_HEIGHT;
   self->image_paste_style = PDFV_IMAGE_PASTE_STYLE_WIKI_EMBED;
   self->latex_snippets = g_strdup("");
   self->latex_snippet_variables = g_strdup("");
@@ -79,6 +88,18 @@ PdfvSettings *pdfv_settings_new(void) {
         self->file, GENERAL_GROUP, "remember-document-positions", &error);
     if (!error)
       self->remember_document_positions = remember;
+    g_clear_error(&error);
+    gint window_width = g_key_file_get_integer(
+        self->file, GENERAL_GROUP, "window-width", &error);
+    if (!error)
+      self->window_width = CLAMP(window_width, MIN_WINDOW_WIDTH,
+                                 MAX_WINDOW_SIZE);
+    g_clear_error(&error);
+    gint window_height = g_key_file_get_integer(
+        self->file, GENERAL_GROUP, "window-height", &error);
+    if (!error)
+      self->window_height = CLAMP(window_height, MIN_WINDOW_HEIGHT,
+                                  MAX_WINDOW_SIZE);
     g_clear_error(&error);
     gchar *paste_style = g_key_file_get_string(
         self->file, SETTINGS_GROUP, "image-paste-style", NULL);
@@ -126,6 +147,10 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
   g_key_file_set_boolean(self->file, GENERAL_GROUP,
                          "remember-document-positions",
                          self->remember_document_positions);
+  g_key_file_set_integer(self->file, GENERAL_GROUP, "window-width",
+                         self->window_width);
+  g_key_file_set_integer(self->file, GENERAL_GROUP, "window-height",
+                         self->window_height);
   g_key_file_set_string(
       self->file, SETTINGS_GROUP, "image-paste-style",
       self->image_paste_style == PDFV_IMAGE_PASTE_STYLE_MARKDOWN_LINK
@@ -221,6 +246,22 @@ void pdfv_settings_set_remember_document_positions(
     PdfvSettings *self, gboolean enabled) {
   g_return_if_fail(self != NULL);
   self->remember_document_positions = enabled;
+}
+
+void pdfv_settings_get_window_size(PdfvSettings *self, gint *width,
+                                   gint *height) {
+  g_return_if_fail(self != NULL);
+  if (width)
+    *width = self->window_width;
+  if (height)
+    *height = self->window_height;
+}
+
+void pdfv_settings_set_window_size(PdfvSettings *self, gint width,
+                                   gint height) {
+  g_return_if_fail(self != NULL);
+  self->window_width = CLAMP(width, MIN_WINDOW_WIDTH, MAX_WINDOW_SIZE);
+  self->window_height = CLAMP(height, MIN_WINDOW_HEIGHT, MAX_WINDOW_SIZE);
 }
 
 PdfvImagePasteStyle pdfv_settings_get_image_paste_style(
@@ -389,6 +430,8 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->pdf_inverted = source->pdf_inverted;
   destination->remember_document_positions =
       source->remember_document_positions;
+  destination->window_width = source->window_width;
+  destination->window_height = source->window_height;
   destination->image_paste_style = source->image_paste_style;
   pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
   pdfv_settings_set_latex_snippet_variables(

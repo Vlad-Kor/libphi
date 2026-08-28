@@ -145,6 +145,9 @@ struct _PdfvWindow {
   PdfvMarkdownEditor *current_editor;
   AdwTabPage *window_title_page;
   gboolean closing_window;
+  gboolean closing_after_tab_transfer;
+  gint normal_window_width;
+  gint normal_window_height;
   gboolean fullscreen_chrome_active;
   gboolean presentation_mode_active;
   gboolean fullscreen_sidebar_was_visible;
@@ -4841,6 +4844,106 @@ static void action_tab_context_open_new_window(GSimpleAction *action,
     open_file_in_new_window(self, self->tab_context_file);
 }
 
+static gboolean tab_can_move_to_new_window(PdfvWindow *self,
+                                           AdwTabPage *page) {
+  if (!page || page == self->workspace_preview_tab ||
+      gtk_widget_get_visible(self->workspace_search_overlay))
+    return FALSE;
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  return GTK_IS_STACK(stack) &&
+      !g_object_get_data(G_OBJECT(stack), "open-cancellable") &&
+      !g_object_get_data(G_OBJECT(page), "markdown-close-pending");
+}
+
+static void rebind_transferred_tab(PdfvWindow *source,
+                                   PdfvWindow *destination,
+                                   AdwTabPage *page) {
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  PdfvDocumentView *view = GTK_IS_STACK(stack)
+      ? g_object_get_data(G_OBJECT(stack), "document-view") : NULL;
+  PdfvMarkdownEditor *editor = GTK_IS_STACK(stack)
+      ? g_object_get_data(G_OBJECT(stack), "markdown-editor") : NULL;
+
+  if (view) {
+    g_signal_handlers_disconnect_by_data(view, source);
+    setup_document_view_signals(destination, view);
+  }
+  if (editor) {
+    g_signal_handlers_disconnect_by_data(editor, source);
+    setup_markdown_editor_signals(destination, editor);
+    apply_preferences_to_editor(destination, editor);
+    if (pdfv_markdown_editor_get_ready(editor))
+      schedule_markdown_editor_prewarm(
+          destination, pdfv_markdown_editor_get_vault_root(editor));
+  }
+}
+
+static void action_tab_context_move_new_window(GSimpleAction *action,
+                                               GVariant *parameter,
+                                               gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  AdwTabPage *page = self->tab_context_page;
+  if (!tab_can_move_to_new_window(self, page))
+    return;
+
+  GtkApplication *application =
+      gtk_window_get_application(GTK_WINDOW(self));
+  if (!application)
+    return;
+
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  GFile *file = g_object_get_data(G_OBJECT(stack), "document-file");
+  gboolean was_workspace_browse = page == self->workspace_browse_tab;
+  gboolean close_source = adw_tab_view_get_n_pages(self->tab_view) == 1;
+
+  PdfvWindow *destination =
+      pdfv_window_new(ADW_APPLICATION(application));
+  if (file && self->workspace) {
+    GFile *root = pdfv_workspace_get_folder(self->workspace);
+    if (pdfv_workspace_file_is_within(root, file))
+      open_workspace_folder_internal(destination, root, FALSE);
+  }
+
+  AdwTabPage *placeholder =
+      adw_tab_view_get_selected_page(destination->tab_view);
+  rebind_transferred_tab(self, destination, page);
+  if (page == self->workspace_browse_tab)
+    self->workspace_browse_tab = NULL;
+  g_object_set_data(G_OBJECT(page), "tab-return-page", NULL);
+  if (self->current_view ==
+      g_object_get_data(G_OBJECT(stack), "document-view"))
+    self->current_view = NULL;
+  if (self->current_editor ==
+      g_object_get_data(G_OBJECT(stack), "markdown-editor"))
+    self->current_editor = NULL;
+
+  adw_tab_view_transfer_page(self->tab_view, page,
+                             destination->tab_view,
+                             adw_tab_view_get_n_pages(destination->tab_view));
+  if (was_workspace_browse)
+    destination->workspace_browse_tab = page;
+  adw_tab_view_set_selected_page(destination->tab_view, page);
+
+  if (placeholder && placeholder != page &&
+      adw_tab_view_get_page_position(destination->tab_view, placeholder) >= 0) {
+    g_object_set_data(G_OBJECT(placeholder), "skip-closed-tab-history",
+                      GINT_TO_POINTER(1));
+    adw_tab_view_close_page(destination->tab_view, placeholder);
+  }
+  g_clear_object(&self->tab_context_page);
+  g_clear_object(&self->tab_context_file);
+  if (destination->workspace)
+    save_workspace_tab_session(destination);
+  gtk_window_present(GTK_WINDOW(destination));
+
+  if (close_source) {
+    self->closing_after_tab_transfer = TRUE;
+    gtk_window_close(GTK_WINDOW(self));
+  }
+}
+
 static void action_tab_context_open_default(GSimpleAction *action,
                                             GVariant *parameter,
                                             gpointer user_data) {
@@ -4909,6 +5012,8 @@ static void on_tab_context_menu_setup(AdwTabView *view, AdwTabPage *page,
   };
   for (guint i = 0; i < G_N_ELEMENTS(file_actions); i++)
     set_window_action_enabled(self, file_actions[i], has_file);
+  set_window_action_enabled(self, "tab-context-move-new-window",
+                            tab_can_move_to_new_window(self, page));
   set_window_action_enabled(self, "tab-context-close", page != NULL);
   set_window_action_enabled(
       self, "tab-context-close-others",
@@ -6235,6 +6340,8 @@ static GActionEntry win_actions[] = {
      .activate = action_tab_context_open_new_tab},
     {.name = "tab-context-open-new-window",
      .activate = action_tab_context_open_new_window},
+    {.name = "tab-context-move-new-window",
+     .activate = action_tab_context_move_new_window},
     {.name = "tab-context-open-default",
      .activate = action_tab_context_open_default},
     {.name = "tab-context-open-folder",
@@ -6366,10 +6473,71 @@ static void on_sidebar_show_changed(AdwOverlaySplitView *split_view,
   gtk_toggle_button_set_active(self->sidebar_button, visible);
 }
 
+static void on_window_surface_layout(GdkSurface *surface, gint width,
+                                     gint height, PdfvWindow *self) {
+  (void)surface;
+  if (self->fullscreen_chrome_active ||
+      gtk_window_is_fullscreen(GTK_WINDOW(self)) ||
+      gtk_window_is_maximized(GTK_WINDOW(self)) || width <= 0 || height <= 0)
+    return;
+  self->normal_window_width = width;
+  self->normal_window_height = height;
+}
+
+static void on_window_realized(GtkWidget *widget, PdfvWindow *self) {
+  GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(widget));
+  if (!surface)
+    return;
+  g_signal_connect_object(surface, "layout",
+                          G_CALLBACK(on_window_surface_layout), self, 0);
+}
+
+static void persist_window_size(PdfvWindow *self) {
+  if (!self->fullscreen_chrome_active &&
+      !gtk_window_is_fullscreen(GTK_WINDOW(self)) &&
+      !gtk_window_is_maximized(GTK_WINDOW(self))) {
+    GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(self));
+    if (surface && gdk_surface_get_width(surface) > 0 &&
+        gdk_surface_get_height(surface) > 0) {
+      self->normal_window_width = gdk_surface_get_width(surface);
+      self->normal_window_height = gdk_surface_get_height(surface);
+    }
+  }
+
+  GtkApplication *application =
+      gtk_window_get_application(GTK_WINDOW(self));
+  gboolean updated_self = FALSE;
+  for (GList *at = application ? gtk_application_get_windows(application)
+                               : NULL;
+       at; at = at->next) {
+    if (!PDFV_IS_WINDOW(at->data))
+      continue;
+    PdfvWindow *window = PDFV_WINDOW(at->data);
+    pdfv_settings_set_window_size(window->settings,
+                                  self->normal_window_width,
+                                  self->normal_window_height);
+    updated_self |= window == self;
+  }
+  if (!updated_self)
+    pdfv_settings_set_window_size(self->settings,
+                                  self->normal_window_width,
+                                  self->normal_window_height);
+
+  GError *error = NULL;
+  if (!pdfv_settings_save(self->settings, &error)) {
+    g_warning("Could not save the Phi window size: %s",
+              error ? error->message : "unknown error");
+    g_clear_error(&error);
+  }
+}
+
 static gboolean on_window_close_request(GtkWindow *window, PdfvWindow *self) {
   (void)window;
-  if (!self->closing_window)
-    save_workspace_tab_session(self);
+  if (!self->closing_window) {
+    if (!self->closing_after_tab_transfer)
+      save_workspace_tab_session(self);
+    persist_window_size(self);
+  }
   workspace_preview_cancel_delay(self);
   if (self->workspace_scan_cancellable)
     g_cancellable_cancel(self->workspace_scan_cancellable);
@@ -6492,6 +6660,9 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->settings = pdfv_settings_new();
+  pdfv_settings_get_window_size(self->settings,
+                                &self->normal_window_width,
+                                &self->normal_window_height);
   self->document_history = pdfv_document_history_get_default();
   pdfv_document_history_set_enabled(
       self->document_history,
@@ -6520,6 +6691,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   update_markdown_actions(self);
   g_signal_connect(self, "close-request", G_CALLBACK(on_window_close_request),
                    self);
+  g_signal_connect(self, "realize", G_CALLBACK(on_window_realized), self);
   g_signal_connect(self, "notify::fullscreened",
                    G_CALLBACK(on_window_fullscreen_changed), NULL);
   g_signal_connect(adw_style_manager_get_default(), "notify::dark",
@@ -6882,6 +7054,8 @@ static void pdfv_window_init(PdfvWindow *self) {
                 "win.tab-context-open-new-tab");
   g_menu_append(tab_open_menu, "Open in New Window",
                 "win.tab-context-open-new-window");
+  g_menu_append(tab_open_menu, "Move to New Window",
+                "win.tab-context-move-new-window");
   g_menu_append(tab_open_menu, "Open in Default App",
                 "win.tab-context-open-default");
   g_menu_append(tab_open_menu, "Open Folder in System Files",
@@ -7149,7 +7323,8 @@ static void pdfv_window_init(PdfvWindow *self) {
                           self->workspace_search_overlay);
 
   /* Window setup */
-  gtk_window_set_default_size(GTK_WINDOW(self), 900, 700);
+  gtk_window_set_default_size(GTK_WINDOW(self), self->normal_window_width,
+                              self->normal_window_height);
   gtk_window_set_title(GTK_WINDOW(self), "Phi Document Viewer");
 
   /* Create initial tab */

@@ -38,6 +38,10 @@ void pdfv_settings_set_pdf_inverted(PdfvSettings *self,
 gboolean pdfv_settings_get_remember_document_positions(PdfvSettings *self);
 void pdfv_settings_set_remember_document_positions(PdfvSettings *self,
                                                    gboolean enabled);
+void pdfv_settings_get_window_size(PdfvSettings *self, gint *width,
+                                   gint *height);
+void pdfv_settings_set_window_size(PdfvSettings *self, gint width,
+                                   gint height);
 PdfvImagePasteStyle pdfv_settings_get_image_paste_style(
     PdfvSettings *self);
 void pdfv_settings_set_image_paste_style(
