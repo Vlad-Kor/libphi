@@ -1,6 +1,7 @@
 import { renderMarkdown } from "./markdown/render";
 
 export type ImagePasteStyle = "wiki-embed" | "markdown-link";
+export const PHI_MARKDOWN_CLIPBOARD_TYPE = "application/x-phi-markdown";
 
 export function pastedImageMarkdown(
   result: { path?: string; name?: string },
@@ -17,7 +18,24 @@ export function pastedImageMarkdown(
 }
 
 export function markdownClipboardHtml(markdown: string): string {
-  return renderMarkdown(markdown);
+  const template = document.createElement("template");
+  template.innerHTML = renderMarkdown(markdown);
+  template.content.querySelectorAll("[data-phi-raw-html]").forEach(
+    (element) => element.removeAttribute("data-phi-raw-html"),
+  );
+  const wrapper = document.createElement("div");
+  wrapper.dataset.phiMarkdownSource = markdown;
+  wrapper.append(template.content);
+  return wrapper.outerHTML;
+}
+
+export function clipboardMarkdownSource(html: string): string | null {
+  if (!html) return null;
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const wrapper = document.querySelector<HTMLElement>(
+    "[data-phi-markdown-source]",
+  );
+  return wrapper?.dataset.phiMarkdownSource ?? null;
 }
 
 /** WebKitGTK exposes clipboard collections as array-like DOM lists, but some

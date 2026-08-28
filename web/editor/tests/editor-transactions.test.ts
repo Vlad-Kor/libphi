@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 /// <reference types="node" />
+import { closeBrackets, insertBracket } from "@codemirror/autocomplete";
 import { history, undo } from "@codemirror/commands";
 import { getSearchQuery } from "@codemirror/search";
 import { EditorSelection, EditorState } from "@codemirror/state";
@@ -11,6 +12,7 @@ import { acceptNativeResponse } from "../src/bridge";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
+import { smartPairTransaction } from "../src/markdown/pairs";
 import {
   LinkWidget,
   MarkdownLinkWidget,
@@ -54,6 +56,49 @@ async function settle(): Promise<void> {
 }
 
 describe("CodeMirror document transactions", () => {
+  it("reuses authored closers while preserving tracked nested pairs", () => {
+    let authored = EditorState.create({
+      doc: "If {b)",
+      selection: { anchor: 5 },
+      extensions: [closeBrackets()],
+    });
+    const reused = smartPairTransaction(authored, 5, 5, "(");
+    expect(reused).not.toBeNull();
+    authored = reused!.state;
+    expect(authored.doc.toString()).toBe("If {b()");
+
+    let nested = EditorState.create({
+      doc: "",
+      extensions: [closeBrackets()],
+    });
+    nested = insertBracket(nested, "(")!.state;
+    expect(nested.doc.toString()).toBe("()");
+    expect(smartPairTransaction(nested, 1, 1, "(")).toBeNull();
+    nested = insertBracket(nested, "(")!.state;
+    expect(nested.doc.toString()).toBe("(())");
+  });
+
+  it("closes an unmatched prose quote without creating another pair", () => {
+    let state = EditorState.create({
+      doc: "",
+      extensions: [closeBrackets()],
+    });
+    state = insertBracket(state, '"')!.state;
+    expect(state.doc.toString()).toBe('""');
+    state = state.update({
+      changes: { from: 1, to: 2 },
+      selection: { anchor: 1 },
+    }).state;
+    state = state.update({
+      changes: { from: 1, insert: "quoted text" },
+      selection: { anchor: 12 },
+      userEvent: "input.type",
+    }).state;
+    const closing = smartPairTransaction(state, 12, 12, '"');
+    expect(closing).not.toBeNull();
+    expect(closing!.state.doc.toString()).toBe('"quoted text"');
+  });
+
   it("safely restores an anchor beyond a shortened document", () => {
     const parent = document.createElement("div");
     document.body.append(parent);

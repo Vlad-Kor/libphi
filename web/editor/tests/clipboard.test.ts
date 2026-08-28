@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clipboardHtmlToMarkdown,
   clipboardImageFile,
+  clipboardMarkdownSource,
   clipboardMayContainNativeImage,
   markdownClipboardHtml,
   pastedImageMarkdown,
@@ -13,6 +14,16 @@ describe("clipboard interoperability", () => {
     const html = markdownClipboardHtml("A **bold** and *emphasized* selection");
     expect(html).toContain("<strong>bold</strong>");
     expect(html).toContain("<em>emphasized</em>");
+  });
+
+  it("round-trips source Markdown without leaking renderer placeholders", () => {
+    const markdown = 'If $a$ and $b$ use <span style="color:red">red</span>';
+    const html = markdownClipboardHtml(markdown);
+    expect(html).toContain('<span style="color:red">red</span>');
+    expect(html).not.toContain("phi-math-source");
+    expect(html).not.toContain("phi-raw-html");
+    expect(html).not.toContain("data-phi-raw-html");
+    expect(clipboardMarkdownSource(html)).toBe(markdown);
   });
 
   it("converts common rich clipboard content back to Markdown", () => {

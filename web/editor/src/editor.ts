@@ -11,9 +11,11 @@ import { acceptNativeResponse, requestNative, reportError, sendNative } from "./
 import {
   clipboardHtmlToMarkdown,
   clipboardImageFile,
+  clipboardMarkdownSource,
   clipboardMayContainNativeImage,
   markdownClipboardHtml,
   pastedImageMarkdown,
+  PHI_MARKDOWN_CLIPBOARD_TYPE,
 } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
 import { installKineticScroll } from "./kinetic-scroll";
@@ -22,6 +24,7 @@ import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
+import { smartPairs } from "./markdown/pairs";
 import { applyTheme, defaultSettings, updateRuntimeSettings } from "./settings";
 import type { DocumentScrollState, DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
 
@@ -118,6 +121,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         EditorState.allowMultipleSelections.of(true),
         indentOnInput(),
         bracketMatching(),
+        smartPairs,
         closeBrackets(),
         rectangularSelection(),
         crosshairCursor(),
@@ -371,6 +375,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     const markdown = view.state.selection.ranges
       .map((range) => view.state.sliceDoc(range.from, range.to))
       .join("\n");
+    event.clipboardData.setData(PHI_MARKDOWN_CLIPBOARD_TYPE, markdown);
     event.clipboardData.setData("text/plain", markdown);
     event.clipboardData.setData("text/html", markdownClipboardHtml(markdown));
     event.preventDefault();
@@ -408,6 +413,21 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       reader.readAsDataURL(file);
       return true;
     }
+    const insertMarkdown = (markdown: string) => {
+      view.dispatch({
+        changes: view.state.changeByRange((range) => ({
+          changes: { from: range.from, to: range.to, insert: markdown },
+          range: EditorSelection.cursor(range.from + markdown.length),
+        })).changes,
+        userEvent: "input.paste",
+      });
+    };
+    const clipboardTypes = Array.from(clipboard?.types ?? []);
+    if (clipboardTypes.includes(PHI_MARKDOWN_CLIPBOARD_TYPE)) {
+      event.preventDefault();
+      insertMarkdown(clipboard?.getData(PHI_MARKDOWN_CLIPBOARD_TYPE) ?? "");
+      return true;
+    }
     const selection = view.state.selection.main;
     const plain = clipboard?.getData("text/plain") ?? "";
     if (!selection.empty && /^(https?|mailto):\S+$/i.test(plain)) {
@@ -418,16 +438,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     }
     const html = clipboard?.getData("text/html") ?? "";
     if (html) {
-      const markdown = clipboardHtmlToMarkdown(html);
+      const markdown = clipboardMarkdownSource(html) ??
+        clipboardHtmlToMarkdown(html);
       if (markdown) {
         event.preventDefault();
-        view.dispatch({
-          changes: view.state.changeByRange((range) => ({
-            changes: { from: range.from, to: range.to, insert: markdown },
-            range: EditorSelection.cursor(range.from + markdown.length),
-          })).changes,
-          userEvent: "input.paste",
-        });
+        insertMarkdown(markdown);
         return true;
       }
     }

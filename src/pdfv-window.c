@@ -35,6 +35,10 @@ typedef struct {
   gboolean empty;
 } ClosedTab;
 
+typedef struct {
+  GQueue tabs;
+} ClosedTabHistory;
+
 struct _PdfvWindow {
   AdwApplicationWindow parent_instance;
 
@@ -42,7 +46,6 @@ struct _PdfvWindow {
   AdwTabView *tab_view;
   AdwTabBar *tab_bar;
   AdwTabOverview *tab_overview;
-  GQueue closed_tabs;
 
   /* Main layout */
   AdwOverlaySplitView *split_view;
@@ -254,6 +257,29 @@ static void closed_tab_free(ClosedTab *tab) {
   g_free(tab);
 }
 
+static void closed_tab_history_free(ClosedTabHistory *history) {
+  g_queue_clear_full(&history->tabs, (GDestroyNotify)closed_tab_free);
+  g_free(history);
+}
+
+static ClosedTabHistory *closed_tab_history(PdfvWindow *self) {
+  GtkApplication *application =
+      gtk_window_get_application(GTK_WINDOW(self));
+  if (!application)
+    return NULL;
+  GQuark history_quark =
+      g_quark_from_static_string("pdfv-closed-tab-history");
+  ClosedTabHistory *history = g_object_get_qdata(
+      G_OBJECT(application), history_quark);
+  if (!history) {
+    history = g_new0(ClosedTabHistory, 1);
+    g_queue_init(&history->tabs);
+    g_object_set_qdata_full(G_OBJECT(application), history_quark, history,
+                            (GDestroyNotify)closed_tab_history_free);
+  }
+  return history;
+}
+
 static ClosedTab *closed_tab_snapshot(AdwTabPage *page) {
   GtkWidget *stack = adw_tab_page_get_child(page);
   if (!GTK_IS_STACK(stack))
@@ -338,9 +364,14 @@ static void remember_tab_position(PdfvWindow *self, AdwTabPage *page) {
 static void closed_tab_push(PdfvWindow *self, ClosedTab *tab) {
   if (!tab)
     return;
-  g_queue_push_tail(&self->closed_tabs, tab);
-  while (g_queue_get_length(&self->closed_tabs) > CLOSED_TAB_HISTORY_LIMIT)
-    closed_tab_free(g_queue_pop_head(&self->closed_tabs));
+  ClosedTabHistory *history = closed_tab_history(self);
+  if (!history) {
+    closed_tab_free(tab);
+    return;
+  }
+  g_queue_push_tail(&history->tabs, tab);
+  while (g_queue_get_length(&history->tabs) > CLOSED_TAB_HISTORY_LIMIT)
+    closed_tab_free(g_queue_pop_head(&history->tabs));
 }
 
 typedef struct {
@@ -3233,8 +3264,7 @@ static void finish_markdown_close(MarkdownCloseRequest *request,
     g_signal_handlers_disconnect_by_data(request->editor, self);
     if (self->current_editor == request->editor)
       self->current_editor = NULL;
-    if (!self->closing_window)
-      closed_tab_push(self, g_steal_pointer(&request->closed_tab));
+    closed_tab_push(self, g_steal_pointer(&request->closed_tab));
   }
   adw_tab_view_close_page_finish(request->tab_view, request->page, close_page);
   if (close_page && request->restore_return_page && !self->closing_window)
@@ -3325,7 +3355,7 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
       pdfv_window_new_tab(self);
     return GDK_EVENT_STOP;
   }
-  gboolean remember = !self->closing_window &&
+  gboolean remember =
       !g_object_get_data(G_OBJECT(page), "skip-closed-tab-history");
   if (editor) {
     if (g_object_get_data(G_OBJECT(page), "markdown-close-pending")) {
@@ -5043,7 +5073,8 @@ static void action_reopen_closed_tab(GSimpleAction *action,
   (void)action;
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
-  ClosedTab *closed = g_queue_pop_tail(&self->closed_tabs);
+  ClosedTabHistory *history = closed_tab_history(self);
+  ClosedTab *closed = history ? g_queue_pop_tail(&history->tabs) : NULL;
   if (!closed)
     return;
 
@@ -6633,7 +6664,6 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->zoom_menu_section);
   g_clear_object(&self->view_menu_section);
   g_clear_object(&self->open_workspace_menu);
-  g_queue_clear_full(&self->closed_tabs, (GDestroyNotify)closed_tab_free);
   if (self->document_history) {
     GError *error = NULL;
     if (!pdfv_document_history_flush(self->document_history, &error)) {
@@ -6654,7 +6684,6 @@ static void pdfv_window_dispose(GObject *object) {
 }
 
 static void pdfv_window_init(PdfvWindow *self) {
-  g_queue_init(&self->closed_tabs);
   self->current_view = NULL;
   self->current_editor = NULL;
   self->current_outline = NULL;
