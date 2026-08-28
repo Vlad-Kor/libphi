@@ -18,7 +18,6 @@ import {
   PHI_MARKDOWN_CLIPBOARD_TYPE,
 } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
-import { installKineticScroll, type KineticScrollHandle } from "./kinetic-scroll";
 import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
@@ -78,7 +77,6 @@ const markdownHighlightStyle = HighlightStyle.define([
 
 export class PhiMarkdownEditor implements NativeMarkdownEditor {
   readonly view: EditorView;
-  private readonly kineticScroll: KineticScrollHandle;
   private documentId = "";
   private documentPath = "";
   private baseRevision = 0;
@@ -98,7 +96,6 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       parent,
       state: this.createState(""),
     });
-    this.kineticScroll = installKineticScroll(this.view.scrollDOM);
     this.view.scrollDOM.addEventListener("scroll", () => {
       window.clearTimeout(this.scrollTimer);
       if (!this.documentId) return;
@@ -623,15 +620,6 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         break;
       case "navigation/reveal": this.revealFragment(String(payload.target ?? "")); break;
       case "command/run": this.runCommand(String(payload.command ?? "")); break;
-      case "scroll/native-begin":
-        this.kineticScroll.nativeBegin(Number(payload.generation ?? 0));
-        break;
-      case "scroll/native-decelerate":
-        this.kineticScroll.nativeDecelerate(
-          Number(payload.generation ?? 0),
-          Number(payload.velocityY ?? 0),
-        );
-        break;
       case "document/flush": void this.flush().then((snapshot) => sendNative("document/flush", { ...snapshot }, message.id)); break;
       case "vault/files-changed": break;
       default: reportError(new Error(`Unknown native message: ${message.type}`), "bridge", this.documentPath);
