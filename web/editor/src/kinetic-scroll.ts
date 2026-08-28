@@ -1,34 +1,44 @@
 const GESTURE_GAP_MS = 80;
-const PRECISION_GESTURE_ACTIVATION_PX = 3;
 const PIXEL_WHEEL_GESTURE_THRESHOLD = 32;
+const GTK_DECELERATION_FRICTION = 4;
+const GTK_MIN_VELOCITY = 0.1;
+
+export interface KineticScrollHandle {
+  nativeBegin(generation: number): void;
+  nativeDecelerate(generation: number, velocityY: number): void;
+  dispose(): void;
+}
 
 /**
- * Keep precision scrolling out of WebKit's occasionally stuck kinetic path.
+ * Route precision deltas around WebKit's occasionally stuck scrolling path.
  *
- * The wheel stream already contains the device's pixel deltas. Apply those
- * deltas directly, just as GtkScrolledWindow updates its adjustment while a
- * scroll gesture is active. In particular, do not smooth input again or
- * synthesize another momentum phase after the input stream stops.
- *
- * A new precision gesture must move a few pixels before it takes ownership of
- * the scroller. This is the same practical dead zone users get from native GTK
- * scrolling and prevents tiny post-gesture finger movements from nudging the
- * document. Discrete mouse wheels, large pixel-mode wheel steps, touch input,
- * pinch zoom, and horizontal child scrolling stay on WebKit's native path.
+ * The native host supplies GTK's real scroll-begin/decelerate boundary and
+ * velocity. Input deltas are applied immediately and the post-release curve is
+ * the same y'' = -4y' curve used by GtkScrolledWindow. There is no timeout that
+ * guesses when a gesture ended and no extra low-pass filter over active input.
  */
-export function installKineticScroll(scroller: HTMLElement): () => void {
+export function installKineticScroll(scroller: HTMLElement): KineticScrollHandle {
   let lastWheelAt: number | null = null;
   let nativeWheelGesture = false;
   let precisionGestureActive = false;
-  let heldDelta = 0;
+  let precisionGestureMoved = false;
+  let fractionalDelta = 0;
   let nativeTouchActive = false;
   let nativeTouchUntil = 0;
+  let nativeGeneration = 0;
+  let kineticFrame = 0;
+
+  const cancelKinetic = () => {
+    if (kineticFrame) window.cancelAnimationFrame(kineticFrame);
+    kineticFrame = 0;
+  };
 
   const resetPrecisionGesture = () => {
     lastWheelAt = null;
     nativeWheelGesture = false;
     precisionGestureActive = false;
-    heldDelta = 0;
+    precisionGestureMoved = false;
+    fractionalDelta = 0;
   };
 
   const onWheel = (event: WheelEvent) => {
@@ -45,29 +55,40 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
     const newGesture = lastWheelAt === null || gap <= 0 ||
       gap > GESTURE_GAP_MS;
     if (newGesture) {
+      cancelKinetic();
       nativeWheelGesture = Math.abs(event.deltaY) >=
         PIXEL_WHEEL_GESTURE_THRESHOLD;
       precisionGestureActive = false;
-      heldDelta = 0;
+      precisionGestureMoved = false;
+      fractionalDelta = 0;
     }
     lastWheelAt = now;
     if (nativeWheelGesture) return;
 
     event.preventDefault();
-    if (!precisionGestureActive) {
-      heldDelta += event.deltaY;
-      if (Math.abs(heldDelta) < PRECISION_GESTURE_ACTIVATION_PX) return;
-      precisionGestureActive = true;
-      scroller.scrollTop += heldDelta;
-      heldDelta = 0;
-      return;
-    }
-    scroller.scrollTop += event.deltaY;
+    precisionGestureActive = true;
+    fractionalDelta += event.deltaY;
+    /* DOM scroll positions retain fractions even though GTK ultimately paints
+     * on device pixels. Keep a signed remainder so a tiny back-and-forth
+     * finger wiggle cancels instead of visibly nudging the document. */
+    const delta = Math.trunc(fractionalDelta);
+    if (!delta) return;
+    fractionalDelta -= delta;
+    const previous = scroller.scrollTop;
+    scroller.scrollTop += delta;
+    precisionGestureMoved ||= scroller.scrollTop !== previous;
   };
 
-  const onPointerDown = () => resetPrecisionGesture();
-  const onKeyDown = () => resetPrecisionGesture();
+  const onPointerDown = () => {
+    cancelKinetic();
+    resetPrecisionGesture();
+  };
+  const onKeyDown = () => {
+    cancelKinetic();
+    resetPrecisionGesture();
+  };
   const onTouchStart = () => {
+    cancelKinetic();
     resetPrecisionGesture();
     nativeTouchActive = true;
   };
@@ -75,19 +96,60 @@ export function installKineticScroll(scroller: HTMLElement): () => void {
     nativeTouchActive = false;
     nativeTouchUntil = performance.now() + 500;
   };
+
   scroller.addEventListener("wheel", onWheel, { passive: false });
   scroller.addEventListener("pointerdown", onPointerDown, { passive: true });
   scroller.addEventListener("keydown", onKeyDown, { passive: true });
   scroller.addEventListener("touchstart", onTouchStart, { passive: true });
   scroller.addEventListener("touchend", onTouchFinish, { passive: true });
   scroller.addEventListener("touchcancel", onTouchFinish, { passive: true });
-  return () => {
-    resetPrecisionGesture();
-    scroller.removeEventListener("wheel", onWheel);
-    scroller.removeEventListener("pointerdown", onPointerDown);
-    scroller.removeEventListener("keydown", onKeyDown);
-    scroller.removeEventListener("touchstart", onTouchStart);
-    scroller.removeEventListener("touchend", onTouchFinish);
-    scroller.removeEventListener("touchcancel", onTouchFinish);
+
+  return {
+    nativeBegin(generation: number): void {
+      nativeGeneration = generation;
+      cancelKinetic();
+    },
+
+    nativeDecelerate(generation: number, velocityY: number): void {
+      if (generation !== nativeGeneration || !precisionGestureActive) return;
+      const shouldDecelerate = precisionGestureMoved &&
+        Number.isFinite(velocityY);
+      precisionGestureActive = false;
+      precisionGestureMoved = false;
+      fractionalDelta = 0;
+      cancelKinetic();
+      if (!shouldDecelerate || Math.abs(velocityY) < GTK_MIN_VELOCITY) return;
+
+      const initialPosition = scroller.scrollTop;
+      const initialVelocity = velocityY;
+      const startedAt = performance.now();
+      const tick = (now: number) => {
+        const elapsed = Math.max(0, now - startedAt) / 1000;
+        const decay = Math.exp(-GTK_DECELERATION_FRICTION * elapsed);
+        const position = initialPosition +
+          initialVelocity / GTK_DECELERATION_FRICTION * (1 - decay);
+        const previous = scroller.scrollTop;
+        scroller.scrollTop = position;
+        const velocity = initialVelocity * decay;
+        if ((scroller.scrollTop === previous && position !== previous) ||
+            Math.abs(velocity) < GTK_MIN_VELOCITY) {
+          kineticFrame = 0;
+          return;
+        }
+        kineticFrame = window.requestAnimationFrame(tick);
+      };
+      kineticFrame = window.requestAnimationFrame(tick);
+    },
+
+    dispose(): void {
+      cancelKinetic();
+      resetPrecisionGesture();
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener("pointerdown", onPointerDown);
+      scroller.removeEventListener("keydown", onKeyDown);
+      scroller.removeEventListener("touchstart", onTouchStart);
+      scroller.removeEventListener("touchend", onTouchFinish);
+      scroller.removeEventListener("touchcancel", onTouchFinish);
+    },
   };
 }

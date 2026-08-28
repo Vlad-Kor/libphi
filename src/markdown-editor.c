@@ -20,6 +20,7 @@
 
 #define MAX_ATTACHMENT_BYTES (20 * 1024 * 1024)
 #define MAX_EMBED_DEPTH 4
+#define GTK_SURFACE_SCROLL_FACTOR 2.5
 
 typedef struct {
   GTask *task;
@@ -83,6 +84,7 @@ struct _PdfvMarkdownEditor {
   gchar *theme_border;
   gchar *theme_accent;
   guint request_sequence;
+  guint scroll_generation;
   GHashTable *flush_tasks; /* request ID -> FlushPending */
 };
 
@@ -929,6 +931,43 @@ static void on_bridge_error(PdfvMarkdownEditorBridge *bridge,
                             PdfvMarkdownEditor *self) {
   (void)bridge;
   emit_error(self, message);
+}
+
+static void on_native_scroll_begin(GtkEventControllerScroll *controller,
+                                   PdfvMarkdownEditor *self) {
+  (void)controller;
+  if (++self->scroll_generation == 0)
+    self->scroll_generation++;
+  if (!self->ready)
+    return;
+  JsonObject *payload = json_object_new_owned();
+  json_object_set_int_member(payload, "generation",
+                             self->scroll_generation);
+  pdfv_markdown_editor_bridge_send(self->bridge, "scroll/native-begin",
+                                   NULL, payload);
+  json_object_unref(payload);
+}
+
+static void on_native_scroll_decelerate(
+    GtkEventControllerScroll *controller, gdouble velocity_x,
+    gdouble velocity_y, PdfvMarkdownEditor *self) {
+  (void)velocity_x;
+  if (!self->ready ||
+      gtk_event_controller_scroll_get_unit(controller) !=
+          GDK_SCROLL_UNIT_SURFACE)
+    return;
+  JsonObject *payload = json_object_new_owned();
+  json_object_set_int_member(payload, "generation",
+                             self->scroll_generation);
+  /* GtkScrolledWindow applies this factor to surface-unit deltas and to the
+   * velocity handed to its kinetic curve. DOM wheel deltas already carry the
+   * corresponding direct-scroll scale; the native velocity does not. */
+  json_object_set_double_member(payload, "velocityY",
+                                velocity_y * GTK_SURFACE_SCROLL_FACTOR);
+  pdfv_markdown_editor_bridge_send(self->bridge,
+                                   "scroll/native-decelerate", NULL,
+                                   payload);
+  json_object_unref(payload);
 }
 
 static GFile *vault_image_file_for_uri(PdfvMarkdownEditor *self,
@@ -1877,6 +1916,16 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
                    self);
   g_signal_connect(self->bridge, "bridge-error",
                    G_CALLBACK(on_bridge_error), self);
+  GtkEventController *scroll_controller = gtk_event_controller_scroll_new(
+      GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES |
+      GTK_EVENT_CONTROLLER_SCROLL_KINETIC);
+  gtk_event_controller_set_propagation_phase(scroll_controller,
+                                              GTK_PHASE_CAPTURE);
+  g_signal_connect(scroll_controller, "scroll-begin",
+                   G_CALLBACK(on_native_scroll_begin), self);
+  g_signal_connect(scroll_controller, "decelerate",
+                   G_CALLBACK(on_native_scroll_decelerate), self);
+  gtk_widget_add_controller(GTK_WIDGET(self->web_view), scroll_controller);
   g_signal_connect(self->web_view, "decide-policy",
                    G_CALLBACK(on_decide_policy), self);
   g_signal_connect(self->web_view, "permission-request",

@@ -62,7 +62,7 @@ describe("WebKitGTK precision scrolling workaround", () => {
     expect(requestFrame).not.toHaveBeenCalled();
   });
 
-  it("holds tiny finger wiggles below the gesture activation distance", () => {
+  it("cancels sub-pixel finger wiggles without blocking normal scrolling", () => {
     const scroller = document.createElement("div");
     document.body.append(scroller);
     vi.spyOn(performance, "now")
@@ -72,35 +72,59 @@ describe("WebKitGTK precision scrolling workaround", () => {
       .mockReturnValueOnce(120);
     installKineticScroll(scroller);
 
-    expect(wheel(scroller, 0.8).defaultPrevented).toBe(true);
-    wheel(scroller, -0.4);
-    wheel(scroller, 1.1);
+    expect(wheel(scroller, 0.4).defaultPrevented).toBe(true);
+    wheel(scroller, -0.35);
+    wheel(scroller, 0.2);
     expect(scroller.scrollTop).toBe(0);
 
-    /* A pause starts another gesture, so held sub-pixel input cannot leak
-     * into it and unexpectedly cross the threshold. */
+    /* A pause starts another gesture, so its movement is not combined with
+     * the old sub-pixel remainder. */
     wheel(scroller, 1.8);
-    expect(scroller.scrollTop).toBe(0);
+    expect(scroller.scrollTop).toBe(1);
   });
 
-  it("stops exactly when the precision event stream stops", () => {
+  it("uses GTK's native velocity and deceleration curve after release", () => {
     const scroller = document.createElement("div");
     document.body.append(scroller);
+    let frame: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frame = callback;
+      return 1;
+    });
     vi.spyOn(performance, "now")
       .mockReturnValueOnce(10)
-      .mockReturnValueOnce(26);
-    installKineticScroll(scroller);
+      .mockReturnValueOnce(20);
+    const kinetic = installKineticScroll(scroller);
 
+    kinetic.nativeBegin(7);
     wheel(scroller, 12);
+    kinetic.nativeDecelerate(7, 400);
+    expect(scroller.scrollTop).toBe(12);
+    frame?.(270);
+    expect(scroller.scrollTop).toBeCloseTo(
+      12 + 100 * (1 - Math.exp(-1)),
+    );
+  });
+
+  it("does not invent momentum for an abrupt zero-velocity stop", () => {
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame")
+      .mockImplementation(() => 1);
+    vi.spyOn(performance, "now").mockReturnValue(10);
+    const kinetic = installKineticScroll(scroller);
+
+    kinetic.nativeBegin(3);
     wheel(scroller, 12);
-    expect(scroller.scrollTop).toBe(24);
-    expect(scroller.scrollTop).toBe(24);
+    kinetic.nativeDecelerate(3, 0);
+    expect(scroller.scrollTop).toBe(12);
+    expect(requestFrame).not.toHaveBeenCalled();
   });
 
   it("leaves mouse wheels, horizontal gestures, and pinch zoom native", () => {
     const scroller = document.createElement("div");
     document.body.append(scroller);
-    installKineticScroll(scroller);
+    const kinetic = installKineticScroll(scroller);
 
     const mouse = wheel(scroller, 3, { deltaMode: WheelEvent.DOM_DELTA_LINE });
     const pixelWheel = wheel(scroller, 53);
@@ -110,6 +134,9 @@ describe("WebKitGTK precision scrolling workaround", () => {
     expect(pixelWheel.defaultPrevented).toBe(false);
     expect(horizontal.defaultPrevented).toBe(false);
     expect(pinch.defaultPrevented).toBe(false);
+    expect(scroller.scrollTop).toBe(0);
+    kinetic.nativeBegin(2);
+    kinetic.nativeDecelerate(2, 800);
     expect(scroller.scrollTop).toBe(0);
   });
 
@@ -135,9 +162,9 @@ describe("WebKitGTK precision scrolling workaround", () => {
       .mockReturnValueOnce(20);
     installKineticScroll(scroller);
 
-    wheel(scroller, 2);
+    wheel(scroller, 0.6);
     scroller.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
-    wheel(scroller, 2);
+    wheel(scroller, 0.6);
     expect(scroller.scrollTop).toBe(0);
   });
 
