@@ -17,6 +17,7 @@ import {
   LinkWidget,
   MarkdownLinkWidget,
   MathWidget,
+  resetPreviewImageCache,
   resizeImageMarkdown,
   TaskWidget,
 } from "../src/widgets/preview";
@@ -174,6 +175,58 @@ describe("CodeMirror document transactions", () => {
     expect(new LinkWidget("Long note", "Long note", 0, 10, true, true)
       .estimatedHeight).toBe(360);
     expect(new MathWidget("x", true, 0).estimatedHeight).toBe(64);
+  });
+
+  it("reuses resolved image geometry when CodeMirror remounts a widget", async () => {
+    const view = viewFor("![[Pictures/diagram.png]]");
+    const requests: Array<{ id: string; type: string }> = [];
+    const capture = (event: Event) => {
+      const message = (event as CustomEvent).detail as {
+        id: string;
+        type: string;
+      };
+      if (message.type === "attachment/resolve") requests.push(message);
+    };
+    window.addEventListener("phi-native-message", capture);
+
+    const first = new LinkWidget(
+      "Pictures/diagram.png", "diagram.png", 0, 25, true, true,
+    ).toDOM(view);
+    expect(first.style.minHeight).toBe("360px");
+    expect(requests).toHaveLength(1);
+    acceptNativeResponse({
+      protocol: 1,
+      type: "request/response",
+      id: requests[0].id,
+      payload: { result: { path: "Pictures/diagram.png" } },
+    });
+    await settle();
+
+    const firstImage = first.querySelector<HTMLImageElement>("img")!;
+    Object.defineProperties(firstImage, {
+      naturalWidth: { value: 1200, configurable: true },
+      naturalHeight: { value: 800, configurable: true },
+    });
+    firstImage.dispatchEvent(new Event("load"));
+    expect(first.style.minHeight).toBe("");
+
+    const remounted = new LinkWidget(
+      "Pictures/diagram.png", "diagram.png", 0, 25, true, true,
+    ).toDOM(view);
+    const remountedImage = remounted.querySelector<HTMLImageElement>("img")!;
+    expect(requests).toHaveLength(1);
+    expect(remountedImage.getAttribute("src"))
+      .toBe("vault:///Pictures/diagram.png");
+    expect(remountedImage.width).toBe(1200);
+    expect(remountedImage.height).toBe(800);
+    expect(remounted.style.minHeight).toBe("");
+
+    resetPreviewImageCache(view);
+    new LinkWidget(
+      "Pictures/diagram.png", "diagram.png", 0, 25, true, true,
+    ).toDOM(view);
+    expect(requests).toHaveLength(2);
+    window.removeEventListener("phi-native-message", capture);
   });
 
   it("remeasures a note embed when its asynchronous body arrives", async () => {

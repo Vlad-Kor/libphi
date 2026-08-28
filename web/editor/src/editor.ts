@@ -27,6 +27,7 @@ import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { smartPairs } from "./markdown/pairs";
 import { applyTheme, defaultSettings, updateRuntimeSettings } from "./settings";
 import type { DocumentScrollState, DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
+import { resetPreviewImageCache } from "./widgets/preview";
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
@@ -495,6 +496,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     updatePreamble(document.preamble ?? "");
     this.applyDocumentClasses(document.text);
     setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
+    resetPreviewImageCache(this.view);
     this.view.setState(this.createState(document.text));
     this.view.focus();
     if (document.scrollState)

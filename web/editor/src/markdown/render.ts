@@ -314,6 +314,38 @@ function renderedImageError(error: unknown): HTMLElement {
   return message;
 }
 
+interface RenderedImageCacheEntry {
+  uri?: string;
+  resolving?: Promise<string>;
+  naturalWidth?: number;
+  naturalHeight?: number;
+}
+
+const RENDERED_IMAGE_CACHE_LIMIT = 256;
+const renderedImageCache = new Map<string, RenderedImageCacheEntry>();
+
+function renderedImageCacheEntry(
+  sourcePath: string,
+  target: string,
+): RenderedImageCacheEntry {
+  const key = `${sourcePath}\0${target}`;
+  let entry = renderedImageCache.get(key);
+  if (entry) {
+    /* Reinsertion gives this small metadata cache bounded LRU behavior. */
+    renderedImageCache.delete(key);
+    renderedImageCache.set(key, entry);
+    return entry;
+  }
+  entry = {};
+  renderedImageCache.set(key, entry);
+  while (renderedImageCache.size > RENDERED_IMAGE_CACHE_LIMIT) {
+    const oldest = renderedImageCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    renderedImageCache.delete(oldest);
+  }
+  return entry;
+}
+
 function wireLocalImages(root: HTMLElement, sourcePath: string): void {
   if (!sourcePath) return;
   root.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
@@ -328,16 +360,46 @@ function wireLocalImages(root: HTMLElement, sourcePath: string): void {
       if (size[2]) image.style.height = `${size[2]}px`;
       image.alt = alt.replace(/\|\d+(?:x\d+)?$/, "");
     }
-    requestNative<{ path?: string }>("attachment/resolve", {
-      target,
-      relative: true,
-      sourcePath,
-    })
-      .then((result) => {
+    const entry = renderedImageCacheEntry(sourcePath, target);
+    if (entry.naturalWidth && entry.naturalHeight) {
+      if (image.style.width && !image.style.height) {
+        image.style.aspectRatio = `${entry.naturalWidth} / ${entry.naturalHeight}`;
+      } else if (!image.style.width && !image.style.height) {
+        image.width = entry.naturalWidth;
+        image.height = entry.naturalHeight;
+      }
+    }
+    image.decoding = "async";
+    image.addEventListener("load", () => {
+      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+        entry.naturalWidth = image.naturalWidth;
+        entry.naturalHeight = image.naturalHeight;
+      }
+    });
+    const apply = (uri: string) => {
+      image.src = uri;
+      image.classList.remove("dimmed");
+    };
+    if (entry.uri) {
+      apply(entry.uri);
+      return;
+    }
+    if (!entry.resolving) {
+      const resolving = requestNative<{ path?: string }>(
+        "attachment/resolve", { target, relative: true, sourcePath },
+      ).then((result) => {
         if (!result.path) throw new Error("Image was not found in the vault");
-        image.src = vaultUri(result.path);
-        image.classList.remove("dimmed");
-      })
+        const uri = vaultUri(result.path);
+        entry.uri = uri;
+        return uri;
+      });
+      entry.resolving = resolving;
+      void resolving.then(
+        () => { if (entry.resolving === resolving) entry.resolving = undefined; },
+        () => { if (entry.resolving === resolving) entry.resolving = undefined; },
+      );
+    }
+    void entry.resolving.then(apply)
       .catch((error) => image.replaceWith(renderedImageError(error)));
   });
 }

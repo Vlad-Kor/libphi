@@ -113,6 +113,81 @@ function isExternal(target: string): boolean {
 const FALLBACK_BLOCK_IMAGE_HEIGHT = 360;
 const FALLBACK_NOTE_EMBED_HEIGHT = 360;
 
+interface PreviewImageCacheEntry {
+  uri?: string;
+  resolving?: Promise<string>;
+  naturalWidth?: number;
+  naturalHeight?: number;
+}
+
+/* CodeMirror intentionally unmounts widgets well outside the viewport. Keep
+ * image resolution and intrinsic geometry for the lifetime of this document
+ * so scrolling back over an image does not collapse, resolve, and flash it a
+ * second time. A WeakMap also lets closed editors release the cache normally. */
+const previewImageCaches = new WeakMap<
+  EditorView,
+  Map<string, PreviewImageCacheEntry>
+>();
+
+function previewImageCache(
+  view: EditorView,
+  key: string,
+): PreviewImageCacheEntry {
+  let cache = previewImageCaches.get(view);
+  if (!cache) {
+    cache = new Map();
+    previewImageCaches.set(view, cache);
+  }
+  let entry = cache.get(key);
+  if (!entry) {
+    entry = {};
+    cache.set(key, entry);
+  }
+  return entry;
+}
+
+export function resetPreviewImageCache(view: EditorView): void {
+  previewImageCaches.delete(view);
+}
+
+function resolveLocalImage(
+  view: EditorView,
+  image: HTMLImageElement,
+  target: string,
+  cacheKey: string,
+): void {
+  const entry = previewImageCache(view, cacheKey);
+  const apply = (uri: string) => {
+    image.src = uri;
+    image.classList.remove("dimmed");
+  };
+  if (entry.uri) {
+    apply(entry.uri);
+    return;
+  }
+
+  image.classList.add("dimmed");
+  if (!entry.resolving) {
+    const resolving = requestNative<{ path?: string }>(
+      "attachment/resolve", { target, relative: true },
+    ).then((result) => {
+      if (!result.path) throw new Error("Image was not found in the vault");
+      const uri = vaultUri(result.path);
+      entry.uri = uri;
+      return uri;
+    });
+    entry.resolving = resolving;
+    void resolving.then(
+      () => { if (entry.resolving === resolving) entry.resolving = undefined; },
+      () => { if (entry.resolving === resolving) entry.resolving = undefined; },
+    );
+  }
+  void entry.resolving.then(apply).catch((error) => {
+    reportError(error, "image");
+    image.replaceWith(imageError(error));
+  });
+}
+
 function targetIsImage(target: string): boolean {
   return /\.(?:png|jpe?g|gif|webp|svg|avif)(?:$|[|?#])/i.test(target);
 }
@@ -272,10 +347,38 @@ function interactiveImage(
   from: number,
   to: number,
   block: boolean,
+  cacheKey: string,
+  estimatedHeight: number,
 ): HTMLElement {
   const container = document.createElement("span");
   container.className = `image-widget image-widget-${block ? "block" : "inline"}`;
-  image.addEventListener("load", () => view.requestMeasure());
+  const cache = previewImageCache(view, cacheKey);
+  if (cache.naturalWidth && cache.naturalHeight) {
+    if (image.width && !image.height) {
+      image.height = Math.max(1, Math.round(
+        image.width * cache.naturalHeight / cache.naturalWidth,
+      ));
+    } else if (!image.width && !image.height) {
+      image.width = cache.naturalWidth;
+      image.height = cache.naturalHeight;
+    }
+  } else if (block && !image.height) {
+    container.style.minHeight = `${estimatedHeight}px`;
+  }
+  image.decoding = "async";
+  let measured = false;
+  const imageLoaded = () => {
+    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+      cache.naturalWidth = image.naturalWidth;
+      cache.naturalHeight = image.naturalHeight;
+    }
+    container.style.removeProperty("min-height");
+    if (measured) return;
+    measured = true;
+    view.requestMeasure();
+  };
+  image.addEventListener("load", imageLoaded);
+  if (image.complete && image.naturalWidth > 0) queueMicrotask(imageLoaded);
   const source = sourceEditButton(view, from, "Edit image source");
 
   const handle = document.createElement("span");
@@ -372,6 +475,7 @@ export class LinkWidget extends WidgetType {
     const extension = path.split(".").pop()?.toLowerCase();
     if (["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"].includes(extension ?? "")) {
       const image = document.createElement("img");
+      const cacheKey = `local:${path}`;
       image.className = "image-embed";
       image.alt = this.label;
       image.addEventListener("error", () => {
@@ -384,21 +488,11 @@ export class LinkWidget extends WidgetType {
         image.width = Number(size[1]);
         if (size[2]) image.height = Number(size[2]);
       }
-      image.classList.add("dimmed");
-      requestNative<{ path?: string }>("attachment/resolve", {
-        target: path,
-        relative: true,
-      })
-        .then((result) => {
-          if (!result.path) throw new Error("Image was not found in the vault");
-          image.src = vaultUri(result.path);
-          image.classList.remove("dimmed");
-        })
-        .catch((error) => {
-          reportError(error, "image");
-          image.replaceWith(imageError(error));
-        });
-      return interactiveImage(view, image, this.from, this.to, this.block);
+      resolveLocalImage(view, image, path, cacheKey);
+      return interactiveImage(
+        view, image, this.from, this.to, this.block, cacheKey,
+        estimatedBlockImageHeight(this.target),
+      );
     }
     if (["mp3", "ogg", "wav", "flac", "m4a"].includes(extension ?? "")) {
       const audio = document.createElement("audio");
@@ -492,6 +586,12 @@ export class MarkdownLinkWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     if (this.image) {
       const image = document.createElement("img");
+      const localCacheKey = `local:${this.target}`;
+      const cacheKey = /^data:/i.test(this.target)
+        ? `data:${this.from}:${this.to}`
+        : /^https?:/i.test(this.target)
+          ? `remote:${this.target}`
+          : localCacheKey;
       image.className = "image-embed";
       image.alt = this.label.split("|")[0];
       image.addEventListener("error", () => {
@@ -516,20 +616,12 @@ export class MarkdownLinkWidget extends WidgetType {
         }, { once: true });
       }
       else {
-        image.classList.add("dimmed");
-        requestNative<{ path?: string }>("attachment/resolve", {
-          target: this.target,
-          relative: true,
-        }).then((result) => {
-          if (!result.path) throw new Error("Image was not found in the vault");
-          image.src = vaultUri(result.path);
-          image.classList.remove("dimmed");
-        }).catch((error) => {
-          reportError(error, "image");
-          image.replaceWith(imageError(error));
-        });
+        resolveLocalImage(view, image, this.target, localCacheKey);
       }
-      return interactiveImage(view, image, this.from, this.to, this.block);
+      return interactiveImage(
+        view, image, this.from, this.to, this.block, cacheKey,
+        estimatedBlockImageHeight(this.label, this.target),
+      );
     }
 
     const link = document.createElement("a");

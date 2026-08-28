@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { installKineticScroll } from "../src/kinetic-scroll";
 
 afterEach(() => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
   document.body.replaceChildren();
 });
@@ -45,24 +44,57 @@ function touch(
   return event;
 }
 
-describe("WebKitGTK kinetic scrolling workaround", () => {
-  it("eases pixel-precision vertical gestures on animation frames", () => {
+describe("WebKitGTK precision scrolling workaround", () => {
+  it("applies active precision deltas directly without delayed motion", () => {
     const scroller = document.createElement("div");
     document.body.append(scroller);
-    let frame: FrameRequestCallback | undefined;
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frame = callback;
-      return 1;
-    });
-    vi.spyOn(performance, "now").mockReturnValue(10);
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame");
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(26);
     installKineticScroll(scroller);
 
-    const event = wheel(scroller, 23);
-    expect(event.defaultPrevented).toBe(true);
+    const first = wheel(scroller, 12);
+    const second = wheel(scroller, 7);
+    expect(first.defaultPrevented).toBe(true);
+    expect(second.defaultPrevented).toBe(true);
+    expect(scroller.scrollTop).toBe(19);
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
+
+  it("holds tiny finger wiggles below the gesture activation distance", () => {
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(20)
+      .mockReturnValueOnce(30)
+      .mockReturnValueOnce(120);
+    installKineticScroll(scroller);
+
+    expect(wheel(scroller, 0.8).defaultPrevented).toBe(true);
+    wheel(scroller, -0.4);
+    wheel(scroller, 1.1);
     expect(scroller.scrollTop).toBe(0);
-    frame?.(26);
-    expect(scroller.scrollTop).toBeGreaterThan(0);
-    expect(scroller.scrollTop).toBeLessThan(23);
+
+    /* A pause starts another gesture, so held sub-pixel input cannot leak
+     * into it and unexpectedly cross the threshold. */
+    wheel(scroller, 1.8);
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it("stops exactly when the precision event stream stops", () => {
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(26);
+    installKineticScroll(scroller);
+
+    wheel(scroller, 12);
+    wheel(scroller, 12);
+    expect(scroller.scrollTop).toBe(24);
+    expect(scroller.scrollTop).toBe(24);
   });
 
   it("leaves mouse wheels, horizontal gestures, and pinch zoom native", () => {
@@ -81,72 +113,32 @@ describe("WebKitGTK kinetic scrolling workaround", () => {
     expect(scroller.scrollTop).toBe(0);
   });
 
-  it("continues a multi-event gesture with frame-driven momentum", () => {
-    vi.useFakeTimers();
+  it("keeps an entire pixel-mode wheel burst on the native path", () => {
     const scroller = document.createElement("div");
     document.body.append(scroller);
-    let frame: FrameRequestCallback | undefined;
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frame = callback;
-      return 1;
-    });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
-    vi.spyOn(performance, "now")
-      .mockReturnValueOnce(10)
-      .mockReturnValueOnce(26)
-      .mockReturnValueOnce(60);
-    installKineticScroll(scroller);
-
-    wheel(scroller, 12);
-    wheel(scroller, 12);
-    expect(scroller.scrollTop).toBe(0);
-    frame?.(76);
-    const afterInput = scroller.scrollTop;
-    expect(afterInput).toBeGreaterThan(0);
-    vi.advanceTimersByTime(34);
-    expect(frame).toBeTypeOf("function");
-    frame?.(108);
-    expect(scroller.scrollTop).toBeGreaterThan(afterInput);
-  });
-
-  it("never adds animation or momentum to a pixel-mode wheel burst", () => {
-    vi.useFakeTimers();
-    const scroller = document.createElement("div");
-    document.body.append(scroller);
-    const requestFrame = vi.spyOn(window, "requestAnimationFrame")
-      .mockImplementation(() => 1);
     vi.spyOn(performance, "now")
       .mockReturnValueOnce(10)
       .mockReturnValueOnce(35);
     installKineticScroll(scroller);
 
     const first = wheel(scroller, 53);
-    const second = wheel(scroller, 53);
-    vi.advanceTimersByTime(500);
+    const second = wheel(scroller, 12);
     expect(first.defaultPrevented).toBe(false);
     expect(second.defaultPrevented).toBe(false);
-    expect(requestFrame).not.toHaveBeenCalled();
   });
 
-  it("cancels pending momentum when the user presses a key", () => {
-    vi.useFakeTimers();
+  it("does not carry a partial gesture across keyboard input", () => {
     const scroller = document.createElement("div");
     document.body.append(scroller);
-    const requestFrame = vi.spyOn(window, "requestAnimationFrame")
-      .mockImplementation(() => 1);
-    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame")
-      .mockImplementation(() => {});
     vi.spyOn(performance, "now")
       .mockReturnValueOnce(10)
-      .mockReturnValueOnce(26);
+      .mockReturnValueOnce(20);
     installKineticScroll(scroller);
 
-    wheel(scroller, 12);
-    wheel(scroller, 12);
+    wheel(scroller, 2);
     scroller.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
-    vi.advanceTimersByTime(100);
-    expect(requestFrame).toHaveBeenCalledTimes(1);
-    expect(cancelFrame).toHaveBeenCalledWith(1);
+    wheel(scroller, 2);
+    expect(scroller.scrollTop).toBe(0);
   });
 
   it("leaves touchscreen gestures and their synthesized wheels native", () => {

@@ -158,5 +158,29 @@ describe("rendering security", () => {
     expect(image?.getAttribute("src")).toBe("vault:///~Images/My%20diagram.png");
     expect(image?.style.width).toBe("197px");
     expect(image?.alt).toBe("Diagram");
+
+    Object.defineProperties(image!, {
+      naturalWidth: { value: 900, configurable: true },
+      naturalHeight: { value: 600, configurable: true },
+    });
+    image?.dispatchEvent(new Event("load"));
+    let repeatedRequests = 0;
+    const countRequest = (event: Event) => {
+      if ((event as CustomEvent).detail?.type === "attachment/resolve")
+        repeatedRequests++;
+    };
+    window.addEventListener("phi-native-message", countRequest);
+    const remounted = document.createElement("div");
+    remounted.innerHTML = renderMarkdown(
+      "![Diagram](<../~Images/My diagram.png>)",
+    );
+    wireRenderedContent(remounted, "Nested/Embedded note.md");
+    window.removeEventListener("phi-native-message", countRequest);
+    const remountedImage = remounted.querySelector<HTMLImageElement>("img");
+    expect(repeatedRequests).toBe(0);
+    expect(remountedImage?.getAttribute("src"))
+      .toBe("vault:///~Images/My%20diagram.png");
+    expect(remountedImage?.width).toBe(900);
+    expect(remountedImage?.height).toBe(600);
   });
 });
