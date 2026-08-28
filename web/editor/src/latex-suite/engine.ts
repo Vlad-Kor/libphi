@@ -232,10 +232,25 @@ function applyMatch(view: EditorView, match: Match, to: number, visual = "",
                     automatic = false): boolean {
   const expanded = expandMatch(match, visual);
   if (!expanded) return true;
+  const pairedCloser: Record<string, string> = {
+    "(": ")",
+    "[": "]",
+    "{": "}",
+  };
+  const opener = match.matchedText.at(-1) ?? "";
+  const closer = pairedCloser[opener];
+  /* closeBrackets handles the keystroke before automatic snippets run. When
+   * both it and a LaTeX snippet supply the closing bracket, consume the
+   * already inserted closer as part of the snippet replacement. This also
+   * covers multi-character triggers such as `lr(`. */
+  const replacementTo = automatic && closer &&
+      expanded.text.trimEnd().endsWith(closer) &&
+      view.state.sliceDoc(to, to + closer.length) === closer
+    ? to + closer.length : to;
   const stops = expanded.tabstops.map((stop) => ({ ...stop, from: match.from + stop.from, to: match.from + stop.to }));
   const first = stops[0] ?? { from: match.from + expanded.text.length, to: match.from + expanded.text.length };
   view.dispatch({
-    changes: { from: match.from, to, insert: expanded.text },
+    changes: { from: match.from, to: replacementTo, insert: expanded.text },
     selection: { anchor: first.from, head: first.to },
     effects: startTabstops.of(stops),
     annotations: [

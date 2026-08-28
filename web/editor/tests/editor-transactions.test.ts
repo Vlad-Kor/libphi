@@ -989,6 +989,19 @@ $$`;
 });
 
 describe("LaTeX Suite transactions", () => {
+  it("does not duplicate CodeMirror's closing bracket in math snippets", async () => {
+    setCustomSnippets(JSON.stringify([
+      { trigger: "(", replacement: "($0)$1", options: "mA" },
+    ]));
+    const view = viewFor("$\\foo{b}$", 7, 7, [closeBrackets(), latexSuite]);
+    const paired = insertBracket(view.state, "(");
+    expect(paired).not.toBeNull();
+    view.dispatch(paired!);
+    await settle();
+    expect(view.state.doc.toString()).toBe("$\\foo{b()}$");
+    expect(view.state.selection.main.head).toBe(8);
+  });
+
   it("expands automatic snippets, tabstops, and auto-fractions", async () => {
     setCustomSnippets(String.raw`[
       {trigger: "sq", replacement: "\\sqrt{$0}$1", options: "mA"},
