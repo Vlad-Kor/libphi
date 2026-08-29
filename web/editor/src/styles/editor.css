@@ -461,6 +461,14 @@ pre code { padding: 0; background: transparent; }
 .embed-body .math-inline { display: inline-block; max-width: 100%; vertical-align: middle; }
 .image-widget { position: relative; max-width: 100%; margin: 0; line-height: 0; vertical-align: top; }
 .cm-line:has(.image-widget-block) { line-height: 0; }
+/* A Markdown blank line normally inherits the editor's generous 1.62 line
+ * height. Beside a standalone image that reads as oversized image padding,
+ * while images followed directly by text stay compact. Keep one full text-em
+ * for an editable blank line, but remove the extra leading in this case. */
+.cm-line:has(> br:only-child):has(+ .cm-line .image-widget-block),
+.cm-line:has(.image-widget-block) + .cm-line:has(> br:only-child) {
+  line-height: 1;
+}
 .image-widget-block { display: block; width: fit-content; }
 .image-widget-inline { display: inline-block; }
 .image-embed { display: block; max-width: 100%; height: auto; border-radius: 6px; }
