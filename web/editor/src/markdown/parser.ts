@@ -18,6 +18,7 @@ export type MarkdownNodeKind =
   | "inline-code"
   | "task"
   | "callout"
+  | "blockquote"
   | "table"
   | "mermaid"
   | "code-block"
@@ -321,6 +322,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     });
   }
 
+  const calloutRanges: Range[] = [];
   const callout = /^ {0,3}>[ \t]*\[!([^\]\s]+)\]([+-])?([^\n]*)$/gm;
   for (const match of text.matchAll(callout)) {
     if (inside(match.index, protectedRanges)) continue;
@@ -345,6 +347,33 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
         title: match[3].trim(),
       },
     });
+    calloutRanges.push({ from: match.index, to });
+  }
+
+  /* Callouts are the conspicuous special case of Markdown blockquotes and
+   * retain priority above. Render every other contiguous run of quoted lines
+   * through MarkdownIt so nested quotes and inline Markdown keep their normal
+   * semantics. */
+  const blockquote = /^ {0,3}>.*$/gm;
+  let blockquoteMatch: RegExpExecArray | null;
+  while ((blockquoteMatch = blockquote.exec(text))) {
+    const from = blockquoteMatch.index;
+    if (inside(from, protectedRanges) || inside(from, calloutRanges)) continue;
+    let to = lineEnd(text, from);
+    while (to < text.length) {
+      const nextFrom = to + 1;
+      const nextTo = lineEnd(text, nextFrom);
+      if (inside(nextFrom, calloutRanges) ||
+          !/^ {0,3}>/.test(text.slice(nextFrom, nextTo))) break;
+      to = nextTo;
+    }
+    nodes.push({
+      kind: "blockquote",
+      from,
+      to,
+      text: text.slice(from, to),
+    });
+    blockquote.lastIndex = to;
   }
 
   const table = /^(\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*\n(?:.*\|.*(?:\n|$))+)/gm;

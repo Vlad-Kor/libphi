@@ -61,9 +61,10 @@ function active(node: MarkdownNode, state: EditorState): boolean {
         ? selection.from >= from && selection.from < to
         : selection.from < to && selection.to > from;
     }
-    /* A click in the empty area after the final callout line maps to node.to.
+    /* A click in the empty area after the final rich block line maps to node.to.
      * Keep that endpoint editable; the next document line starts at to + 1. */
-    if ((node.kind === "callout" || node.kind === "code-block") &&
+    if ((node.kind === "callout" || node.kind === "blockquote" ||
+         node.kind === "code-block") &&
         selection.from === selection.to)
       return selection.from >= node.from && selection.from <= node.to;
     if (node.kind === "embed" || node.kind === "markdown-image") {
@@ -140,6 +141,10 @@ function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | 
     case "tag": return Decoration.replace({ widget: new TagWidget(node.text, node.from) });
     case "callout": return Decoration.replace({
       widget: new CalloutWidget(node.text, String(node.meta?.type ?? "note"), String(node.meta?.title ?? ""), String(node.meta?.fold ?? ""), node.from),
+      block: true,
+    });
+    case "blockquote": return Decoration.replace({
+      widget: new HtmlPreviewWidget(node.text, node.from, "blockquote-widget"),
       block: true,
     });
     case "table": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "table-widget"), block: true });

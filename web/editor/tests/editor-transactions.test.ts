@@ -843,6 +843,33 @@ $$`;
     expect(parent.querySelector(".callout")).toBeNull();
   });
 
+  it("renders ordinary blockquotes subtly and reveals their source when active", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "Before\n\n> quoted **text**\n> second line\n\nAfter";
+    editor.openDocument({
+      documentId: "blockquote-preview",
+      path: "blockquote-preview.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    const preview = parent.querySelector(".blockquote-widget");
+    expect(preview?.querySelector("blockquote")?.textContent)
+      .toContain("quoted text");
+    expect(parent.querySelector(".callout")).toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: text.indexOf("quoted") + 2 } });
+    expect(parent.querySelector(".blockquote-widget")).toBeNull();
+    expect(parent.querySelector(".cm-content")?.textContent).toContain("> quoted");
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".blockquote-widget blockquote")).not.toBeNull();
+  });
+
   it("reveals the selected source word instead of the front of rich blocks", () => {
     const parent = document.createElement("div");
     document.body.append(parent);

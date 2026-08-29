@@ -427,7 +427,7 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
 .footnote-reference { border: 0; background: transparent; color: var(--editor-link); font-size: .72em; vertical-align: super; cursor: pointer; padding: 0 .12em; }
 .footnote-definition { display: grid; grid-template-columns: auto 1fr; gap: .55em; border-top: 1px solid var(--editor-border); color: var(--editor-muted); padding: .4em 0; font-size: .9em; }
 .footnote-definition p { margin: 0; }
-.markdown-preview, .table-widget, .mermaid-widget, .properties-widget, .note-embed, .callout, .code-block-widget { box-sizing: border-box; color: var(--editor-fg); font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; }
+.markdown-preview, .table-widget, .mermaid-widget, .properties-widget, .note-embed, .callout, .blockquote-widget, .code-block-widget { box-sizing: border-box; color: var(--editor-fg); font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; }
 .code-block-widget { display: block; padding: .35em 0; }
 .code-block-widget pre { margin: 0; }
 .table-widget { display: block; overflow-x: auto; padding: .35em 0; }
@@ -454,6 +454,17 @@ pre code { padding: 0; background: transparent; }
 .callout-title::-webkit-details-marker { display: none; }
 .callout-icon { width: 1em; height: 1em; flex: 0 0 auto; color: var(--callout-color, var(--editor-accent)); }
 .callout-content > :last-child { margin-bottom: .2em; }
+.blockquote-widget { display: block; padding: .18em 0; }
+.blockquote-widget > blockquote {
+  margin: 0;
+  padding: .3em .75em;
+  border-left-color: color-mix(in srgb, var(--editor-fg) 24%, transparent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--editor-fg) 3%, transparent);
+  color: color-mix(in srgb, var(--editor-fg) 78%, var(--editor-muted));
+}
+.blockquote-widget > blockquote > :first-child { margin-top: 0; }
+.blockquote-widget > blockquote > :last-child { margin-bottom: 0; }
 .note-embed { position: relative; display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--editor-border); border-radius: 8px; padding: .6em .8em; }
 .embed-title { max-width: 100%; padding-right: 38px; border: 0; background: none; color: var(--editor-link); font-weight: 700; cursor: pointer; }
 .embed-body { min-width: 0; max-width: 100%; overflow: hidden; }

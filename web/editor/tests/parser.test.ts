@@ -113,6 +113,20 @@ $$`;
     expect(source.slice(callout!.from, callout!.to)).toBe("> [!info] test\n> test");
   });
 
+  it("parses ordinary blockquotes separately without shadowing callouts", () => {
+    const source = "> first **quote**\n> second\n> [!tip] Tip\n> callout";
+    const nodes = parseMarkdownNodes(source);
+    const blockquotes = nodes.filter((node) => node.kind === "blockquote");
+    const callout = nodes.find((node) => node.kind === "callout");
+
+    expect(blockquotes).toHaveLength(1);
+    expect(blockquotes[0].text).toBe("> first **quote**\n> second");
+    expect(source.slice(blockquotes[0].from, blockquotes[0].to))
+      .toBe("> first **quote**\n> second");
+    expect(source.slice(callout!.from, callout!.to))
+      .toBe("> [!tip] Tip\n> callout");
+  });
+
   it("parses unordered, task, and ordered list marker geometry", () => {
     const source =
       "- bullet\n- [ ] task\n10. ordered\n    1) nested\n- [x]compact";
