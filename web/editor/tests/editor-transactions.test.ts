@@ -59,8 +59,17 @@ function viewFor(text: string, anchor = text.length, head = anchor, extensions: 
   return view;
 }
 
-function key(view: EditorView, value: string, shiftKey = false): boolean {
-  return runScopeHandlers(view, new KeyboardEvent("keydown", { key: value, shiftKey }), "editor");
+function key(
+  view: EditorView,
+  value: string,
+  shiftKey = false,
+  ctrlKey = false,
+): boolean {
+  return runScopeHandlers(
+    view,
+    new KeyboardEvent("keydown", { key: value, shiftKey, ctrlKey }),
+    "editor",
+  );
 }
 
 function input(view: EditorView, value: string): boolean {
@@ -718,7 +727,7 @@ $$`;
     expect(measure).toHaveBeenCalled();
   });
 
-  it("keeps rendered images stable while selecting across them", () => {
+  it("reveals hard source for text selections and Select All", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
@@ -737,7 +746,17 @@ $$`;
     editor.view.dispatch({
       selection: EditorSelection.range(text.length, 0),
     });
+    expect(parent.querySelector(".image-widget")).toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
     expect(parent.querySelector(".image-widget")).not.toBeNull();
+
+    expect(key(editor.view, "a", false, true)).toBe(true);
+    expect(editor.view.state.selection.main).toMatchObject({
+      from: 0,
+      to: text.length,
+    });
+    expect(parent.querySelector(".image-widget")).toBeNull();
   });
 
   it("selects adjacent hard images one at a time with the arrow keys", () => {

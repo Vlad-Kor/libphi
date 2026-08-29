@@ -46,7 +46,15 @@ export function previewNodeIsActive(
 ): boolean {
   const pinned = state.field(previewSourceRange, false);
   if (pinned && node.from < pinned.to && node.to > pinned.from) return true;
-  if (isHardRenderedNode(node)) return false;
+  /* A caret inside hard source is only an implementation detail of clicking
+   * or traversing its replacement, so it must not reveal the source. A real
+   * text selection is different: dragging across a hard item (or Select All)
+   * must expose the selected source and preserve normal text operations. */
+  if (isHardRenderedNode(node)) {
+    return state.selection.ranges.some((selection) =>
+      !selection.empty && selectionTouches(node, selection)
+    );
+  }
   return state.selection.ranges.some((selection) => {
     if (node.kind === "task") {
       const from = Number(node.meta?.prefixFrom ?? node.from);
