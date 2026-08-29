@@ -115,6 +115,25 @@ export function updatePreamble(value: string): void {
 
 export function getMathRevision(): number { return preambleRevision; }
 
+function renderedError(rendered: Element): string | undefined {
+  const error = rendered.matches('[data-mjx-error], [data-mml-node="merror"]')
+    ? rendered
+    : rendered.querySelector('[data-mjx-error], [data-mml-node="merror"]');
+  return error?.getAttribute("data-mjx-error") ??
+    error?.getAttribute("data-mjx-message") ??
+    error?.getAttribute("title") ??
+    (error ? error.textContent?.trim() || "Invalid LaTeX" : undefined);
+}
+
+function showMathError(target: HTMLElement, latex: string,
+                       error: unknown): void {
+  target.classList.remove("math-loading", "math-overflow");
+  target.classList.add("math-render-error");
+  target.textContent = latex;
+  const message = error instanceof Error ? error.message : String(error);
+  if (message) target.title = message;
+}
+
 /**
  * Keep a horizontal touchpad gesture inside an overflowing equation. WebKitGTK
  * otherwise applies the gesture's small vertical component to CodeMirror's
@@ -163,27 +182,28 @@ export async function renderMath(
   const key = `${preambleRevision}\0${display ? "display" : "inline"}\0${latex}`;
   const cached = cache.get(key);
   if (cached) {
+    target.classList.remove("math-render-error", "math-loading");
+    target.removeAttribute("title");
     target.innerHTML = cached;
     return;
   }
   try {
+    target.classList.remove("math-render-error");
+    target.removeAttribute("title");
     target.classList.add("math-loading");
     target.textContent = latex;
     const mathjax = await waitForMathJax();
     const normalized = display ? latex : normalizeInlineEnvironments(latex);
     const source = `${preamble ? `${preamble}\n` : ""}${normalized}`;
     const rendered = await convertMath(mathjax, source, display);
+    const mathError = renderedError(rendered);
+    if (mathError) throw new Error(mathError);
     target.replaceChildren(rendered);
     target.classList.remove("math-loading");
     cache.set(key, target.innerHTML);
     if (cache.size > 256) cache.delete(cache.keys().next().value as string);
   } catch (error) {
-    target.classList.remove("math-loading");
-    target.replaceChildren();
-    const message = document.createElement("span");
-    message.className = "render-error";
-    message.textContent = error instanceof Error ? error.message : String(error);
-    target.append(message);
+    showMathError(target, latex, error);
     reportError(error, "mathjax");
   }
 }

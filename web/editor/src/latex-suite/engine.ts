@@ -1,4 +1,5 @@
 import {
+  Annotation,
   Prec,
   StateEffect,
   StateField,
@@ -11,6 +12,11 @@ import { indentLess, isolateHistory } from "@codemirror/commands";
 import defaultSnippets from "./default-snippets.txt?raw";
 import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
 import { codeModeAt, mathModeAt } from "../markdown/parser";
+import {
+  markdownAnalysis,
+  markdownAnalysisField,
+  mathNodeAt,
+} from "../markdown/analysis";
 import { reportError } from "../bridge";
 import { measurePerformance } from "../performance";
 import {
@@ -26,6 +32,7 @@ interface TabstopState { stops: Tabstop[]; active: number }
 
 const setTabstops = StateEffect.define<TabstopState | null>();
 const startTabstops = StateEffect.define<Tabstop[]>();
+const automaticPairExpansion = Annotation.define<boolean>();
 const tabstopState = StateField.define<TabstopState | null>({
   create: () => null,
   update(value, transaction) {
@@ -360,6 +367,49 @@ const expandManualSnippet: Command = (view) => {
   return match ? applyMatch(view, match, range.head) : false;
 };
 
+/** Expand automatic opener snippets before CodeMirror's generic bracket
+ * handler. Doing this as one transaction avoids a WebKit input cycle in which
+ * both closeBrackets and the asynchronous snippet pass can retain a `)` from
+ * the same `(` keystroke. */
+const automaticPairInput = Prec.highest(EditorView.inputHandler.of(
+  (view, from, to, insert) => {
+    if (view.state.readOnly || from !== to || insert.length !== 1 ||
+        view.state.selection.ranges.length !== 1 ||
+        !Object.hasOwn({ "(": ")", "[": "]", "{": "}" }, insert))
+      return false;
+
+    const inserted = view.state.update({
+      changes: { from, to, insert },
+      selection: { anchor: from + insert.length },
+    }).state;
+    const match = findMatch(inserted, from + insert.length, true);
+    if (!match || !match.matchedText.endsWith(insert)) return false;
+    const expanded = expandMatch(match, "");
+    if (!expanded) return false;
+
+    const stops = expanded.tabstops.map((stop) => ({
+      ...stop,
+      from: match.from + stop.from,
+      to: match.from + stop.to,
+    }));
+    const first = stops[0] ?? {
+      from: match.from + expanded.text.length,
+      to: match.from + expanded.text.length,
+    };
+    view.dispatch({
+      changes: { from: match.from, to, insert: expanded.text },
+      selection: { anchor: first.from, head: first.to },
+      effects: startTabstops.of(stops),
+      annotations: [
+        Transaction.userEvent.of("input.type"),
+        isolateHistory.of("before"),
+        automaticPairExpansion.of(true),
+      ],
+    });
+    return true;
+  },
+));
+
 function expandVisualShortcut(view: EditorView, event: KeyboardEvent): boolean {
   if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1)
     return false;
@@ -402,7 +452,11 @@ const matrixTab: Command = (view) => {
   const from = Math.max(0, position - 3000);
   const text = view.state.sliceDoc(from, position);
   if (!currentEnvironment(text, text.length)) return false;
-  view.dispatch({ changes: { from: position, insert: " & " }, selection: { anchor: position + 3 }, userEvent: "input" });
+  view.dispatch({
+    changes: { from: position, insert: " & " },
+    selection: { anchor: position + 3 },
+    userEvent: "input",
+  });
   return true;
 };
 
@@ -441,6 +495,23 @@ const tabOut: Command = (view) => {
   return true;
 };
 
+/** Once immediate braces have been left, Tab exits the entire surrounding
+ * Markdown math node. It deliberately runs before list and general
+ * indentation so an equation can never indent its source line. */
+const exitMath: Command = (view) => {
+  const selection = view.state.selection.main;
+  if (!selection.empty || view.state.selection.ranges.length !== 1)
+    return false;
+  const node = mathNodeAt(markdownAnalysis(view.state), selection);
+  if (!node || selection.head >= node.to) return false;
+  view.dispatch({
+    selection: { anchor: node.to },
+    effects: setTabstops.of(null),
+    scrollIntoView: true,
+  });
+  return true;
+};
+
 function autoFraction(view: EditorView): boolean {
   const position = view.state.selection.main.head;
   const contextFrom = Math.max(0, position - 32768);
@@ -465,6 +536,8 @@ const automaticPlugin = ViewPlugin.fromClass(class {
   private dispatching = false;
   update(update: ViewUpdate): void {
     if (this.dispatching || !update.docChanged ||
+        update.transactions.some((transaction) =>
+          transaction.annotation(automaticPairExpansion)) ||
         !update.transactions.some((transaction) => transaction.isUserEvent("input.type"))) return;
     const view = update.view;
     const previous = update.startState.selection.main;
@@ -625,8 +698,10 @@ const outdentToPreviousStop: Command = (view) => {
 };
 
 export const latexSuite = [
+  markdownAnalysisField,
   tabstopState,
   automaticPlugin,
+  automaticPairInput,
   /* A native key event preserves the selection. Waiting for the browser's
    * text-input transaction is unreliable in WebKit because it may collapse
    * or replace that selection before visual snippets inspect it. */
@@ -638,6 +713,7 @@ export const latexSuite = [
     { key: "Tab", run: expandManualSnippet },
     { key: "Tab", run: matrixTab },
     { key: "Tab", run: tabOut },
+    { key: "Tab", run: exitMath },
     { key: "Tab", run: indentList },
     { key: "Tab", run: indentToNextStop },
     { key: "Shift-Tab", run: previousTabstop },

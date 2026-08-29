@@ -9,10 +9,11 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runEditingCommand } from "../src/commands";
 import { acceptNativeResponse } from "../src/bridge";
+import { PHI_MARKDOWN_CLIPBOARD_TYPE } from "../src/clipboard";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
-import { smartPairTransaction } from "../src/markdown/pairs";
+import { smartPairs, smartPairTransaction } from "../src/markdown/pairs";
 import {
   LinkWidget,
   LineHeightEstimateWidget,
@@ -56,6 +57,20 @@ function viewFor(text: string, anchor = text.length, head = anchor, extensions: 
 
 function key(view: EditorView, value: string, shiftKey = false): boolean {
   return runScopeHandlers(view, new KeyboardEvent("keydown", { key: value, shiftKey }), "editor");
+}
+
+function input(view: EditorView, value: string): boolean {
+  const range = view.state.selection.main;
+  let defaultTransaction: ReturnType<EditorState["update"]> | undefined;
+  const defaultInsert = () => defaultTransaction ??= view.state.update({
+    changes: { from: range.from, to: range.to, insert: value },
+    selection: { anchor: range.from + value.length },
+    userEvent: "input.type",
+  });
+  const handled = view.state.facet(EditorView.inputHandler).some((handler) =>
+    handler(view, range.from, range.to, value, defaultInsert));
+  if (!handled) view.dispatch(defaultInsert());
+  return handled;
 }
 
 async function settle(): Promise<void> {
@@ -105,6 +120,38 @@ describe("CodeMirror document transactions", () => {
     const closing = smartPairTransaction(state, 12, 12, '"');
     expect(closing).not.toBeNull();
     expect(closing!.state.doc.toString()).toBe('"quoted text"');
+  });
+
+  it("places the cursor after Markdown inserted by the paste handler", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "paste-selection",
+      path: "paste-selection.md",
+      text: "before after",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 7, head: 12 } });
+    const paste = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(paste, "clipboardData", { value: {
+      types: [PHI_MARKDOWN_CLIPBOARD_TYPE],
+      getData: (type: string) => type === PHI_MARKDOWN_CLIPBOARD_TYPE
+        ? "**middle**" : "",
+      items: [],
+      files: [],
+    } });
+
+    editor.view.contentDOM.dispatchEvent(paste);
+
+    expect(editor.getDocument()).toBe("before **middle**");
+    expect(editor.view.state.selection.main.head).toBe(17);
+    expect(editor.view.state.selection.main.empty).toBe(true);
   });
 
   it("safely restores an anchor beyond a shortened document", () => {
@@ -989,6 +1036,29 @@ $$`;
     expect(target.textContent).not.toContain("$$");
   });
 
+  it("shows invalid LaTeX source in red instead of a blank MathJax box", async () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: () => {
+        const container = document.createElement("mjx-container");
+        const error = document.createElement("span");
+        error.setAttribute("data-mml-node", "merror");
+        error.setAttribute("data-mjx-error", "Undefined control sequence");
+        container.append(error);
+        return container;
+      },
+    };
+    const target = document.createElement("span");
+    const source = String.raw`\notARealCommand{x`;
+
+    await renderMath(source, false, target);
+
+    expect(target.textContent).toBe(source);
+    expect(target.classList.contains("math-render-error")).toBe(true);
+    expect(target.title).toBe("Undefined control sequence");
+    expect(target.querySelector("mjx-container")).toBeNull();
+  });
+
   it("renders an inline align environment as its inline-safe equivalent", async () => {
     const calls: { latex: string; display?: boolean }[] = [];
     (window as unknown as { MathJax?: unknown }).MathJax = {
@@ -1085,17 +1155,22 @@ $$`;
 });
 
 describe("LaTeX Suite transactions", () => {
-  it("does not duplicate CodeMirror's closing bracket in math snippets", async () => {
+  it("expands a typed math parenthesis once in the real input pipeline", async () => {
     setCustomSnippets(JSON.stringify([
       { trigger: "(", replacement: "($0)$1", options: "mA" },
     ]));
-    const view = viewFor("$\\foo{b}$", 7, 7, [closeBrackets(), latexSuite]);
-    const paired = insertBracket(view.state, "(");
-    expect(paired).not.toBeNull();
-    view.dispatch(paired!);
+    const text = "If ${a}$ and ${b}$";
+    const cursor = text.indexOf("{b}") + 2;
+    const view = viewFor(text, cursor, cursor, [
+      smartPairs,
+      closeBrackets(),
+      latexSuite,
+    ]);
+
+    expect(input(view, "(")).toBe(true);
     await settle();
-    expect(view.state.doc.toString()).toBe("$\\foo{b()}$");
-    expect(view.state.selection.main.head).toBe(8);
+    expect(view.state.doc.toString()).toBe("If ${a}$ and ${b()}$");
+    expect(view.state.selection.main.head).toBe(cursor + 1);
   });
 
   it("expands automatic snippets, tabstops, and auto-fractions", async () => {
@@ -1225,6 +1300,30 @@ describe("LaTeX Suite transactions", () => {
       "- ${\\displaystyle test }$\n    - ",
     );
     expect(view.state.selection.main.head).toBe(view.state.doc.length);
+  });
+
+  it("expands manual math snippets before leaving math or indenting a list", () => {
+    setCustomSnippets(JSON.stringify([{
+      trigger: "red",
+      replacement: "\\textcolor{red}{$0}$1",
+      options: "m",
+    }]));
+    const view = viewFor("- $red$", 6, 6, latexSuite);
+
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.doc.toString()).toBe("- $\\textcolor{red}{}$");
+    let cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "x" },
+      selection: { anchor: cursor + 1 },
+      userEvent: "input.type",
+    });
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head)
+      .toBe(view.state.doc.toString().lastIndexOf("$"));
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+    expect(view.state.doc.toString()).toBe("- $\\textcolor{red}{x}$");
   });
 
   it("ends remaining snippet navigation when continuing a list", () => {
@@ -1424,20 +1523,32 @@ describe("LaTeX Suite transactions", () => {
     );
   });
 
-  it("uses matrix-aware Tab/Enter and logical tab-out", () => {
+  it("keeps matrix Tab/Enter ahead of math exit without allowing indentation", () => {
     setCustomSnippets("[]");
     const matrixText = "$\\begin{pmatrix}a\\end{pmatrix}$";
     const cell = matrixText.indexOf("a\\end") + 1;
     const matrix = viewFor(matrixText, cell, cell, latexSuite);
     expect(key(matrix, "Tab")).toBe(true);
     expect(matrix.state.doc.toString()).toContain("a & \\end");
-    expect(key(matrix, "Enter")).toBe(true);
-    expect(matrix.state.doc.toString()).toContain(" &  \\\\\n");
+
+    const matrixEnterView = viewFor(matrixText, cell, cell, latexSuite);
+    expect(key(matrixEnterView, "Enter")).toBe(true);
+    expect(matrixEnterView.state.doc.toString()).toContain("a \\\\\n");
 
     const fractionText = "$\\frac{a}{b}$";
     const brace = fractionText.indexOf("}");
     const fraction = viewFor(fractionText, brace, brace, latexSuite);
     expect(key(fraction, "Tab")).toBe(true);
     expect(fraction.state.selection.main.head).toBe(brace + 1);
+    expect(key(fraction, "Tab")).toBe(true);
+    expect(fraction.state.selection.main.head).toBe(fractionText.length);
+
+    const listText = "- before $x$ after";
+    const mathCursor = listText.indexOf("x") + 1;
+    const list = viewFor(listText, mathCursor, mathCursor, latexSuite);
+    expect(key(list, "Tab")).toBe(true);
+    expect(list.state.doc.toString()).toBe(listText);
+    expect(list.state.selection.main.head)
+      .toBe(listText.indexOf("$", mathCursor) + 1);
   });
 });

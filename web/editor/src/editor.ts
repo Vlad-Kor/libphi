@@ -422,13 +422,23 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
 
   private handlePaste(event: ClipboardEvent, view: EditorView): boolean {
     const clipboard = event.clipboardData;
+    const insertMarkdown = (markdown: string) => {
+      const insertion = view.state.changeByRange((range) => ({
+        changes: { from: range.from, to: range.to, insert: markdown },
+        range: EditorSelection.cursor(range.from + markdown.length),
+      }));
+      view.dispatch({
+        ...insertion,
+        userEvent: "input.paste",
+      });
+    };
     const file = clipboardImageFile(clipboard);
     const insertAttachment = (result: { path?: string; name?: string }) => {
       const markdown = pastedImageMarkdown(
         result, this.settings.imagePasteStyle, this.settings.workspaceMode,
       );
       if (markdown)
-        view.dispatch(view.state.replaceSelection(markdown));
+        insertMarkdown(markdown);
     };
     if (file) {
       event.preventDefault();
@@ -451,15 +461,6 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       reader.readAsDataURL(file);
       return true;
     }
-    const insertMarkdown = (markdown: string) => {
-      view.dispatch({
-        changes: view.state.changeByRange((range) => ({
-          changes: { from: range.from, to: range.to, insert: markdown },
-          range: EditorSelection.cursor(range.from + markdown.length),
-        })).changes,
-        userEvent: "input.paste",
-      });
-    };
     const clipboardTypes = Array.from(clipboard?.types ?? []);
     if (clipboardTypes.includes(PHI_MARKDOWN_CLIPBOARD_TYPE)) {
       event.preventDefault();
@@ -471,7 +472,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     if (!selection.empty && /^(https?|mailto):\S+$/i.test(plain)) {
       event.preventDefault();
       const label = view.state.sliceDoc(selection.from, selection.to);
-      view.dispatch({ changes: { from: selection.from, to: selection.to, insert: `[${label}](${plain})` }, userEvent: "input.paste" });
+      insertMarkdown(`[${label}](${plain})`);
       return true;
     }
     const html = clipboard?.getData("text/html") ?? "";

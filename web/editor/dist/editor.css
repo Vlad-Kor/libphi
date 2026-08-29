@@ -344,6 +344,15 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .math-widget mjx-container[jax="SVG"] svg { fill: currentColor; stroke: currentColor; }
 .math-widget mjx-container[jax="SVG"] [data-c] { stroke: none; }
 .math-loading { color: var(--editor-muted); opacity: .7; }
+.math-widget.math-render-error {
+  color: #e01b24 !important;
+  background: transparent;
+  opacity: 1;
+  font-family: "Adwaita Mono", monospace;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .math-display { display: block; width: 100%; padding: .55em 0; text-align: center; }
 .math-widget.math-overflow { overflow-x: auto; }
 .cm-latex-delimiter { color: color-mix(in srgb, #2ec27e 82%, var(--editor-fg)); font-weight: 650; }
