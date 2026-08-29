@@ -15,6 +15,10 @@ import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
 import { smartPairs, smartPairTransaction } from "../src/markdown/pairs";
 import {
+  chooseHardPreview,
+  selectedHardPreview,
+} from "../src/markdown/preview-interaction";
+import {
   LinkWidget,
   LineHeightEstimateWidget,
   MarkdownLinkWidget,
@@ -736,6 +740,174 @@ $$`;
     expect(parent.querySelector(".image-widget")).not.toBeNull();
   });
 
+  it("selects adjacent hard images one at a time with the arrow keys", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const first = "![[one.png]]";
+    const second = "![[two.png]]";
+    const text = `Before ${first}${second} after`;
+    editor.openDocument({
+      documentId: "hard-image-arrows",
+      path: "hard-image-arrows.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.indexOf(first) } });
+
+    expect(key(editor.view, "ArrowRight")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toMatchObject({
+      from: text.indexOf(first),
+      to: text.indexOf(first) + first.length,
+    });
+    expect(parent.querySelectorAll(".cm-hard-selected")).toHaveLength(1);
+    expect(parent.querySelector(".cm-hard-preview-selection")).not.toBeNull();
+
+    expect(key(editor.view, "ArrowRight")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toMatchObject({
+      from: text.indexOf(second),
+      to: text.indexOf(second) + second.length,
+    });
+    expect(key(editor.view, "ArrowRight")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toBeNull();
+    expect(editor.view.state.selection.main.head)
+      .toBe(text.indexOf(second) + second.length);
+  });
+
+  it("reveals soft blocks and selects hard blocks during vertical motion", () => {
+    const softParent = document.createElement("div");
+    document.body.append(softParent);
+    const softEditor = new PhiMarkdownEditor(softParent);
+    views.push(softEditor.view);
+    const softText = "Before\n```text\nx = 1\n```\nAfter";
+    softEditor.openDocument({
+      documentId: "soft-arrow",
+      path: "soft-arrow.md",
+      text: softText,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    softEditor.view.dispatch({ selection: { anchor: 0 } });
+    vi.spyOn(softEditor.view, "moveVertically").mockReturnValue(
+      EditorSelection.cursor(softText.indexOf("After")),
+    );
+
+    expect(key(softEditor.view, "ArrowDown")).toBe(true);
+    expect(softParent.querySelector(".code-block-widget")).toBeNull();
+    expect(softEditor.view.state.selection.main.head)
+      .toBe(softText.indexOf("```"));
+
+    const hardParent = document.createElement("div");
+    document.body.append(hardParent);
+    const hardEditor = new PhiMarkdownEditor(hardParent);
+    views.push(hardEditor.view);
+    const hardText = "Before\n![[diagram.png]]\nAfter";
+    hardEditor.openDocument({
+      documentId: "hard-arrow",
+      path: "hard-arrow.md",
+      text: hardText,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    hardEditor.view.dispatch({ selection: { anchor: 0 } });
+    vi.spyOn(hardEditor.view, "moveVertically").mockReturnValue(
+      EditorSelection.cursor(hardText.indexOf("After")),
+    );
+
+    expect(key(hardEditor.view, "ArrowDown")).toBe(true);
+    expect(selectedHardPreview(hardEditor.view.state)).toMatchObject({
+      from: hardText.indexOf("![["),
+      to: hardText.indexOf("![[") + "![[diagram.png]]".length,
+    });
+    expect(hardParent.querySelector(".image-widget")).not.toBeNull();
+  });
+
+  it("keeps hard items rendered until edit and supports delete", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const first = "![[one.png]]";
+    const second = "![[two.png]]";
+    const text = `${first}${second}\nAfter`;
+    editor.openDocument({
+      documentId: "hard-image-actions",
+      path: "hard-image-actions.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    editor.view.dispatch({ selection: { anchor: 3 } });
+    expect(parent.querySelectorAll(".image-widget")).toHaveLength(2);
+
+    chooseHardPreview(editor.view, {
+      from: 0,
+      to: first.length,
+    });
+    expect(key(editor.view, "Enter")).toBe(true);
+    expect(parent.querySelectorAll(".image-widget")).toHaveLength(1);
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelectorAll(".image-widget")).toHaveLength(2);
+
+    chooseHardPreview(editor.view, {
+      from: first.length,
+      to: first.length + second.length,
+    });
+    expect(key(editor.view, "Delete")).toBe(true);
+    expect(editor.getDocument()).toBe(`${first}\nAfter`);
+  });
+
+  it("selects an image body without revealing its source", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "![[diagram.png]]";
+    editor.openDocument({
+      documentId: "hard-image-click",
+      path: "hard-image-click.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    const image = parent.querySelector<HTMLElement>(".image-widget")!;
+    image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(selectedHardPreview(editor.view.state)).toMatchObject({
+      from: 0,
+      to: source.length,
+    });
+    expect(image.classList.contains("cm-hard-selected")).toBe(true);
+    expect(parent.querySelector(".image-widget")).not.toBeNull();
+  });
+
+  it("treats a linked Markdown image as one hard item", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "[![Diagram](image.png)](https://example.com)";
+    editor.openDocument({
+      documentId: "hard-linked-image",
+      path: "hard-linked-image.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    expect(parent.querySelector(".linked-image-widget")).not.toBeNull();
+    expect(parent.querySelector("[aria-label='Edit linked image source']"))
+      .not.toBeNull();
+    expect(key(editor.view, "ArrowRight")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toEqual({
+      from: 0,
+      to: source.length,
+    });
+  });
+
   it("keeps image source open while editing its line", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -910,6 +1082,89 @@ $$`;
     selectWord(callout, "beta");
     callout.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     expect(editor.view.state.selection.main.head).toBe(text.indexOf("beta"));
+  });
+
+  it("reveals adjacent soft blocks on a single click", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "```text\nfirst\n```\n> quoted\n\nOutside";
+    editor.openDocument({
+      documentId: "soft-block-click",
+      path: "soft-block-click.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.length } });
+
+    parent.querySelector<HTMLElement>(".code-block-widget")?.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true }),
+    );
+    expect(parent.querySelector(".code-block-widget")).toBeNull();
+    expect(parent.querySelector(".blockquote-widget")).not.toBeNull();
+    expect(editor.view.state.selection.main.head)
+      .toBe(text.indexOf("first"));
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    parent.querySelector<HTMLElement>(".blockquote-widget")?.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true }),
+    );
+    expect(parent.querySelector(".blockquote-widget")).toBeNull();
+    expect(parent.querySelector(".code-block-widget")).not.toBeNull();
+  });
+
+  it("fully removes heading preview styling while its source is active", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "# Heading\n\nOutside";
+    editor.openDocument({
+      documentId: "soft-heading",
+      path: "soft-heading.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".cm-live-heading-1")).not.toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    expect(parent.querySelector(".cm-live-heading")).toBeNull();
+    expect(parent.querySelector(".cm-line")?.textContent).toContain("# Heading");
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".cm-live-heading-1")).not.toBeNull();
+  });
+
+  it("keeps a table hard-rendered on body clicks and edits it with Enter", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    editor.openDocument({
+      documentId: "hard-table",
+      path: "hard-table.md",
+      text: `${table}\n\nOutside`,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    parent.querySelector<HTMLElement>(".table-widget")?.click();
+    expect(parent.querySelector(".table-widget")).not.toBeNull();
+    chooseHardPreview(editor.view, {
+      from: 0,
+      to: table.length,
+    });
+    expect(key(editor.view, "Enter")).toBe(true);
+    expect(parent.querySelector(".table-widget")).toBeNull();
+    editor.view.dispatch({ selection: { anchor: table.indexOf("2") } });
+    expect(parent.querySelector(".table-widget")).toBeNull();
+    editor.view.dispatch({ selection: { anchor: table.length + 2 } });
+    expect(parent.querySelector(".table-widget")).not.toBeNull();
   });
 
   it("syntax-highlights an HTML span while its source is active", () => {

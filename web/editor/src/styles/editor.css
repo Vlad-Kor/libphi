@@ -63,6 +63,7 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .cm-activeLine, .cm-activeLineGutter { background: transparent !important; }
 .cm-selectionBackground, .cm-content ::selection { background: var(--editor-selection) !important; }
 .cm-cursor, .cm-dropCursor { border-left-color: var(--editor-fg) !important; }
+.cm-editor.cm-hard-preview-selection .cm-cursor { display: none !important; }
 .cm-tooltip { background: var(--editor-bg); color: var(--editor-fg); border: 1px solid var(--editor-border); }
 .cm-editor .cm-tooltip-autocomplete {
   padding: 5px;
@@ -471,6 +472,15 @@ pre code { padding: 0; background: transparent; }
 .embed-body .math-display { box-sizing: border-box; max-width: 100%; }
 .embed-body .math-inline { display: inline-block; max-width: 100%; vertical-align: middle; }
 .image-widget { position: relative; max-width: 100%; margin: 0; line-height: 0; vertical-align: top; }
+.cm-hard-rendered-item {
+  border-radius: 7px;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 100ms ease;
+}
+.cm-hard-rendered-item.cm-hard-selected {
+  outline-color: color-mix(in srgb, var(--editor-fg) 34%, transparent);
+}
 .cm-line:has(.image-widget-block) { line-height: 0; }
 /* A Markdown blank line normally inherits the editor's generous 1.62 line
  * height. Beside a standalone image that reads as oversized image padding,
@@ -522,6 +532,11 @@ pre code { padding: 0; background: transparent; }
 .note-embed:hover > .embed-source-button,
 .image-widget:focus-within .image-source-button, .image-resize-handle:focus-visible { opacity: 1; }
 .note-embed:focus-within > .embed-source-button { opacity: 1; }
+.attachment-widget { position: relative; max-width: 100%; }
+.attachment-widget-block { display: block; width: fit-content; }
+.attachment-widget-inline { display: inline-block; }
+.attachment-widget:hover > .embed-source-button,
+.attachment-widget:focus-within > .embed-source-button { opacity: 1; }
 .markdown-link img { display: inline-block; max-width: 100%; vertical-align: middle; }
 .remote-image-blocked { min-width: 12em; min-height: 3em; border: 1px dashed var(--editor-border); background: var(--editor-code-bg); cursor: pointer; }
 .media-embed { display: block; max-width: 100%; margin: 0; padding: .4em 0; }
@@ -538,6 +553,9 @@ pre code { padding: 0; background: transparent; }
 .mermaid-widget { display: block; max-width: 100%; overflow: auto; padding: .6em; }
 .mermaid-widget svg { max-width: 100%; height: auto; }
 .raw-html-widget { display: inline; }
+.raw-html-widget.cm-hard-rendered-item { position: relative; }
+.raw-html-widget:hover > .embed-source-button,
+.raw-html-widget:focus-within > .embed-source-button { opacity: 1; }
 .raw-html-widget:has(.iframe-embed), .iframe-embed-error { display: block; }
 .iframe-embed {
   display: block;

@@ -1,13 +1,13 @@
 import { StateEffect, StateField } from "@codemirror/state";
 
-export interface PreviewSourceLine {
+export interface PreviewSourceRange {
   from: number;
   to: number;
 }
 
-export const pinPreviewSource = StateEffect.define<PreviewSourceLine>();
+export const pinPreviewSource = StateEffect.define<PreviewSourceRange>();
 
-export const previewSourceLine = StateField.define<PreviewSourceLine | null>({
+export const previewSourceRange = StateField.define<PreviewSourceRange | null>({
   create: () => null,
   update(value, transaction) {
     let current = value && {
@@ -20,13 +20,9 @@ export const previewSourceLine = StateField.define<PreviewSourceLine | null>({
     if (!current) return null;
 
     const selection = transaction.state.selection.main;
-    const line = transaction.state.doc.lineAt(
-      Math.min(current.from, transaction.state.doc.length),
-    );
-    const staysOnLine = selection.empty
-      ? transaction.state.doc.lineAt(selection.head).number === line.number
-      : selection.from >= line.from &&
-        selection.to <= Math.min(transaction.state.doc.length, line.to + 1);
-    return staysOnLine ? { from: line.from, to: line.to } : null;
+    const staysInSource = selection.empty
+      ? selection.head >= current.from && selection.head <= current.to
+      : selection.from >= current.from && selection.to <= current.to;
+    return staysInSource ? current : null;
   },
 });

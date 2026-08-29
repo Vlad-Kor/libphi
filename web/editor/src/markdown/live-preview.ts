@@ -6,7 +6,7 @@ import {
   type Transaction,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, showTooltip, type Tooltip } from "@codemirror/view";
-import { selectionTouches, type MarkdownNode } from "./parser";
+import type { MarkdownNode } from "./parser";
 import {
   CalloutWidget,
   BulletWidget,
@@ -27,7 +27,8 @@ import {
   estimatedListLineHeight,
 } from "../widgets/preview";
 import { rawHtmlIsBlock } from "./render";
-import { pinPreviewSource, previewSourceLine } from "./source-edit";
+import { pinPreviewSource, previewSourceRange } from "./source-edit";
+import { previewInteraction, previewNodeIsActive } from "./preview-interaction";
 import {
   markdownAnalysis,
   markdownAnalysisField,
@@ -51,29 +52,7 @@ const htmlPunctuation = Decoration.mark({ class: "cm-html-punctuation" });
 export const refreshLivePreview = StateEffect.define<null>();
 
 function active(node: MarkdownNode, state: EditorState): boolean {
-  const pinned = state.field(previewSourceLine, false);
-  if (pinned && node.from <= pinned.to && node.to >= pinned.from) return true;
-  return state.selection.ranges.some((selection) => {
-    if (node.kind === "task") {
-      const from = Number(node.meta?.prefixFrom ?? node.from);
-      const to = Number(node.meta?.prefixTo ?? node.to);
-      return selection.from === selection.to
-        ? selection.from >= from && selection.from < to
-        : selection.from < to && selection.to > from;
-    }
-    /* A click in the empty area after the final rich block line maps to node.to.
-     * Keep that endpoint editable; the next document line starts at to + 1. */
-    if ((node.kind === "callout" || node.kind === "blockquote" ||
-         node.kind === "code-block") &&
-        selection.from === selection.to)
-      return selection.from >= node.from && selection.from <= node.to;
-    if (node.kind === "embed" || node.kind === "markdown-image") {
-      return selection.from === selection.to
-        ? selectionTouches(node, selection)
-        : selection.from >= node.from && selection.to <= node.to;
-    }
-    return selectionTouches(node, selection);
-  });
+  return previewNodeIsActive(node, state);
 }
 
 function imageIsInsideListItem(state: EditorState, node: MarkdownNode): boolean {
@@ -97,8 +76,8 @@ function targetIsImage(target: string): boolean {
 
 function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | undefined {
   switch (node.kind) {
-    case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from), block: true });
-    case "horizontal-rule": return Decoration.replace({ widget: new HorizontalRuleWidget(), block: true });
+    case "frontmatter": return Decoration.replace({ widget: new PropertiesWidget(node.text, node.from, node.to), block: true });
+    case "horizontal-rule": return Decoration.replace({ widget: new HorizontalRuleWidget(node.from, node.to), block: true });
     case "math": return Decoration.replace({ widget: new MathWidget(node.text, false, node.from) });
     case "display-math": return Decoration.replace({ widget: new MathWidget(node.text, true, node.from), block: true });
     case "wikilink": return Decoration.replace({ widget: new LinkWidget(String(node.meta?.target ?? node.text), String(node.meta?.alias ?? node.text), node.from, node.to) });
@@ -119,7 +98,7 @@ function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | 
         block: standalone && !targetIsImage(target),
       });
     }
-    case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false) });
+    case "markdown-link": return Decoration.replace({ widget: new MarkdownLinkWidget(String(node.meta?.target ?? ""), String(node.meta?.alias ?? ""), node.from, false, node.to) });
     case "markdown-image": {
       const standalone = imageIsStandaloneLine(state, node);
       return Decoration.replace({
@@ -147,10 +126,10 @@ function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | 
       widget: new HtmlPreviewWidget(node.text, node.from, "blockquote-widget"),
       block: true,
     });
-    case "table": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "table-widget"), block: true });
+    case "table": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "table-widget", node.to, true), block: true });
     case "mermaid": return Decoration.replace({ widget: new MermaidWidget(node.text, node.from), block: true });
     case "code-block": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "code-block-widget"), block: true });
-    case "html": return Decoration.replace({ widget: new RawHtmlWidget(node.text, node.from), block: rawHtmlIsBlock(node.text) });
+    case "html": return Decoration.replace({ widget: new RawHtmlWidget(node.text, node.from, node.to), block: rawHtmlIsBlock(node.text) });
     default: return undefined;
   }
 }
@@ -232,17 +211,20 @@ function buildDecorationsNow(state: EditorState,
     switch (node.kind) {
       case "heading": {
         const level = Number(node.meta?.level ?? 1);
-        builder.add(node.from, node.from, Decoration.line({ class: `cm-live-heading cm-live-heading-${level}` }));
-        const headingText = state.sliceDoc(
-          Number(node.contentFrom ?? node.from), node.to,
-        );
-        builder.add(node.from, node.from, Decoration.widget({
-          widget: new LineHeightEstimateWidget(
-            estimatedHeadingHeight(level, headingText),
-          ),
-          side: -1,
-        }));
-        if (!isActive && node.contentFrom != null) builder.add(node.from, node.contentFrom, hidden);
+        if (!isActive) {
+          builder.add(node.from, node.from, Decoration.line({ class: `cm-live-heading cm-live-heading-${level}` }));
+          const headingText = state.sliceDoc(
+            Number(node.contentFrom ?? node.from), node.to,
+          );
+          builder.add(node.from, node.from, Decoration.widget({
+            widget: new LineHeightEstimateWidget(
+              estimatedHeadingHeight(level, headingText),
+            ),
+            side: -1,
+          }));
+          if (node.contentFrom != null)
+            builder.add(node.from, node.contentFrom, hidden);
+        }
         break;
       }
       case "list-item": {
@@ -395,6 +377,7 @@ const livePreviewDecorations = StateField.define<DecorationSet>({
 
 export const livePreview = [
   markdownAnalysisField,
-  previewSourceLine,
+  previewSourceRange,
+  ...previewInteraction,
   livePreviewDecorations,
 ];

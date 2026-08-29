@@ -13,6 +13,11 @@ import {
 import { remoteImagesAllowed } from "../settings";
 import { calloutIcon } from "../markdown/callout-icons";
 import { pinPreviewSource } from "../markdown/source-edit";
+import {
+  chooseHardPreview,
+  selectHardPreview,
+  selectedHardPreview,
+} from "../markdown/preview-interaction";
 
 let mermaidSequence = 0;
 interface MermaidApi {
@@ -57,13 +62,14 @@ function ensureMermaidReady(): Promise<MermaidApi> {
   return mermaidReady;
 }
 
-function reveal(view: EditorView, position: number, pinLine = false): void {
-  const line = view.state.doc.lineAt(
-    Math.max(0, Math.min(position, view.state.doc.length)),
-  );
+function reveal(
+  view: EditorView,
+  position: number,
+  pinnedSource?: { from: number; to: number },
+): void {
   view.dispatch({
     selection: { anchor: Math.min(position + 1, view.state.doc.length) },
-    effects: pinLine ? pinPreviewSource.of({ from: line.from, to: line.to }) : [],
+    effects: pinnedSource ? pinPreviewSource.of(pinnedSource) : [],
     scrollIntoView: true,
   });
   view.focus();
@@ -85,6 +91,66 @@ function selectedSourceOffset(root: Node, source: string): number | null {
   if (!selected) return null;
   const offset = source.indexOf(selected);
   return offset >= 0 ? offset : null;
+}
+
+function clickedSourceOffset(
+  root: Node,
+  source: string,
+  event: MouseEvent,
+): number | null {
+  const selected = selectedSourceOffset(root, source);
+  if (selected != null) return selected;
+  const caretDocument = document as Document & {
+    caretRangeFromPoint?(x: number, y: number): Range | null;
+    caretPositionFromPoint?(x: number, y: number): {
+      offsetNode: Node;
+      offset: number;
+    } | null;
+  };
+  const range = caretDocument.caretRangeFromPoint?.(
+    event.clientX, event.clientY,
+  );
+  const position = range
+    ? { node: range.startContainer, offset: range.startOffset }
+    : (() => {
+      const caret = caretDocument.caretPositionFromPoint?.(
+        event.clientX, event.clientY,
+      );
+      return caret ? { node: caret.offsetNode, offset: caret.offset } : null;
+    })();
+  if (!position || !root.contains(position.node)) return null;
+  const text = position.node.nodeType === Node.TEXT_NODE
+    ? position.node.textContent ?? ""
+    : "";
+  if (!text) return null;
+  const at = source.indexOf(text);
+  return at < 0 ? null : at + Math.min(position.offset, text.length);
+}
+
+function markHardRenderedItem(
+  view: EditorView,
+  element: HTMLElement,
+  from: number,
+  to: number,
+  clickSelects: boolean,
+): HTMLElement {
+  element.classList.add("cm-hard-rendered-item");
+  element.dataset.hardPreviewFrom = String(from);
+  element.dataset.hardPreviewTo = String(to);
+  element.setAttribute("aria-selected", "false");
+  if (clickSelects) {
+    element.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      chooseHardPreview(view, { from, to });
+    });
+  } else {
+    element.addEventListener("pointerdown", () => {
+      if (selectedHardPreview(view.state))
+        view.dispatch({ effects: selectHardPreview.of(null) });
+    });
+  }
+  return element;
 }
 
 function calloutBodyPosition(
@@ -437,10 +503,21 @@ export class BulletWidget extends WidgetType {
 }
 
 export class HorizontalRuleWidget extends WidgetType {
-  toDOM(): HTMLElement {
+  constructor(readonly from: number, readonly to: number) { super(); }
+  eq(other: HorizontalRuleWidget): boolean {
+    return other.from === this.from && other.to === this.to;
+  }
+  toDOM(view: EditorView): HTMLElement {
     const rule = document.createElement("hr");
     rule.className = "horizontal-rule-widget";
     rule.setAttribute("aria-label", "Horizontal rule");
+    const revealRule = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      revealAt(view, this.from);
+    };
+    rule.addEventListener("pointerdown", revealRule);
+    rule.addEventListener("click", revealRule);
     return rule;
   }
 }
@@ -485,7 +562,13 @@ export class MathWidget extends WidgetType {
     if (this.editing) element.classList.add("math-edit-preview");
     element.tabIndex = 0;
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
-    element.addEventListener("click", () => reveal(view, this.from));
+    const revealMath = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      reveal(view, this.from);
+    };
+    element.addEventListener("pointerdown", revealMath);
+    element.addEventListener("click", revealMath);
     const rendered = renderMath(this.latex, this.display, element);
     if (this.display) void rendered.then(() => {
       wireMathScroll(element);
@@ -502,7 +585,7 @@ export class MathWidget extends WidgetType {
     return element;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export function resizeImageMarkdown(source: string, width: number): string {
@@ -534,6 +617,7 @@ function imageCodeIcon(): SVGElement {
 function sourceEditButton(
   view: EditorView,
   from: number,
+  to: number,
   label: string,
 ): HTMLButtonElement {
   const source = document.createElement("button");
@@ -546,7 +630,7 @@ function sourceEditButton(
   source.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    reveal(view, from, true);
+    reveal(view, from, { from, to });
   });
   return source;
 }
@@ -597,7 +681,7 @@ function interactiveImage(
   };
   image.addEventListener("load", imageLoaded);
   if (image.complete && image.naturalWidth > 0) queueMicrotask(imageLoaded);
-  const source = sourceEditButton(view, from, "Edit image source");
+  const source = sourceEditButton(view, from, to, "Edit image source");
 
   const handle = document.createElement("span");
   handle.className = "image-resize-handle";
@@ -641,9 +725,8 @@ function interactiveImage(
     const current = image.getBoundingClientRect().width || image.width || 300;
     commit(current + (event.key === "ArrowRight" ? 10 : -10));
   });
-  container.addEventListener("pointerdown", (event) => event.stopPropagation());
   container.append(image, source, handle);
-  return container;
+  return markHardRenderedItem(view, container, from, to, true);
 }
 
 export class LinkWidget extends WidgetType {
@@ -731,14 +814,14 @@ export class LinkWidget extends WidgetType {
       audio.className = "media-embed";
       audio.controls = true;
       audio.src = vaultUri(path);
-      return audio;
+      return this.attachmentDOM(view, audio, "Edit audio embed source");
     }
     if (["mp4", "webm", "ogv", "mov"].includes(extension ?? "")) {
       const video = document.createElement("video");
       video.className = "media-embed";
       video.controls = true;
       video.src = vaultUri(path);
-      return video;
+      return this.attachmentDOM(view, video, "Edit video embed source");
     }
     if (extension === "pdf") {
       const button = document.createElement("button");
@@ -746,7 +829,7 @@ export class LinkWidget extends WidgetType {
       button.className = "attachment-embed";
       button.textContent = `Open PDF: ${path}`;
       button.addEventListener("click", () => sendNative("attachment/open", { target: path }));
-      return button;
+      return this.attachmentDOM(view, button, "Edit PDF embed source");
     }
     const container = document.createElement("section");
     container.className = "note-embed";
@@ -757,7 +840,9 @@ export class LinkWidget extends WidgetType {
     title.className = "embed-title";
     title.textContent = this.target;
     title.addEventListener("click", () => sendNative("link/open", { target: this.target }));
-    const source = sourceEditButton(view, this.from, "Edit note embed source");
+    const source = sourceEditButton(
+      view, this.from, this.to, "Edit note embed source",
+    );
     source.classList.add("embed-source-button");
     const body = document.createElement("div");
     body.className = "embed-body dimmed";
@@ -781,10 +866,27 @@ export class LinkWidget extends WidgetType {
         container.style.removeProperty("min-height");
         view.requestMeasure();
       });
-    container.addEventListener("dblclick", (event) => {
-      if (event.target === container || event.target === body) reveal(view, this.from);
-    });
-    return container;
+    return markHardRenderedItem(
+      view, container, this.from, this.to, false,
+    );
+  }
+
+  private attachmentDOM(
+    view: EditorView,
+    content: HTMLElement,
+    editLabel: string,
+  ): HTMLElement {
+    const container = document.createElement("span");
+    container.className = `attachment-widget attachment-widget-${
+      this.block ? "block" : "inline"}`;
+    const source = sourceEditButton(
+      view, this.from, this.to, editLabel,
+    );
+    source.classList.add("embed-source-button");
+    container.append(content, source);
+    return markHardRenderedItem(
+      view, container, this.from, this.to, false,
+    );
   }
 
   ignoreEvent(): boolean { return this.embed; }
@@ -821,6 +923,10 @@ export class MarkdownLinkWidget extends WidgetType {
     if (/^data:/i.test(this.target)) return `data:${this.from}:${this.to}`;
     if (/^https?:/i.test(this.target)) return `remote:${this.target}`;
     return `local:${this.target}`;
+  }
+
+  private get linkedImage(): boolean {
+    return !this.image && /^(?:!\[|<img\b)/i.test(this.label.trim());
   }
 
   get estimatedHeight(): number {
@@ -877,15 +983,27 @@ export class MarkdownLinkWidget extends WidgetType {
     wireRenderedContent(link);
     link.addEventListener("click", (event) => {
       event.preventDefault();
+      if (this.linkedImage) return;
       if (isExternal(this.target)) sendNative("url/open", { uri: this.target });
       else if (this.target.startsWith("#")) sendNative("link/open", { target: this.target });
       else sendNative("attachment/open", { target: this.target, relative: true });
     });
     link.addEventListener("dblclick", () => reveal(view, this.from));
+    if (this.linkedImage) {
+      const container = document.createElement("span");
+      container.className = "image-widget image-widget-inline linked-image-widget";
+      container.append(
+        link,
+        sourceEditButton(view, this.from, this.to, "Edit linked image source"),
+      );
+      return markHardRenderedItem(
+        view, container, this.from, this.to, true,
+      );
+    }
     return link;
   }
 
-  ignoreEvent(): boolean { return this.image; }
+  ignoreEvent(): boolean { return this.image || this.linkedImage; }
 }
 
 function imageError(error: unknown): HTMLElement {
@@ -939,7 +1057,7 @@ export class TagWidget extends WidgetType {
     button.addEventListener("dblclick", () => reveal(view, this.from));
     return button;
   }
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export class FootnoteWidget extends WidgetType {
@@ -974,31 +1092,61 @@ export class FootnoteWidget extends WidgetType {
     content.innerHTML = renderMarkdown(this.text);
     wireRenderedContent(content);
     definition.append(label, content);
+    definition.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      reveal(view, this.from);
+    });
+    definition.addEventListener("click", () => reveal(view, this.from));
     definition.addEventListener("dblclick", () => reveal(view, this.from));
     return definition;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export class HtmlPreviewWidget extends WidgetType {
-  constructor(readonly source: string, readonly from: number, readonly className = "markdown-preview") { super(); }
-  eq(other: HtmlPreviewWidget): boolean { return other.source === this.source && other.className === this.className; }
+  constructor(
+    readonly source: string,
+    readonly from: number,
+    readonly className = "markdown-preview",
+    readonly to = from + source.length,
+    readonly hard = false,
+  ) { super(); }
+  eq(other: HtmlPreviewWidget): boolean {
+    return other.source === this.source && other.className === this.className &&
+      other.from === this.from && other.to === this.to &&
+      other.hard === this.hard;
+  }
 
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement("div");
     container.className = this.className;
     container.innerHTML = renderMarkdown(this.source);
     wireRenderedContent(container);
-    container.addEventListener("dblclick", () => {
-      const selected = selectedSourceOffset(container, this.source);
+    if (this.hard)
+      return markHardRenderedItem(
+        view, container, this.from, this.to, false,
+      );
+    const revealClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const selected = clickedSourceOffset(container, this.source, event);
       const firstContent = this.source.indexOf("\n") + 1;
-      revealAt(view, this.from + (selected ?? Math.max(1, firstContent)));
-    });
+      const fallback = Math.max(1, firstContent);
+      const offset = this.className === "code-block-widget" &&
+        (selected ?? -1) < fallback
+        ? fallback
+        : selected ?? fallback;
+      revealAt(view, this.from + offset);
+    };
+    container.addEventListener("pointerdown", revealClick);
+    container.addEventListener("click", revealClick);
+    container.addEventListener("dblclick", revealClick);
     return container;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export class CalloutWidget extends WidgetType {
@@ -1030,15 +1178,23 @@ export class CalloutWidget extends WidgetType {
     body.innerHTML = renderMarkdown(this.body);
     wireRenderedContent(body);
     details.append(title, body);
-    details.addEventListener("dblclick", (event) => {
-      if (event.target instanceof Node && title.contains(event.target)) return;
-      const selected = selectedSourceOffset(body, this.body) ?? 0;
+    const revealClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.target instanceof Node && title.contains(event.target)) {
+        revealAt(view, this.from + 2);
+        return;
+      }
+      const selected = clickedSourceOffset(body, this.body, event) ?? 0;
       revealAt(view, calloutBodyPosition(view, this.from, this.body, selected));
-    });
+    };
+    details.addEventListener("pointerdown", revealClick);
+    details.addEventListener("click", revealClick);
+    details.addEventListener("dblclick", revealClick);
     return details;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export class MermaidWidget extends WidgetType {
@@ -1049,7 +1205,14 @@ export class MermaidWidget extends WidgetType {
     const container = document.createElement("div");
     container.className = "mermaid-widget";
     container.tabIndex = 0;
-    container.addEventListener("dblclick", () => reveal(view, this.from));
+    const revealMermaid = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      reveal(view, this.from);
+    };
+    container.addEventListener("pointerdown", revealMermaid);
+    container.addEventListener("click", revealMermaid);
+    container.addEventListener("dblclick", revealMermaid);
     const id = `phi-mermaid-${++mermaidSequence}`;
     ensureMermaidReady()
       .then((mermaid) => mermaid.render(id, this.source))
@@ -1062,7 +1225,7 @@ export class MermaidWidget extends WidgetType {
     return container;
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 interface SimpleProperty { key: string; value: string; from: number; to: number }
@@ -1091,8 +1254,15 @@ function simpleProperties(source: string, base: number): { properties: SimplePro
 }
 
 export class PropertiesWidget extends WidgetType {
-  constructor(readonly source: string, readonly from: number) { super(); }
-  eq(other: PropertiesWidget): boolean { return other.source === this.source; }
+  constructor(
+    readonly source: string,
+    readonly from: number,
+    readonly to = from + source.length,
+  ) { super(); }
+  eq(other: PropertiesWidget): boolean {
+    return other.source === this.source && other.from === this.from &&
+      other.to === this.to;
+  }
 
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement("section");
@@ -1137,7 +1307,9 @@ export class PropertiesWidget extends WidgetType {
         raw.type = "button";
         raw.className = "property-source-button";
         raw.textContent = "Edit lists or nested properties in source";
-        raw.addEventListener("click", () => reveal(view, this.from));
+        raw.addEventListener("click", () => reveal(
+          view, this.from, { from: this.from, to: this.to },
+        ));
         container.append(raw);
       }
     } catch (error) {
@@ -1145,23 +1317,32 @@ export class PropertiesWidget extends WidgetType {
       warning.type = "button";
       warning.className = "render-error";
       warning.textContent = "Invalid or complex properties — edit source";
-      warning.addEventListener("click", () => reveal(view, this.from));
+      warning.addEventListener("click", () => reveal(
+        view, this.from, { from: this.from, to: this.to },
+      ));
       container.append(warning);
     }
-    return container;
+    return markHardRenderedItem(
+      view, container, this.from, this.to, false,
+    );
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
 
 export class RawHtmlWidget extends WidgetType {
   constructor(
     readonly source: string,
     readonly from: number,
+    readonly to = from + source.length,
     readonly remoteAllowed = remoteImagesAllowed(),
   ) { super(); }
+  private get hard(): boolean {
+    return /<(?:iframe|table)\b/i.test(this.source);
+  }
   eq(other: RawHtmlWidget): boolean {
     return other.source === this.source &&
+      other.from === this.from && other.to === this.to &&
       other.remoteAllowed === this.remoteAllowed;
   }
   toDOM(view: EditorView): HTMLElement {
@@ -1169,8 +1350,27 @@ export class RawHtmlWidget extends WidgetType {
     container.className = "raw-html-widget";
     container.innerHTML = renderRawHtml(this.source);
     wireRenderedContent(container);
-    container.addEventListener("dblclick", () => reveal(view, this.from));
+    if (this.hard) {
+      const source = sourceEditButton(
+        view, this.from, this.to, "Edit HTML embed source",
+      );
+      source.classList.add("embed-source-button");
+      container.append(source);
+      return markHardRenderedItem(
+        view, container, this.from, this.to, false,
+      );
+    }
+    const revealHtml = (rawEvent: Event) => {
+      const event = rawEvent as MouseEvent;
+      event.preventDefault();
+      event.stopPropagation();
+      const offset = clickedSourceOffset(container, this.source, event) ?? 0;
+      revealAt(view, this.from + offset);
+    };
+    container.addEventListener("pointerdown", revealHtml);
+    container.addEventListener("click", revealHtml);
+    container.addEventListener("dblclick", revealHtml);
     return container;
   }
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(): boolean { return true; }
 }
