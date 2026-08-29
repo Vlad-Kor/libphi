@@ -585,6 +585,33 @@ describe("CodeMirror document transactions", () => {
       ?.textContent).toBe("```js");
   });
 
+  it("keeps the line entered after a closing code fence editable", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "```text\ntest\n```";
+    editor.openDocument({
+      documentId: "code-block-following-line",
+      path: "code-block-following-line.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: source.length } });
+
+    expect(key(editor.view, "Enter")).toBe(true);
+    expect(editor.getDocument()).toBe(`${source}\n`);
+    expect(editor.view.state.selection.main.head).toBe(source.length + 1);
+    expect(parent.querySelector(".code-block-widget")).not.toBeNull();
+    const lines = [...parent.querySelectorAll<HTMLElement>(".cm-line")];
+    /* A block replacement is a .cm-block sibling, so the only text line left
+     * here must be the newly inserted empty line. The regression left none. */
+    expect(lines).toHaveLength(1);
+    expect(lines.at(-1)?.textContent).toBe("");
+    expect(lines.at(-1)?.querySelector(".code-block-widget")).toBeNull();
+  });
+
   it("builds sorted previews for nested rich lists and keeps list images inline", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },

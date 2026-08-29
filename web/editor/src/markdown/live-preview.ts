@@ -221,6 +221,17 @@ function buildDecorations(state: EditorState): DecorationSet {
     buildDecorationsNow(state, markdownAnalysis(state)));
 }
 
+function selectionIsOnLineAfterBlock(
+  node: MarkdownNode,
+  state: EditorState,
+): boolean {
+  if (node.to >= state.doc.length || state.sliceDoc(node.to, node.to + 1) !== "\n")
+    return false;
+  return state.selection.ranges.some((selection) =>
+    selection.empty && selection.head === node.to + 1
+  );
+}
+
 function buildDecorationsNow(state: EditorState,
                              analysis: MarkdownAnalysis): DecorationSet {
   const nodes = analysis.nodes;
@@ -240,7 +251,8 @@ function buildDecorationsNow(state: EditorState,
         let to = node.to;
         if (replacement.spec.block) {
           const lastLine = state.doc.lineAt(node.to);
-          if (node.to === lastLine.to && node.to < state.doc.length)
+          if (node.to === lastLine.to && node.to < state.doc.length &&
+              !selectionIsOnLineAfterBlock(node, state))
             to++;
         }
         builder.add(node.from, to, replacement);
@@ -381,6 +393,16 @@ function selectionActivatesNode(analysis: MarkdownAnalysis,
   return analysis.nodes.some((node) => active(node, state));
 }
 
+function selectionPreservesLineAfterBlock(
+  analysis: MarkdownAnalysis,
+  state: EditorState,
+): boolean {
+  return analysis.nodes.some((node) =>
+    selectionIsOnLineAfterBlock(node, state) &&
+    Boolean(blockReplacement(node, state)?.spec.block)
+  );
+}
+
 function changesFollowAllNodes(transaction: Transaction): boolean {
   let earliest = transaction.startState.doc.length;
   transaction.changes.iterChanges((fromA) => { earliest = Math.min(earliest, fromA); });
@@ -408,7 +430,12 @@ const livePreviewDecorations = StateField.define<DecorationSet>({
     if (transaction.selection) {
       const analysis = markdownAnalysis(transaction.state);
       if (!selectionActivatesNode(analysis, transaction.startState) &&
-          !selectionActivatesNode(analysis, transaction.state))
+          !selectionActivatesNode(analysis, transaction.state) &&
+          !selectionPreservesLineAfterBlock(
+            analysis, transaction.startState,
+          ) && !selectionPreservesLineAfterBlock(
+            analysis, transaction.state,
+          ))
         return value;
       return buildDecorations(transaction.state);
     }
