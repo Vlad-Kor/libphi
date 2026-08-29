@@ -920,6 +920,57 @@ $$`;
     expect(hardParent.querySelector(".image-widget")).not.toBeNull();
   });
 
+  it("stops on blank lines crossed between or inside soft previews", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const equation = String.raw`\[ \boxed{\text{rectangular dual of }G \;\Rightarrow\; \text{orthogonal drawing of }G^\*} \]`;
+    const text = `${equation}\n\n# Orthogonal Drawings\n\n`;
+    editor.openDocument({
+      documentId: "soft-arrow-blank-line",
+      path: "soft-arrow-blank-line.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const blank = editor.view.state.doc.line(2).from;
+    const heading = text.indexOf("# Orthogonal");
+    const move = vi.spyOn(editor.view, "moveVertically");
+
+    editor.view.dispatch({ selection: { anchor: heading } });
+    move.mockReturnValue(EditorSelection.cursor(0));
+    expect(key(editor.view, "ArrowUp")).toBe(true);
+    expect(editor.view.state.selection.main.head).toBe(blank);
+
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    move.mockReturnValue(EditorSelection.cursor(heading));
+    expect(key(editor.view, "ArrowDown")).toBe(true);
+    expect(editor.view.state.selection.main.head).toBe(blank);
+
+    const codeParent = document.createElement("div");
+    document.body.append(codeParent);
+    const codeEditor = new PhiMarkdownEditor(codeParent);
+    views.push(codeEditor.view);
+    const code = "```text\nfirst\n\nlast\n```\nAfter";
+    codeEditor.openDocument({
+      documentId: "soft-arrow-code-blank-line",
+      path: "soft-arrow-code-blank-line.md",
+      text: code,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const codeBlank = codeEditor.view.state.doc.line(3).from;
+    codeEditor.view.dispatch({
+      selection: { anchor: code.indexOf("last") },
+    });
+    vi.spyOn(codeEditor.view, "moveVertically").mockReturnValue(
+      EditorSelection.cursor(code.indexOf("first")),
+    );
+    expect(key(codeEditor.view, "ArrowUp")).toBe(true);
+    expect(codeEditor.view.state.selection.main.head).toBe(codeBlank);
+  });
+
   it("keeps hard items rendered until edit and supports delete", () => {
     const parent = document.createElement("div");
     document.body.append(parent);

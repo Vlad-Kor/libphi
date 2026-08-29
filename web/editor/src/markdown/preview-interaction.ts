@@ -344,7 +344,18 @@ function moveVerticallyThroughPreview(
        number += step) {
     const position = sourceColumnPosition(view.state, number, column);
     const node = previewNodeAt(view.state, position);
-    if (!node) continue;
+    if (!node) {
+      /* Widget and heading geometry can make CodeMirror's visual motion jump
+       * across more than one source line. Every physical source line remains
+       * a navigation stop, including empty separators between previews. */
+      if (number === movedLine.number) continue;
+      view.dispatch({
+        selection: EditorSelection.cursor(position),
+        scrollIntoView: true,
+        userEvent: "select",
+      });
+      return true;
+    }
     if (isHardRenderedNode(node)) {
       chooseHardPreview(view, node);
       return true;
