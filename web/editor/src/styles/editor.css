@@ -421,6 +421,30 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
   font-family: ui-monospace, "Adwaita Mono", monospace;
   font-size: .92em;
 }
+.cm-live-inline-code-empty {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: .65em;
+  padding-inline: .12em;
+  cursor: text;
+}
+.cm-line.cm-live-code-block-source {
+  box-sizing: border-box;
+  padding-inline: 1em;
+  background: var(--editor-code-bg);
+  font-family: ui-monospace, "Adwaita Mono", monospace;
+}
+.cm-line.cm-live-code-block-source-first {
+  padding-top: .45em;
+  border-radius: 5px 5px 0 0;
+}
+.cm-line.cm-live-code-block-source-last {
+  padding-bottom: .45em;
+  border-radius: 0 0 5px 5px;
+}
+.cm-line.cm-live-code-block-source-first.cm-live-code-block-source-last {
+  border-radius: 5px;
+}
 .cm-html-tag { color: color-mix(in srgb, #c061cb 80%, var(--editor-fg)); font-weight: 650; }
 .cm-html-attribute { color: color-mix(in srgb, var(--editor-link) 82%, var(--editor-fg)); }
 .cm-html-value { color: color-mix(in srgb, #e5a50a 78%, var(--editor-fg)); }

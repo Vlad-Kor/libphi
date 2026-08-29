@@ -13,6 +13,37 @@ describe("Markdown extension parser precedence", () => {
     expect(nodes.filter((node) => node.kind === "inline-code")).toHaveLength(1);
   });
 
+  it("parses empty and unfinished backtick environments", () => {
+    const inline = "``\n`unfinished $not-math$\n``double``";
+    const nodes = parseMarkdownNodes(inline);
+    const code = nodes.filter((node) => node.kind === "inline-code");
+
+    expect(code).toHaveLength(3);
+    expect(code[0]).toMatchObject({
+      text: "",
+      meta: { incomplete: false, markerLength: 1 },
+    });
+    expect(code[1]).toMatchObject({
+      text: "unfinished $not-math$",
+      meta: { incomplete: true, markerLength: 1 },
+    });
+    expect(code[2]).toMatchObject({
+      text: "double",
+      meta: { incomplete: false, markerLength: 2 },
+    });
+    expect(nodes.some((node) => node.kind === "math")).toBe(false);
+
+    const fenced = "Before\n\n```js\nconst value = 1;";
+    const block = parseMarkdownNodes(fenced).find((node) =>
+      node.kind === "code-block");
+    expect(block).toMatchObject({
+      from: fenced.indexOf("```"),
+      to: fenced.length,
+      meta: { language: "js", incomplete: true, markerLength: 3 },
+    });
+    expect(block?.text).toBe("```js\nconst value = 1;");
+  });
+
   it("does not parse Markdown inside raw HTML", () => {
     const nodes = parseMarkdownNodes('<span style="color:red">**not bold** $50</span>');
     expect(nodes.map((node) => node.kind)).toEqual(["html"]);

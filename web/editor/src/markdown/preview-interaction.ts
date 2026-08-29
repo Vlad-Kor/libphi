@@ -56,6 +56,10 @@ export function previewNodeIsActive(
     );
   }
   return state.selection.ranges.some((selection) => {
+    if (node.kind === "inline-code" && node.meta?.incomplete &&
+        selection.empty) {
+      return selection.from >= node.from && selection.from <= node.to;
+    }
     if (node.kind === "task") {
       const from = Number(node.meta?.prefixFrom ?? node.from);
       const to = Number(node.meta?.prefixTo ?? node.to);

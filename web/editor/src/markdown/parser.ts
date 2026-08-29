@@ -43,17 +43,144 @@ interface Range { from: number; to: number }
 const inside = (position: number, ranges: Range[]) =>
   ranges.some((range) => position >= range.from && position < range.to);
 
-function collectCodeRanges(text: string): Range[] {
-  const ranges: Range[] = [];
-  const fence = /^( {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\2[ \t]*$/gm;
-  for (const match of text.matchAll(fence))
-    ranges.push({ from: match.index, to: match.index + match[0].length });
-  const inline = /(`+)([^\n]*?)\1/g;
-  for (const match of text.matchAll(inline)) {
-    if (!inside(match.index, ranges))
-      ranges.push({ from: match.index, to: match.index + match[0].length });
+function collectFencedCodeNodes(text: string): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
+  const opener = /^( {0,3})(`{3,}|~{3,})([^\n]*)$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text))) {
+    const from = match.index;
+    const openingLineEnd = lineEnd(text, from);
+    const marker = match[2][0];
+    const markerLength = match[2].length;
+    const contentFrom = openingLineEnd < text.length
+      ? openingLineEnd + 1
+      : openingLineEnd;
+    let contentTo = text.length;
+    let to = text.length;
+    let complete = false;
+
+    for (let lineFrom = contentFrom; lineFrom <= text.length;) {
+      const lineTo = lineEnd(text, lineFrom);
+      const closing = /^( {0,3})(`+|~+)[ \t]*$/.exec(
+        text.slice(lineFrom, lineTo),
+      );
+      if (closing && closing[2][0] === marker &&
+          closing[2].length >= markerLength) {
+        contentTo = lineFrom;
+        to = lineTo;
+        complete = true;
+        break;
+      }
+      if (lineTo >= text.length) break;
+      lineFrom = lineTo + 1;
+    }
+
+    const language = match[3].trim().split(/\s+/, 1)[0].toLowerCase();
+    nodes.push({
+      kind: language === "mermaid" ? "mermaid" : "code-block",
+      from,
+      to,
+      contentFrom,
+      contentTo,
+      text: language === "mermaid"
+        ? text.slice(contentFrom, contentTo)
+        : text.slice(from, to),
+      meta: { language, incomplete: !complete, markerLength },
+    });
+
+    /* A fence owns everything through its closer or the end of the document,
+     * so none of those lines can begin another fenced block. */
+    opener.lastIndex = to < text.length ? to + 1 : text.length;
   }
-  return ranges;
+  return nodes;
+}
+
+function collectInlineCodeNodes(
+  text: string,
+  fencedRanges: Range[],
+): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
+  for (let lineFrom = 0; lineFrom <= text.length;) {
+    const lineTo = lineEnd(text, lineFrom);
+    if (!fencedRanges.some((range) =>
+      lineFrom < range.to && lineTo >= range.from)) {
+      let at = lineFrom;
+      while (at < lineTo) {
+        const open = text.indexOf("`", at);
+        if (open < 0 || open >= lineTo) break;
+        if (isMarkdownEscape(text, open)) {
+          at = open + 1;
+          continue;
+        }
+
+        let afterOpen = open + 1;
+        while (afterOpen < lineTo && text[afterOpen] === "`") afterOpen++;
+        const markerLength = afterOpen - open;
+        let close = -1;
+        let afterClose = -1;
+        for (let candidate = afterOpen; candidate < lineTo;) {
+          candidate = text.indexOf("`", candidate);
+          if (candidate < 0 || candidate >= lineTo) break;
+          if (isMarkdownEscape(text, candidate)) {
+            candidate++;
+            continue;
+          }
+          let runEnd = candidate + 1;
+          while (runEnd < lineTo && text[runEnd] === "`") runEnd++;
+          if (runEnd - candidate === markerLength) {
+            close = candidate;
+            afterClose = runEnd;
+            break;
+          }
+          candidate = runEnd;
+        }
+
+        if (close >= 0) {
+          nodes.push({
+            kind: "inline-code",
+            from: open,
+            to: afterClose,
+            contentFrom: afterOpen,
+            contentTo: close,
+            text: text.slice(afterOpen, close),
+            meta: { incomplete: false, markerLength },
+          });
+          at = afterClose;
+          continue;
+        }
+
+        /* Two adjacent markers are useful while authoring an empty code span.
+         * Treat a marker-only even run at EOL as equal opening/closing halves;
+         * otherwise an unmatched run previews through the end of its line. */
+        if (afterOpen === lineTo && markerLength % 2 === 0) {
+          const half = markerLength / 2;
+          nodes.push({
+            kind: "inline-code",
+            from: open,
+            to: lineTo,
+            contentFrom: open + half,
+            contentTo: open + half,
+            text: "",
+            meta: { incomplete: false, markerLength: half },
+          });
+        } else {
+          nodes.push({
+            kind: "inline-code",
+            from: open,
+            to: lineTo,
+            contentFrom: afterOpen,
+            contentTo: lineTo,
+            text: text.slice(afterOpen, lineTo),
+            meta: { incomplete: true, markerLength },
+          });
+        }
+        break;
+      }
+    }
+    if (lineTo >= text.length) break;
+    lineFrom = lineTo + 1;
+  }
+  return nodes;
 }
 
 function pushInline(
@@ -154,8 +281,12 @@ function collectMarkdownLinks(text: string, protectedRanges: Range[]): MarkdownN
 }
 
 export function parseMarkdownNodes(text: string): MarkdownNode[] {
-  const nodes: MarkdownNode[] = [];
-  const codeRanges = collectCodeRanges(text);
+  const fencedCodeNodes = collectFencedCodeNodes(text);
+  const fencedRanges = fencedCodeNodes.map(({ from, to }) => ({ from, to }));
+  const inlineCodeNodes = collectInlineCodeNodes(text, fencedRanges);
+  const nodes: MarkdownNode[] = [...fencedCodeNodes, ...inlineCodeNodes];
+  const codeRanges = [...fencedCodeNodes, ...inlineCodeNodes]
+    .map(({ from, to }) => ({ from, to }));
   const htmlRanges: Range[] = [];
   const rawHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td|iframe)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
   for (const match of text.matchAll(rawHtml)) {
@@ -176,34 +307,6 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
       nodes.push({ kind: "frontmatter", from: 0, to, text: text.slice(0, to) });
       protectedRanges.push({ from: 0, to });
     }
-  }
-
-  const fenced = /^( {0,3})(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1\2[ \t]*$/gm;
-  for (const match of text.matchAll(fenced)) {
-    const language = match[3].trim().split(/\s+/, 1)[0].toLowerCase();
-    nodes.push({
-      kind: language === "mermaid" ? "mermaid" : "code-block",
-      from: match.index,
-      to: match.index + match[0].length,
-      text: language === "mermaid" ? match[4] : match[0],
-      meta: { language },
-    });
-  }
-
-  const inlineCode = /(`+)([^\n]*?)\1/g;
-  for (const match of text.matchAll(inlineCode)) {
-    const from = match.index;
-    const to = from + match[0].length;
-    if (!codeRanges.some((range) => range.from === from && range.to === to))
-      continue;
-    nodes.push({
-      kind: "inline-code",
-      from,
-      to,
-      contentFrom: from + match[1].length,
-      contentTo: to - match[1].length,
-      text: match[2],
-    });
   }
 
   const displayOpener = /^( {0,3})(\$\$|\\\[)[ \t]*(.*)$/gm;

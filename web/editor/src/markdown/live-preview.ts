@@ -10,6 +10,7 @@ import type { MarkdownNode } from "./parser";
 import {
   CalloutWidget,
   BulletWidget,
+  EmptyInlineCodeWidget,
   FootnoteWidget,
   HiddenWidget,
   HorizontalRuleWidget,
@@ -152,6 +153,45 @@ function addDelimited(
   if (node.contentTo < node.to) builder.add(node.contentTo, node.to, hidden);
 }
 
+function addInlineCode(
+  builder: DecorationSink,
+  node: MarkdownNode,
+  isActive: boolean,
+): void {
+  if (isActive) {
+    builder.add(node.from, node.to, inlineCode);
+    return;
+  }
+  if (node.contentFrom === node.contentTo) {
+    const sourcePosition = node.meta?.incomplete
+      ? node.to
+      : Number(node.contentFrom ?? node.from);
+    builder.add(node.from, node.to, Decoration.replace({
+      widget: new EmptyInlineCodeWidget(sourcePosition),
+    }));
+    return;
+  }
+  addDelimited(builder, node, inlineCode);
+}
+
+function addCodeBlockSource(
+  builder: DecorationSink,
+  state: EditorState,
+  node: MarkdownNode,
+): void {
+  const first = state.doc.lineAt(node.from);
+  const last = state.doc.lineAt(node.to);
+  for (let number = first.number; number <= last.number; number++) {
+    const classes = ["cm-live-code-block-source"];
+    if (number === first.number) classes.push("cm-live-code-block-source-first");
+    if (number === last.number) classes.push("cm-live-code-block-source-last");
+    const line = state.doc.line(number);
+    builder.add(line.from, line.from, Decoration.line({
+      class: classes.join(" "),
+    }));
+  }
+}
+
 function addHtmlSyntax(builder: DecorationSink, node: MarkdownNode): void {
   for (const tagMatch of node.text.matchAll(/<\/?([A-Za-z][\w:-]*)([^<>]*)>/g)) {
     const tagFrom = node.from + tagMatch.index;
@@ -211,17 +251,19 @@ function buildDecorationsNow(state: EditorState,
     switch (node.kind) {
       case "heading": {
         const level = Number(node.meta?.level ?? 1);
+        builder.add(node.from, node.from, Decoration.line({
+          class: `cm-live-heading cm-live-heading-${level}`,
+        }));
+        const headingText = state.sliceDoc(
+          Number(node.contentFrom ?? node.from), node.to,
+        );
+        builder.add(node.from, node.from, Decoration.widget({
+          widget: new LineHeightEstimateWidget(
+            estimatedHeadingHeight(level, headingText),
+          ),
+          side: -1,
+        }));
         if (!isActive) {
-          builder.add(node.from, node.from, Decoration.line({ class: `cm-live-heading cm-live-heading-${level}` }));
-          const headingText = state.sliceDoc(
-            Number(node.contentFrom ?? node.from), node.to,
-          );
-          builder.add(node.from, node.from, Decoration.widget({
-            widget: new LineHeightEstimateWidget(
-              estimatedHeadingHeight(level, headingText),
-            ),
-            side: -1,
-          }));
           if (node.contentFrom != null)
             builder.add(node.from, node.contentFrom, hidden);
         }
@@ -290,7 +332,11 @@ function buildDecorationsNow(state: EditorState,
       case "strong": if (!isActive) addDelimited(builder, node, strong); break;
       case "strike": if (!isActive) addDelimited(builder, node, strike); break;
       case "highlight": if (!isActive) addDelimited(builder, node, highlight); break;
-      case "inline-code": if (!isActive) addDelimited(builder, node, inlineCode); break;
+      case "inline-code": addInlineCode(builder, node, isActive); break;
+      case "mermaid":
+      case "code-block": if (isActive) addCodeBlockSource(
+        builder, state, node,
+      ); break;
       case "comment": if (!isActive) builder.add(node.from, node.to, hidden); break;
       case "tag": builder.add(node.from, node.to, tag); break;
       case "block-id": builder.add(node.from, node.to, blockId); break;

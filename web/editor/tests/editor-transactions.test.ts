@@ -517,12 +517,12 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
   });
 
-  it("renders inline code as a compact code chip outside its source", () => {
+  it("keeps inline-code styling while its delimiters are visible", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
     views.push(editor.view);
-    const text = "Use `test` here";
+    const text = "Use `test` and ``double`` here";
     editor.openDocument({
       documentId: "inline-code",
       path: "inline-code.md",
@@ -531,8 +531,58 @@ describe("CodeMirror document transactions", () => {
       lineEnding: "LF",
     });
     editor.view.dispatch({ selection: { anchor: 0 } });
-    expect(parent.querySelector(".cm-live-inline-code")?.textContent).toBe("test");
-    expect(parent.querySelector(".cm-line")?.textContent).toBe("Use test here");
+    expect([...parent.querySelectorAll(".cm-live-inline-code")]
+      .map((element) => element.textContent)).toEqual(["test", "double"]);
+    expect(parent.querySelector(".cm-line")?.textContent)
+      .toBe("Use test and double here");
+
+    editor.view.dispatch({
+      selection: { anchor: text.indexOf("test") + 1 },
+    });
+    expect([...parent.querySelectorAll(".cm-live-inline-code")]
+      .map((element) => element.textContent)).toEqual(["`test`", "double"]);
+
+    editor.view.dispatch({
+      selection: { anchor: text.indexOf("double") + 1 },
+    });
+    expect([...parent.querySelectorAll(".cm-live-inline-code")]
+      .map((element) => element.textContent)).toEqual(["test", "``double``"]);
+  });
+
+  it("previews empty and unfinished backtick environments", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const lone = "`";
+    const text = `Before\n\n\`\`\n\n${lone}\n\n\`\`\`js\nconst value = 1;`;
+    editor.openDocument({
+      documentId: "unfinished-code",
+      path: "unfinished-code.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 0 } });
+
+    expect(parent.querySelectorAll(".cm-live-inline-code-empty"))
+      .toHaveLength(2);
+    expect(parent.querySelector(".code-block-widget code")?.textContent)
+      .toContain("const value = 1;");
+
+    const loneAt = text.indexOf(`\n${lone}\n`) + 1;
+    editor.view.dispatch({ selection: { anchor: loneAt + 1 } });
+    expect([...parent.querySelectorAll(".cm-live-inline-code")]
+      .some((element) => element.textContent === lone)).toBe(true);
+    expect(parent.querySelectorAll(".cm-live-inline-code-empty"))
+      .toHaveLength(1);
+
+    editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".code-block-widget")).toBeNull();
+    expect(parent.querySelectorAll(".cm-live-code-block-source"))
+      .toHaveLength(2);
+    expect(parent.querySelector(".cm-live-code-block-source-first")
+      ?.textContent).toBe("```js");
   });
 
   it("builds sorted previews for nested rich lists and keeps list images inline", () => {
@@ -1122,6 +1172,10 @@ $$`;
       new MouseEvent("pointerdown", { bubbles: true }),
     );
     expect(parent.querySelector(".code-block-widget")).toBeNull();
+    expect(parent.querySelectorAll(".cm-live-code-block-source"))
+      .toHaveLength(3);
+    expect(parent.querySelector(".cm-live-code-block-source-first")
+      ?.textContent).toBe("```text");
     expect(parent.querySelector(".blockquote-widget")).not.toBeNull();
     expect(editor.view.state.selection.main.head)
       .toBe(text.indexOf("first"));
@@ -1134,7 +1188,7 @@ $$`;
     expect(parent.querySelector(".code-block-widget")).not.toBeNull();
   });
 
-  it("fully removes heading preview styling while its source is active", () => {
+  it("keeps heading preview styling while its source is active", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
@@ -1151,7 +1205,7 @@ $$`;
     expect(parent.querySelector(".cm-live-heading-1")).not.toBeNull();
 
     editor.view.dispatch({ selection: { anchor: 0 } });
-    expect(parent.querySelector(".cm-live-heading")).toBeNull();
+    expect(parent.querySelector(".cm-live-heading-1")).not.toBeNull();
     expect(parent.querySelector(".cm-line")?.textContent).toContain("# Heading");
 
     editor.view.dispatch({ selection: { anchor: text.length } });

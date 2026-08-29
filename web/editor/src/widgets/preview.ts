@@ -488,6 +488,29 @@ export class HiddenWidget extends WidgetType {
   }
 }
 
+export class EmptyInlineCodeWidget extends WidgetType {
+  constructor(readonly sourcePosition: number) { super(); }
+
+  eq(other: EmptyInlineCodeWidget): boolean {
+    return other.sourcePosition === this.sourcePosition;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const code = document.createElement("span");
+    code.className = "cm-live-inline-code cm-live-inline-code-empty";
+    code.textContent = "\u200b";
+    code.setAttribute("aria-label", "Empty inline code");
+    code.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      revealAt(view, this.sourcePosition);
+    });
+    return code;
+  }
+
+  ignoreEvent(): boolean { return true; }
+}
+
 export class BulletWidget extends WidgetType {
   constructor(readonly label = "•", readonly ordered = false) { super(); }
 
