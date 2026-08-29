@@ -104,6 +104,34 @@ describe("rendering security", () => {
     expect(value).toContain('class="token keyword"');
   });
 
+  it("keeps renderer syntax literal inside inline and fenced code", () => {
+    const fenced = [
+      "```text",
+      String.raw`$x$ \[ y \]`,
+      "<span>**literal**</span>",
+      "%%comment%% ==highlight== [[Note]]",
+      "```",
+    ].join("\n");
+    const root = document.createElement("div");
+    root.innerHTML = renderMarkdown(`${fenced}\n\nInline \`$z$\``);
+    wireRenderedContent(root);
+
+    expect(root.innerHTML).not.toContain("phi-math-source");
+    expect(root.innerHTML).not.toContain("phi-raw-html");
+    expect(root.querySelector("pre code")?.textContent).toBe(
+      [
+        String.raw`$x$ \[ y \]`,
+        "<span>**literal**</span>",
+        "%%comment%% ==highlight== [[Note]]",
+        "",
+      ].join("\n"),
+    );
+    expect(root.querySelectorAll(".math-widget")).toHaveLength(0);
+    expect(root.querySelector("code:not(pre code)")?.textContent).toBe("$z$");
+    expect(root.querySelector(".internal-link")).toBeNull();
+    expect(root.querySelector("mark")).toBeNull();
+  });
+
   it("renders nested callouts and math while respecting raw HTML boundaries", () => {
     const root = document.createElement("div");
     root.innerHTML = renderMarkdown(

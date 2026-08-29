@@ -20,6 +20,7 @@ import "prismjs/components/prism-yaml";
 import { requestNative, sendNative } from "../bridge";
 import { renderMath, wireMathScroll } from "../math/mathjax";
 import { remoteImagesAllowed } from "../settings";
+import { parseMarkdownNodes } from "./parser";
 
 const escapeHtml = (value: string): string => value
   .replace(/&/g, "&amp;")
@@ -51,9 +52,11 @@ interface PreparedMarkdown {
   math: string[];
 }
 
-function prepare(source: string): PreparedMarkdown {
-  const html: string[] = [];
-  const math: string[] = [];
+function prepareNonCode(
+  source: string,
+  html: string[],
+  math: string[],
+): string {
   let value = source.replace(protectedHtml, (match) => {
     const index = html.push(match) - 1;
     return `<phi-raw-html data-index="${index}"></phi-raw-html>`;
@@ -78,6 +81,30 @@ function prepare(source: string): PreparedMarkdown {
         return `<button type="button" class="internal-embed" ${attributes}>${escapeAttribute(label)}</button>`;
       return `<a href="#" class="internal-link" ${attributes}>${escapeAttribute(label)}</a>`;
     });
+  return value;
+}
+
+function prepare(source: string): PreparedMarkdown {
+  const html: string[] = [];
+  const math: string[] = [];
+  const nodes = parseMarkdownNodes(source);
+  const rawHtml = nodes.filter((node) => node.kind === "html");
+  const code = nodes.filter((node) =>
+    (node.kind === "inline-code" || node.kind === "code-block" ||
+      node.kind === "mermaid") &&
+    !rawHtml.some((outer) =>
+      outer.from <= node.from && outer.to >= node.to)
+  );
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const range of code) {
+    if (range.from < cursor) continue;
+    chunks.push(prepareNonCode(source.slice(cursor, range.from), html, math));
+    chunks.push(source.slice(range.from, range.to));
+    cursor = range.to;
+  }
+  chunks.push(prepareNonCode(source.slice(cursor), html, math));
+  const value = chunks.join("");
   return { source: value, html, math };
 }
 
