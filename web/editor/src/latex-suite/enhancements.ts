@@ -6,6 +6,7 @@ import {
   RangeSet,
   RangeSetBuilder,
   RangeValue,
+  type EditorState,
   type Extension,
   type Range,
 } from "@codemirror/state";
@@ -17,7 +18,13 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { parseMarkdownNodes } from "../markdown/parser";
+import {
+  markdownAnalysis,
+  markdownAnalysisField,
+  mathNodeAt,
+  type MarkdownAnalysis,
+} from "../markdown/analysis";
+import { measurePerformance } from "../performance";
 import {
   brackets,
   cmd_symbols,
@@ -443,10 +450,46 @@ function escapedAt(source: string, position: number): boolean {
   return slashes % 2 === 1;
 }
 
-function bracketClasses(source: string, offset: number, view: EditorView): Map<number, string> {
-  const result = new Map<number, string>();
+interface BracketPair {
+  open: number;
+  close: number;
+  depth: number;
+}
+
+interface RelativeSyntaxRange {
+  from: number;
+  to: number;
+  className: string;
+  pairOpen?: number;
+}
+
+interface SyntaxFragment {
+  ranges: RelativeSyntaxRange[];
+  pairs: BracketPair[];
+}
+
+const syntaxFragmentCache = new Map<string, SyntaxFragment>();
+const concealFragmentCache = new Map<string, LatexConcealSpec[]>();
+const fragmentCacheLimit = 512;
+
+function retainCacheEntry<T>(cache: Map<string, T>, key: string, value: T): T {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > fragmentCacheLimit)
+    cache.delete(cache.keys().next().value!);
+  return value;
+}
+
+function analyzeSyntaxFragment(source: string): SyntaxFragment {
+  const cached = syntaxFragmentCache.get(source);
+  if (cached) return retainCacheEntry(syntaxFragmentCache, source, cached);
+
+  const bracketsByPosition = new Map<number, {
+    className: string;
+    pairOpen?: number;
+  }>();
   const stack: Array<{ character: string; position: number; depth: number }> = [];
-  const matched: Array<{ open: number; close: number; depth: number }> = [];
+  const matched: BracketPair[] = [];
   const pairs: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
   for (let at = 0; at < source.length; at++) {
     const character = source[at];
@@ -458,19 +501,75 @@ function bracketClasses(source: string, offset: number, view: EditorView): Map<n
     if (!["}", "]", ")"].includes(character)) continue;
     const opening = stack.at(-1);
     if (!opening || pairs[opening.character] !== character) {
-      result.set(at, "cm-latex-bracket cm-latex-bracket-mismatch");
+      bracketsByPosition.set(at, {
+        className: "cm-latex-bracket cm-latex-bracket-mismatch",
+      });
       continue;
     }
     stack.pop();
     matched.push({ open: opening.position, close: at, depth: opening.depth });
   }
   for (const opening of stack)
-    result.set(opening.position, "cm-latex-bracket cm-latex-bracket-mismatch");
+    bracketsByPosition.set(opening.position, {
+      className: "cm-latex-bracket cm-latex-bracket-mismatch",
+    });
+  for (const pair of matched) {
+    const className =
+      `cm-latex-bracket cm-latex-bracket-depth-${pair.depth % 3}`;
+    bracketsByPosition.set(pair.open, { className, pairOpen: pair.open });
+    bracketsByPosition.set(pair.close, { className, pairOpen: pair.open });
+  }
 
+  const ranges: RelativeSyntaxRange[] = [];
+  const add = (from: number, to: number, className: string,
+               pairOpen?: number) => {
+    if (from < to) ranges.push({ from, to, className, pairOpen });
+  };
+  for (let at = 0; at < source.length;) {
+    const bracket = bracketsByPosition.get(at);
+    if (bracket) {
+      add(at, at + 1, bracket.className, bracket.pairOpen);
+      at++;
+      continue;
+    }
+    if (source[at] === "%" && !escapedAt(source, at)) {
+      const end = source.indexOf("\n", at);
+      const to = end < 0 ? source.length : end;
+      add(at, to, "cm-latex-comment");
+      at = to;
+      continue;
+    }
+    const command = commandAt(source, at);
+    if (command) {
+      add(command.from, command.to, "cm-latex-command");
+      at = command.to;
+      continue;
+    }
+    if (source[at] === "^" || source[at] === "_") {
+      add(at, at + 1, "cm-latex-script-operator");
+      at++;
+      continue;
+    }
+    if (/\d/.test(source[at])) {
+      let to = at + 1;
+      while (to < source.length && /[\d.]/.test(source[to])) to++;
+      add(at, to, "cm-latex-number");
+      at = to;
+      continue;
+    }
+    if (/[+\-=/<>|&]/.test(source[at]))
+      add(at, at + 1, "cm-latex-operator");
+    at++;
+  }
+  return retainCacheEntry(syntaxFragmentCache, source, { ranges, pairs: matched });
+}
+
+function activeBracketOpens(fragment: SyntaxFragment, offset: number,
+                            state: EditorState): Set<number> {
   const active = new Set<number>();
-  for (const selection of view.state.selection.ranges) {
+  for (const selection of state.selection.ranges) {
     if (!selection.empty) {
-      const enclosed = matched.filter((pair) =>
+      const enclosed = fragment.pairs.filter((pair) =>
         selection.from <= offset + pair.open &&
         selection.to >= offset + pair.close + 1);
       const closest = enclosed.sort((left, right) =>
@@ -479,84 +578,46 @@ function bracketClasses(source: string, offset: number, view: EditorView): Map<n
       continue;
     }
     const position = selection.from - offset;
-    const adjacent = matched.find((pair) =>
+    const adjacent = fragment.pairs.find((pair) =>
       position === pair.open || position === pair.open + 1 ||
       position === pair.close || position === pair.close + 1);
     if (adjacent) {
       active.add(adjacent.open);
       continue;
     }
-    const enclosing = matched.filter((pair) =>
+    const enclosing = fragment.pairs.filter((pair) =>
       position > pair.open && position < pair.close)
       .sort((left, right) =>
         (left.close - left.open) - (right.close - right.open))[0];
     if (enclosing) active.add(enclosing.open);
   }
-
-  for (const pair of matched) {
-    const classes = `cm-latex-bracket cm-latex-bracket-depth-${pair.depth % 3}` +
-      (active.has(pair.open) ? " cm-latex-bracket-active" : "");
-    result.set(pair.open, classes);
-    result.set(pair.close, classes);
-  }
-  return result;
+  return active;
 }
 
 function syntaxRanges(view: EditorView): Range<Decoration>[] {
-  const document = view.state.doc.toString();
+  return measurePerformance("latex/syntax-decorations", () =>
+    syntaxRangesNow(view, markdownAnalysis(view.state)));
+}
+
+function syntaxRangesNow(view: EditorView,
+                         analysis: MarkdownAnalysis): Range<Decoration>[] {
+  const document = analysis.text;
   const ranges: Range<Decoration>[] = [];
   const mark = (from: number, to: number, className: string) => {
     if (from < to) ranges.push(Decoration.mark({ class: className }).range(from, to));
   };
-  const math = parseMarkdownNodes(document).filter(
-    (node) => node.kind === "math" || node.kind === "display-math",
-  );
-  for (const node of math) {
+  for (const node of analysis.math) {
     if (node.contentFrom == null || node.contentTo == null) continue;
     const openingEnd = Math.min(node.contentFrom, view.state.doc.lineAt(node.from).to);
     mark(node.from, openingEnd, "cm-latex-delimiter");
     mark(node.contentTo, node.to, "cm-latex-delimiter");
     const source = document.slice(node.contentFrom, node.contentTo);
-    const bracket = bracketClasses(source, node.contentFrom, view);
-    for (let at = 0; at < source.length;) {
-      const bracketClass = bracket.get(at);
-      if (bracketClass) {
-        mark(node.contentFrom + at, node.contentFrom + at + 1, bracketClass);
-        at++;
-        continue;
-      }
-      if (source[at] === "%" && !escapedAt(source, at)) {
-        const end = source.indexOf("\n", at);
-        const to = end < 0 ? source.length : end;
-        mark(node.contentFrom + at, node.contentFrom + to, "cm-latex-comment");
-        at = to;
-        continue;
-      }
-      const command = commandAt(source, at);
-      if (command) {
-        mark(node.contentFrom + command.from, node.contentFrom + command.to,
-             "cm-latex-command");
-        at = command.to;
-        continue;
-      }
-      if (source[at] === "^" || source[at] === "_") {
-        mark(node.contentFrom + at, node.contentFrom + at + 1,
-             "cm-latex-script-operator");
-        at++;
-        continue;
-      }
-      if (/\d/.test(source[at])) {
-        let to = at + 1;
-        while (to < source.length && /[\d.]/.test(source[to])) to++;
-        mark(node.contentFrom + at, node.contentFrom + to, "cm-latex-number");
-        at = to;
-        continue;
-      }
-      if (/[+\-=/<>|&]/.test(source[at])) {
-        mark(node.contentFrom + at, node.contentFrom + at + 1,
-             "cm-latex-operator");
-      }
-      at++;
+    const fragment = analyzeSyntaxFragment(source);
+    const active = activeBracketOpens(fragment, node.contentFrom, view.state);
+    for (const range of fragment.ranges) {
+      mark(node.contentFrom + range.from, node.contentFrom + range.to,
+        range.className + (range.pairOpen != null && active.has(range.pairOpen)
+          ? " cm-latex-bracket-active" : ""));
     }
   }
   return ranges;
@@ -591,6 +652,22 @@ function selectionTouchesSpec(view: EditorView, spec: LatexConcealSpec): boolean
   }));
 }
 
+function concealedFragment(source: string, offset: number): LatexConcealSpec[] {
+  let relative = concealFragmentCache.get(source);
+  if (relative) {
+    retainCacheEntry(concealFragmentCache, source, relative);
+  } else {
+    relative = retainCacheEntry(
+      concealFragmentCache, source, concealLatex(source),
+    );
+  }
+  return relative.map((spec) => spec.map((replacement) => ({
+    ...replacement,
+    from: replacement.from + offset,
+    to: replacement.to + offset,
+  })));
+}
+
 class AtomicRange extends RangeValue {}
 const atomicRange = new AtomicRange();
 
@@ -598,28 +675,55 @@ function concealPresentation(view: EditorView): {
   decorations: DecorationSet;
   atomicRanges: RangeSet<RangeValue>;
 } {
-  const document = view.state.doc.toString();
-  const specs = parseMarkdownNodes(document)
-    .filter((node) => node.kind === "math" || node.kind === "display-math")
-    .flatMap((node) => node.contentFrom == null || node.contentTo == null ? [] :
-      concealLatex(document.slice(node.contentFrom, node.contentTo), node.contentFrom));
-  const enabled = specs.filter((spec) => !selectionTouchesSpec(view, spec)).flat();
-  const decorations = Decoration.set(enabled.map((replacement) =>
-    replacement.from === replacement.to
-      ? Decoration.widget({
-        widget: new LatexConcealWidget(replacement),
-        side: -1,
-      }).range(replacement.from)
-      : Decoration.replace({
-        widget: new LatexConcealWidget(replacement),
-        inclusive: false,
-      }).range(replacement.from, replacement.to)), true);
-  const builder = new RangeSetBuilder<RangeValue>();
-  for (const replacement of enabled.sort((left, right) => left.from - right.from)) {
-    if (replacement.from < replacement.to)
-      builder.add(replacement.from, replacement.to, atomicRange);
-  }
-  return { decorations, atomicRanges: builder.finish() };
+  return measurePerformance("latex/conceal-decorations", () => {
+    const analysis = markdownAnalysis(view.state);
+    const specs = analysis.math.flatMap((node) =>
+      node.contentFrom == null || node.contentTo == null ? [] :
+        concealedFragment(
+          analysis.text.slice(node.contentFrom, node.contentTo),
+          node.contentFrom,
+        ));
+    const enabled = specs.filter((spec) =>
+      !selectionTouchesSpec(view, spec)).flat();
+    const decorations = Decoration.set(enabled.map((replacement) =>
+      replacement.from === replacement.to
+        ? Decoration.widget({
+          widget: new LatexConcealWidget(replacement),
+          side: -1,
+        }).range(replacement.from)
+        : Decoration.replace({
+          widget: new LatexConcealWidget(replacement),
+          inclusive: false,
+        }).range(replacement.from, replacement.to)), true);
+    const builder = new RangeSetBuilder<RangeValue>();
+    for (const replacement of enabled.sort((left, right) =>
+      left.from - right.from)) {
+      if (replacement.from < replacement.to)
+        builder.add(replacement.from, replacement.to, atomicRange);
+    }
+    return { decorations, atomicRanges: builder.finish() };
+  });
+}
+
+function changedMath(update: ViewUpdate): boolean {
+  const previous = markdownAnalysis(update.startState);
+  const current = markdownAnalysis(update.state);
+  let touched = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    const intersects = (node: { from: number; to: number },
+                        from: number, to: number) =>
+      from === to
+        ? from >= node.from && from <= node.to
+        : from < node.to && to > node.from;
+    touched ||= previous.math.some((node) => intersects(node, fromA, toA)) ||
+      current.math.some((node) => intersects(node, fromB, toB));
+  });
+  return touched;
+}
+
+function selectionInMath(analysis: MarkdownAnalysis,
+                         state: EditorState): boolean {
+  return state.selection.ranges.some((range) => mathNodeAt(analysis, range));
 }
 
 const latexSyntaxPlugin = ViewPlugin.fromClass(class {
@@ -633,8 +737,15 @@ const latexSyntaxPlugin = ViewPlugin.fromClass(class {
     /* These ranges cover the document and do not depend on which lines are
      * currently visible. Rebuilding them on every kinetic-scroll viewport
      * update reparses the entire note and stalls WebKit's scroll animation. */
-    if (update.docChanged || update.selectionSet)
+    if (update.docChanged && !changedMath(update) &&
+        !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
+        !selectionInMath(markdownAnalysis(update.state), update.state)) {
+      this.decorations = this.decorations.map(update.changes);
+    } else if (update.docChanged || (update.selectionSet &&
+        (selectionInMath(markdownAnalysis(update.startState), update.startState) ||
+         selectionInMath(markdownAnalysis(update.state), update.state)))) {
       this.decorations = Decoration.set(syntaxRanges(update.view), true);
+    }
   }
 }, { decorations: (plugin) => plugin.decorations });
 
@@ -648,7 +759,14 @@ const latexConcealPlugin = ViewPlugin.fromClass(class {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.selectionSet) {
+    if (update.docChanged && !changedMath(update) &&
+        !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
+        !selectionInMath(markdownAnalysis(update.state), update.state)) {
+      this.decorations = this.decorations.map(update.changes);
+      this.atomicRanges = this.atomicRanges.map(update.changes);
+    } else if (update.docChanged || (update.selectionSet &&
+        (selectionInMath(markdownAnalysis(update.startState), update.startState) ||
+         selectionInMath(markdownAnalysis(update.state), update.state)))) {
       ({ decorations: this.decorations, atomicRanges: this.atomicRanges } =
         concealPresentation(update.view));
     }
@@ -660,5 +778,9 @@ const latexConcealPlugin = ViewPlugin.fromClass(class {
 });
 
 export function latexEnhancements(conceal: boolean): Extension {
-  return [latexSyntaxPlugin, conceal ? latexConcealPlugin : []];
+  return [
+    markdownAnalysisField,
+    latexSyntaxPlugin,
+    conceal ? latexConcealPlugin : [],
+  ];
 }

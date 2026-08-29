@@ -1004,6 +1004,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     update_snapshot(self, payload);
   } else if (g_str_equal(type, "document/state")) {
     update_snapshot(self, payload);
+    if (payload && json_object_has_member(payload, "dirty"))
+      set_dirty(self, json_object_get_boolean_member(payload, "dirty"));
     if (payload && json_object_get_boolean_member_with_default(
                        payload, "conflict", FALSE))
       g_signal_emit(self, editor_signals[SIGNAL_CONFLICT], 0);
@@ -1548,9 +1550,10 @@ static void save_file_done(GObject *source, GAsyncResult *result,
   g_free(self->persisted_text);
   self->persisted_text = g_strdup(snapshot->text);
   self->revision++;
-  if (snapshot->editor_revision >= self->editor_revision &&
-      g_strcmp0(snapshot->text, self->current_text) == 0)
-    set_dirty(self, FALSE);
+  /* JavaScript owns the newest editor revision. It acknowledges this save via
+   * document/state after comparing savedEditorRevision with its live state.
+   * Do not clear dirty here: per-key bridge notifications are coalesced, so
+   * the native revision may temporarily lag behind an edit made during I/O. */
   JsonObject *payload = json_object_new_owned();
   json_object_set_int_member(payload, "revision", (gint64)self->revision);
   json_object_set_int_member(payload, "editorRevision",
@@ -1628,7 +1631,11 @@ static void autosave_done(GObject *source, GAsyncResult *result,
     emit_error(self, error->message);
   g_clear_error(&error);
   self->autosave_enqueued = FALSE;
-  if (self->dirty)
+  /* A newer full snapshot may have arrived while the write was in flight.
+   * Save it next; otherwise wait for JavaScript's saved-state acknowledgement
+   * instead of repeatedly writing the same still-dirty native snapshot. */
+  if (self->dirty &&
+      g_strcmp0(self->current_text, self->persisted_text) != 0)
     schedule_autosave(self);
   g_object_unref(user_data);
 }
@@ -1996,7 +2003,9 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
   gtk_box_append(GTK_BOX(self), GTK_WIDGET(self->content_stack));
 
   WebKitSettings *settings = webkit_web_view_get_settings(self->web_view);
-  g_object_set(settings, "enable-developer-extras", FALSE,
+  gboolean performance_diagnostics =
+      g_strcmp0(g_getenv("PHI_MARKDOWN_PERF"), "1") == 0;
+  g_object_set(settings, "enable-developer-extras", performance_diagnostics,
                "enable-html5-database", FALSE,
                "enable-html5-local-storage", FALSE,
                "enable-page-cache", FALSE, NULL);
@@ -2012,6 +2021,9 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
                    G_CALLBACK(on_permission_request), self);
   g_signal_connect(self->web_view, "context-menu",
                    G_CALLBACK(on_context_menu), self);
-  webkit_web_view_load_uri(self->web_view, "app://editor/index.html");
+  webkit_web_view_load_uri(
+      self->web_view,
+      performance_diagnostics ? "app://editor/index.html?phi-perf=1"
+                              : "app://editor/index.html");
   return self;
 }

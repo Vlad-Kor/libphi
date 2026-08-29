@@ -1,6 +1,12 @@
-import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
+import {
+  type EditorState,
+  type Range,
+  StateEffect,
+  StateField,
+  type Transaction,
+} from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, showTooltip, type Tooltip } from "@codemirror/view";
-import { parseMarkdownNodes, selectionTouches, type MarkdownNode } from "./parser";
+import { selectionTouches, type MarkdownNode } from "./parser";
 import {
   CalloutWidget,
   BulletWidget,
@@ -22,6 +28,13 @@ import {
 } from "../widgets/preview";
 import { rawHtmlIsBlock } from "./render";
 import { pinPreviewSource, previewSourceLine } from "./source-edit";
+import {
+  markdownAnalysis,
+  markdownAnalysisField,
+  mathNodeAt,
+  type MarkdownAnalysis,
+} from "./analysis";
+import { measurePerformance } from "../performance";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
 const emphasis = Decoration.mark({ class: "cm-live-emphasis" });
@@ -148,7 +161,10 @@ function addDelimited(
 ): void {
   if (node.contentFrom == null || node.contentTo == null) return;
   if (node.from < node.contentFrom) builder.add(node.from, node.contentFrom, hidden);
-  builder.add(node.contentFrom, node.contentTo, mark);
+  /* CodeMirror mark decorations may not be empty. Incomplete authoring
+   * delimiters are valid editor input, so simply omit their content mark. */
+  if (node.contentFrom < node.contentTo)
+    builder.add(node.contentFrom, node.contentTo, mark);
   if (node.contentTo < node.to) builder.add(node.contentTo, node.to, hidden);
 }
 
@@ -177,7 +193,13 @@ function addHtmlSyntax(builder: DecorationSink, node: MarkdownNode): void {
 }
 
 function buildDecorations(state: EditorState): DecorationSet {
-  const nodes = parseMarkdownNodes(state.doc.toString());
+  return measurePerformance("markdown/preview-decorations", () =>
+    buildDecorationsNow(state, markdownAnalysis(state)));
+}
+
+function buildDecorationsNow(state: EditorState,
+                             analysis: MarkdownAnalysis): DecorationSet {
+  const nodes = analysis.nodes;
   const ranges: Range<Decoration>[] = [];
   const builder: DecorationSink = {
     add(from, to, decoration) {
@@ -292,13 +314,11 @@ function buildDecorations(state: EditorState): DecorationSet {
 }
 
 function buildMathTooltips(state: EditorState): readonly Tooltip[] {
-  const nodes = parseMarkdownNodes(state.doc.toString()).filter(
-    (node) => node.kind === "math" || node.kind === "display-math",
-  );
+  const analysis = markdownAnalysis(state);
   const seen = new Set<number>();
   const tooltips: Tooltip[] = [];
   for (const selection of state.selection.ranges) {
-    const node = nodes.find((candidate) => selectionTouches(candidate, selection));
+    const node = mathNodeAt(analysis, selection);
     if (!node || seen.has(node.from)) continue;
     seen.add(node.from);
     tooltips.push({
@@ -323,19 +343,53 @@ function buildMathTooltips(state: EditorState): readonly Tooltip[] {
   return tooltips;
 }
 
+function selectionActivatesNode(analysis: MarkdownAnalysis,
+                                state: EditorState): boolean {
+  return analysis.nodes.some((node) => active(node, state));
+}
+
+function changesFollowAllNodes(transaction: Transaction): boolean {
+  let earliest = transaction.startState.doc.length;
+  transaction.changes.iterChanges((fromA) => { earliest = Math.min(earliest, fromA); });
+  return markdownAnalysis(transaction.startState).nodes.every((node) =>
+    node.to <= earliest);
+}
+
 const livePreviewDecorations = StateField.define<DecorationSet>({
   create: buildDecorations,
   update(value, transaction) {
-    if (transaction.docChanged || transaction.selection ||
-        transaction.effects.some((effect) =>
-          effect.is(refreshLivePreview) || effect.is(pinPreviewSource)))
+    const forced = transaction.effects.some((effect) =>
+      effect.is(refreshLivePreview) || effect.is(pinPreviewSource));
+    if (forced) return buildDecorations(transaction.state);
+    if (transaction.docChanged) {
+      const previous = markdownAnalysis(transaction.startState);
+      const current = markdownAnalysis(transaction.state);
+      /* A proven plain-prose edit after every preview node cannot affect any
+       * decoration or position-aware widget. Keep the exact set and DOM. */
+      if (current.updateKind === "mapped" && changesFollowAllNodes(transaction) &&
+          !selectionActivatesNode(previous, transaction.startState) &&
+          !selectionActivatesNode(current, transaction.state))
+        return value;
       return buildDecorations(transaction.state);
+    }
+    if (transaction.selection) {
+      const analysis = markdownAnalysis(transaction.state);
+      if (!selectionActivatesNode(analysis, transaction.startState) &&
+          !selectionActivatesNode(analysis, transaction.state))
+        return value;
+      return buildDecorations(transaction.state);
+    }
     return value;
   },
   provide: (field) => [
     EditorView.decorations.from(field),
-    showTooltip.computeN([field], (state) => buildMathTooltips(state)),
+    showTooltip.computeN([field, markdownAnalysisField],
+      (state) => buildMathTooltips(state)),
   ],
 });
 
-export const livePreview = [previewSourceLine, livePreviewDecorations];
+export const livePreview = [
+  markdownAnalysisField,
+  previewSourceLine,
+  livePreviewDecorations,
+];

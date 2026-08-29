@@ -1,10 +1,18 @@
-import { Prec, StateEffect, StateField, Transaction, type Line } from "@codemirror/state";
+import {
+  Prec,
+  StateEffect,
+  StateField,
+  Transaction,
+  type EditorState,
+  type Line,
+} from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
 import { indentLess, isolateHistory } from "@codemirror/commands";
 import defaultSnippets from "./default-snippets.txt?raw";
 import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
 import { codeModeAt, mathModeAt } from "../markdown/parser";
 import { reportError } from "../bridge";
+import { measurePerformance } from "../performance";
 import {
   expandReplacement,
   parseSnippetFile,
@@ -62,6 +70,9 @@ const tabstopState = StateField.define<TabstopState | null>({
 interface RuntimeSnippet extends LatexSnippet { expression?: RegExp }
 
 let snippets: RuntimeSnippet[] = [];
+let manualSnippets: RuntimeSnippet[] = [];
+let automaticFallback: RuntimeSnippet[] = [];
+let automaticByFinal = new Map<string, RuntimeSnippet[]>();
 let snippetVariables: Record<string, string> = {};
 
 function isVisualSnippet(snippet: LatexSnippet): boolean {
@@ -90,6 +101,24 @@ function compileSnippets(parsed: LatexSnippet[]): RuntimeSnippet[] {
   });
 }
 
+function indexSnippets(): void {
+  manualSnippets = snippets.filter((snippet) =>
+    !snippet.options.includes("A"));
+  automaticFallback = snippets.filter((snippet) =>
+    snippet.options.includes("A") &&
+    (snippet.options.includes("r") || snippet.trigger.length === 0));
+  automaticByFinal = new Map();
+  const finalCharacters = new Set(snippets.flatMap((snippet) =>
+    snippet.options.includes("A") && !snippet.options.includes("r") &&
+    snippet.trigger.length ? [snippet.trigger.at(-1)!] : []));
+  for (const character of finalCharacters) {
+    automaticByFinal.set(character, snippets.filter((snippet) =>
+      snippet.options.includes("A") &&
+      (snippet.options.includes("r") || snippet.trigger.length === 0 ||
+       snippet.trigger.endsWith(character))));
+  }
+}
+
 export function setCustomSnippets(source?: string, variableSource?: string): void {
   try {
     const variables = parseSnippetVariables(
@@ -98,6 +127,7 @@ export function setCustomSnippets(source?: string, variableSource?: string): voi
     const parsed = parseSnippetFile(source?.trim() ? source : defaultSnippets);
     snippetVariables = variables;
     snippets = compileSnippets(parsed);
+    indexSnippets();
   } catch (error) {
     reportError(error, "latex-suite/snippets");
   }
@@ -153,35 +183,51 @@ interface Match {
   matchedText: string;
 }
 
-function findMatch(text: string, position: number, automatic: boolean,
+function findMatch(state: EditorState, position: number, automatic: boolean,
                    visualAvailable = false): Match | null {
-  const start = Math.max(0, position - 512);
-  const before = text.slice(start, position);
-  const context = {
-    math: mathModeAt(text, position),
-    code: codeModeAt(text, position),
-  };
+  const contextFrom = Math.max(0, position - 32768);
+  const text = state.sliceDoc(contextFrom, position);
+  const localPosition = text.length;
+  const start = Math.max(0, localPosition - 512);
+  const before = text.slice(start);
+  const candidates = automatic
+    ? automaticByFinal.get(before.at(-1) ?? "") ?? automaticFallback
+    : manualSnippets;
+  let context: SnippetContext | undefined;
   let macros: Set<string> | undefined;
-  for (const snippet of snippets) {
-    if (automatic !== snippet.options.includes("A")) continue;
+  for (const snippet of candidates) {
     if (automatic && isVisualSnippet(snippet) && !visualAvailable) continue;
-    if ((snippet.excludedMacros?.length || snippet.includedMacros?.length) && !macros)
-      macros = activeMacros(text, position);
-    if (!contextAllows(snippet, context, macros)) continue;
+    let captures: string[] = [];
+    let groups: Record<string, string> | undefined;
+    let matchedText = snippet.trigger;
+    let localFrom = localPosition - snippet.trigger.length;
     if (snippet.options.includes("r")) {
       const match = snippet.expression?.exec(before);
-      if (match) return {
-        snippet,
-        from: start + match.index,
-        captures: match.slice(1),
-        groups: match.groups,
-        matchedText: match[0],
-      };
-    } else if (before.endsWith(snippet.trigger)) {
-      const from = position - snippet.trigger.length;
-      if (snippet.options.includes("w") && from > 0 && /[\p{L}\p{N}_]/u.test(text[from - 1])) continue;
-      return { snippet, from, captures: [], matchedText: snippet.trigger };
+      if (!match) continue;
+      localFrom = start + match.index;
+      captures = match.slice(1);
+      groups = match.groups;
+      matchedText = match[0];
+    } else {
+      if (!before.endsWith(snippet.trigger)) continue;
+      if (snippet.options.includes("w") && localFrom > 0 &&
+          /[\p{L}\p{N}_]/u.test(text[localFrom - 1])) continue;
     }
+    if (!context) {
+      const code = codeModeAt(text, localPosition);
+      context = { code, math: mathModeAt(text, localPosition, code) };
+    }
+    if ((snippet.excludedMacros?.length || snippet.includedMacros?.length) &&
+        !macros)
+      macros = activeMacros(text, localPosition);
+    if (!contextAllows(snippet, context, macros)) continue;
+    return {
+      snippet,
+      from: contextFrom + localFrom,
+      captures,
+      groups,
+      matchedText,
+    };
   }
   return null;
 }
@@ -310,7 +356,7 @@ const previousTabstop: Command = (view) => {
 
 const expandManualSnippet: Command = (view) => {
   const range = view.state.selection.main;
-  const match = findMatch(view.state.doc.toString(), range.head, false);
+  const match = findMatch(view.state, range.head, false);
   return match ? applyMatch(view, match, range.head) : false;
 };
 
@@ -320,10 +366,12 @@ function expandVisualShortcut(view: EditorView, event: KeyboardEvent): boolean {
   const range = view.state.selection.main;
   if (range.empty || view.state.selection.ranges.length !== 1)
     return false;
-  const text = view.state.doc.toString();
+  const contextFrom = Math.max(0, range.head - 32768);
+  const text = view.state.sliceDoc(contextFrom, range.head);
+  const code = codeModeAt(text, text.length);
   const context = {
-    math: mathModeAt(text, range.head),
-    code: codeModeAt(text, range.head),
+    math: mathModeAt(text, text.length, code),
+    code,
   };
   for (const snippet of snippets) {
     if (!isVisualSnippet(snippet) || snippet.options.includes("r") ||
@@ -351,14 +399,18 @@ function currentEnvironment(text: string, position: number): string | null {
 
 const matrixTab: Command = (view) => {
   const position = view.state.selection.main.head;
-  if (!currentEnvironment(view.state.doc.toString(), position)) return false;
+  const from = Math.max(0, position - 3000);
+  const text = view.state.sliceDoc(from, position);
+  if (!currentEnvironment(text, text.length)) return false;
   view.dispatch({ changes: { from: position, insert: " & " }, selection: { anchor: position + 3 }, userEvent: "input" });
   return true;
 };
 
 const matrixEnter: Command = (view) => {
   const position = view.state.selection.main.head;
-  if (!currentEnvironment(view.state.doc.toString(), position)) return false;
+  const from = Math.max(0, position - 3000);
+  const text = view.state.sliceDoc(from, position);
+  if (!currentEnvironment(text, text.length)) return false;
   const insert = " \\\\\n";
   view.dispatch({ changes: { from: position, insert }, selection: { anchor: position + insert.length }, userEvent: "input" });
   return true;
@@ -382,16 +434,21 @@ const tabOut: Command = (view) => {
   const position = view.state.selection.main.head;
   const suffix = view.state.sliceDoc(position, Math.min(position + 2, view.state.doc.length));
   const match = /^(\}|\]|\)|\$)/.exec(suffix);
-  if (!match || mathModeAt(view.state.doc.toString(), position) === "none") return false;
+  const from = Math.max(0, position - 32768);
+  const text = view.state.sliceDoc(from, position);
+  if (!match || mathModeAt(text, text.length) === "none") return false;
   view.dispatch({ selection: { anchor: position + match[0].length } });
   return true;
 };
 
 function autoFraction(view: EditorView): boolean {
   const position = view.state.selection.main.head;
-  const text = view.state.doc.toString();
-  if (text[position - 1] !== "/" || text[position - 2] === "/" || mathModeAt(text, position - 1) === "none") return false;
-  const prefix = text.slice(Math.max(0, position - 200), position - 1);
+  const contextFrom = Math.max(0, position - 32768);
+  const text = view.state.sliceDoc(contextFrom, position);
+  const localPosition = text.length;
+  if (text[localPosition - 1] !== "/" || text[localPosition - 2] === "/" ||
+      mathModeAt(text, localPosition - 1) === "none") return false;
+  const prefix = text.slice(Math.max(0, localPosition - 200), localPosition - 1);
   const expression = /(\\[A-Za-z]+(?:\{[^{}]*\})*|\([^()]+\)|\[[^\[\]]+\]|[A-Za-z0-9]+(?:\^\{?[^\s{}]+\}?|_\{?[^\s{}]+\}?)?)$/.exec(prefix);
   if (!expression) return false;
   const from = position - 1 - expression[0].length;
@@ -418,13 +475,15 @@ const automaticPlugin = ViewPlugin.fromClass(class {
       if (view.state.selection.ranges.length !== 1) return;
       this.dispatching = true;
       try {
-        if (!autoFraction(view)) {
-          const position = view.state.selection.main.head;
-          const match = findMatch(
-            view.state.doc.toString(), position, true, visual.length > 0,
-          );
-          if (match) applyMatch(view, match, position, visual, true);
-        }
+        measurePerformance("latex/snippet-automatic", () => {
+          if (!autoFraction(view)) {
+            const position = view.state.selection.main.head;
+            const match = findMatch(
+              view.state, position, true, visual.length > 0,
+            );
+            if (match) applyMatch(view, match, position, visual, true);
+          }
+        });
       } finally {
         this.dispatching = false;
       }

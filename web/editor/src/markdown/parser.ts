@@ -498,10 +498,11 @@ export function codeModeAt(text: string, position: number): CodeMode {
   return delimiter !== 0 ? "inline" : "none";
 }
 
-export function mathModeAt(text: string, position: number): MathMode {
+export function mathModeAt(text: string, position: number,
+                           knownCodeMode?: CodeMode): MathMode {
   position = Math.max(0, Math.min(position, text.length));
   const start = Math.max(0, position - 32768);
-  if (codeModeAt(text, position) !== "none") return "none";
+  if ((knownCodeMode ?? codeModeAt(text, position)) !== "none") return "none";
 
   let display: "dollar" | "bracket" | null = null;
   for (let at = start; at < position; at++) {

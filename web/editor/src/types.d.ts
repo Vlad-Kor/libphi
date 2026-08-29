@@ -7,6 +7,17 @@ declare global {
         native?: { postMessage(value: string): void };
       };
     };
+    phiEditorPerformance?: {
+      enabled: boolean;
+      reset(): void;
+      snapshot(): Record<string, {
+        count: number;
+        mean: number;
+        p50: number;
+        p95: number;
+        max: number;
+      }>;
+    };
   }
 }
 

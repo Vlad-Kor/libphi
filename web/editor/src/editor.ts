@@ -24,6 +24,10 @@ import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { smartPairs } from "./markdown/pairs";
+import {
+  inputPerformanceExtension,
+  measurePerformance,
+} from "./performance";
 import { applyTheme, defaultSettings, updateRuntimeSettings } from "./settings";
 import type { DocumentScrollState, DocumentSnapshot, EditorSettings, EditorTheme, NativeMarkdownEditor, NativeMessage, OpenDocument } from "./types";
 import {
@@ -91,6 +95,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private snapshotTimer = 0;
   private scrollTimer = 0;
   private documentClasses: string[] = [];
+  private documentClassFrontmatter: string | null = null;
   private darkTheme = document.documentElement.dataset.theme === "dark";
   private fontScale = 1;
 
@@ -135,6 +140,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         keymap.of([
           ...formattingKeymap,
           { key: "Mod-s", preventDefault: true, run: () => { void this.requestSave(); return true; } },
+          { key: "Mod-f", preventDefault: true, run: () => {
+            const opened = openSearchPanel(this.view);
+            queueMicrotask(() => this.enhanceSearchPanel());
+            return opened;
+          } },
           ...closeBracketsKeymap,
           ...completionKeymap,
           ...searchKeymap,
@@ -149,9 +159,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         previewCompartment.of(this.settings.sourceMode ? [] : livePreview),
         wrappingCompartment.of(this.settings.lineWrapping ? EditorView.lineWrapping : []),
         themeCompartment.of(EditorView.theme({}, { dark: this.darkTheme })),
+        inputPerformanceExtension,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) this.documentChanged();
-          queueMicrotask(() => this.enhanceSearchPanel());
         }),
         EditorView.domEventHandlers({
           copy: (event, view) => this.handleCopy(event, view),
@@ -286,13 +296,16 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
 
   private documentChanged(): void {
     this.editorRevision++;
+    const becameDirty = !this.dirty;
     this.dirty = true;
-    sendNative("document/changed", {
-      documentId: this.documentId,
-      baseRevision: this.baseRevision,
-      editorRevision: this.editorRevision,
-      dirty: true,
-    });
+    if (becameDirty) {
+      sendNative("document/changed", {
+        documentId: this.documentId,
+        baseRevision: this.baseRevision,
+        editorRevision: this.editorRevision,
+        dirty: true,
+      });
+    }
     window.clearTimeout(this.snapshotTimer);
     this.snapshotTimer = window.setTimeout(() => this.sendSnapshot("document/changed"), 180);
   }
@@ -360,16 +373,21 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   }
 
   private sendSnapshot(type: string, id?: string): DocumentSnapshot {
-    const snapshot = this.snapshot();
-    this.applyDocumentClasses(snapshot.text);
-    sendNative(type, { ...snapshot, path: this.documentPath }, id);
-    return snapshot;
+    return measurePerformance("document/snapshot", () => {
+      const snapshot = this.snapshot();
+      this.applyDocumentClasses(snapshot.text);
+      sendNative(type, { ...snapshot, path: this.documentPath }, id);
+      return snapshot;
+    });
   }
 
   private applyDocumentClasses(text: string): void {
+    const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+    const frontmatter = match?.[0] ?? "";
+    if (frontmatter === this.documentClassFrontmatter) return;
+    this.documentClassFrontmatter = frontmatter;
     for (const name of this.documentClasses) document.body.classList.remove(name);
     this.documentClasses = [];
-    const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
     if (!match) return;
     try {
       const yaml = parseDocument(match[1]);
@@ -581,7 +599,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       sendNative("document/state", { sourceMode: this.settings.sourceMode });
       return;
     }
-    if (command === "editor.find") { openSearchPanel(this.view); return; }
+    if (command === "editor.find") {
+      openSearchPanel(this.view);
+      queueMicrotask(() => this.enhanceSearchPanel());
+      return;
+    }
     if (command === "editor.findNext") { findNext(this.view); return; }
     if (command === "editor.findPrevious") { findPrevious(this.view); return; }
     runEditingCommand(command, this.view);
