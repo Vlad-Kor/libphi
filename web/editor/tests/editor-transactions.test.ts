@@ -1182,6 +1182,32 @@ $$`;
 });
 
 describe("LaTeX Suite transactions", () => {
+  it("keeps text-mode snippets available after a math-heavy callout", async () => {
+    setCustomSnippets(JSON.stringify([{
+      trigger: "ml",
+      replacement: "${\\displaystyle $0 }$$1",
+      options: "tA",
+    }]));
+    const callout = [
+      "> [!info] Special case: For a triangulation",
+      ">",
+      "> ${\\displaystyle G }$ is ${\\displaystyle 4- }$connected ${\\displaystyle \\iff }$${\\displaystyle v\\_{1},v\\_{2},\\dots,v\\_{n} }$ is the only filled triangle of",
+      ">",
+      "> Hence (G) 4-connected is a **sufficient (but stronger than necessary)** condition for (G') to have a proper box contact representation.",
+    ].join("\n");
+    const view = viewFor(`${callout}\n\n`, callout.length + 2,
+      callout.length + 2, latexSuite);
+
+    input(view, "m");
+    await settle();
+    input(view, "l");
+    await settle();
+
+    expect(view.state.doc.toString()).toBe(
+      `${callout}\n\n${"${\\displaystyle  }$"}`,
+    );
+  });
+
   it("expands a typed math parenthesis once in the real input pipeline", async () => {
     setCustomSnippets(JSON.stringify([
       { trigger: "(", replacement: "($0)$1", options: "mA" },

@@ -534,31 +534,61 @@ export function mathModeAt(text: string, position: number,
   if ((knownCodeMode ?? codeModeAt(text, position)) !== "none") return "none";
 
   let display: "dollar" | "bracket" | null = null;
+  let inlineDollar = false;
+  let inlineParen = false;
   for (let at = start; at < position; at++) {
+    /* Inline delimiters cannot span source lines. Check this before escape
+     * handling so even a Markdown hard-break backslash ends inline state. */
+    if (!display && text[at] === "\n") {
+      inlineDollar = false;
+      inlineParen = false;
+      continue;
+    }
     if (isEscaped(text, at)) continue;
+
+    if (display === "dollar") {
+      if (text.startsWith("$$", at)) {
+        display = null;
+        at++;
+      }
+      continue;
+    }
+    if (display === "bracket") {
+      if (text.startsWith("\\]", at)) {
+        display = null;
+        at++;
+      }
+      continue;
+    }
+
+    if (inlineDollar) {
+      /* In `...}$${...`, the first dollar closes one inline expression and
+       * the second opens the next. Do not reinterpret that boundary as a
+       * display-math delimiter. */
+      if (text[at] === "$") inlineDollar = false;
+      continue;
+    }
+    if (inlineParen) {
+      if (text.startsWith("\\)", at)) {
+        inlineParen = false;
+        at++;
+      }
+      continue;
+    }
+
     if (text.startsWith("$$", at)) {
-      if (!display) display = "dollar";
-      else if (display === "dollar") display = null;
+      display = "dollar";
       at++;
-    } else if (text.startsWith("\\[", at) && !display) {
+    } else if (text.startsWith("\\[", at)) {
       display = "bracket";
       at++;
-    } else if (text.startsWith("\\]", at) && display === "bracket") {
-      display = null;
+    } else if (text[at] === "$") {
+      inlineDollar = true;
+    } else if (text.startsWith("\\(", at)) {
+      inlineParen = true;
       at++;
     }
   }
   if (display) return "display";
-
-  const lineStart = text.lastIndexOf("\n", position - 1) + 1;
-  let inlineDollar = false;
-  let inlineParen = false;
-  for (let at = lineStart; at < position; at++) {
-    if (isEscaped(text, at)) continue;
-    if (text.startsWith("$$", at)) { at++; continue; }
-    if (text[at] === "$") inlineDollar = !inlineDollar;
-    else if (text.startsWith("\\(", at)) { inlineParen = true; at++; }
-    else if (text.startsWith("\\)", at)) { inlineParen = false; at++; }
-  }
   return inlineDollar || inlineParen ? "inline" : "none";
 }

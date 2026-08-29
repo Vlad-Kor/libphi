@@ -62,6 +62,10 @@ describe("Markdown extension parser precedence", () => {
     expect(mathModeAt("`$not math$`", 5)).toBe("none");
     expect(mathModeAt("$x + y$", 4)).toBe("inline");
     expect(mathModeAt("$$\nx + y\n$$", 6)).toBe("display");
+    const adjacentInline = "${a}$${b}$ after";
+    expect(mathModeAt(adjacentInline, adjacentInline.indexOf("b")))
+      .toBe("inline");
+    expect(mathModeAt(adjacentInline, adjacentInline.length)).toBe("none");
   });
 
   it("recognizes horizontal rules without treating frontmatter fences as rules", () => {
