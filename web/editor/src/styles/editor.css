@@ -454,10 +454,10 @@ pre code { padding: 0; background: transparent; }
 .callout-title::-webkit-details-marker { display: none; }
 .callout-icon { width: 1em; height: 1em; flex: 0 0 auto; color: var(--callout-color, var(--editor-accent)); }
 .callout-content > :last-child { margin-bottom: .2em; }
-.blockquote-widget { display: block; padding: .18em 0; }
+.blockquote-widget { display: block; padding: .04em 0; }
 .blockquote-widget > blockquote {
   margin: 0;
-  padding: .3em .75em;
+  padding: .08em .75em;
   border-left-color: color-mix(in srgb, var(--editor-fg) 24%, transparent);
   border-radius: 0 6px 6px 0;
   background: color-mix(in srgb, var(--editor-fg) 3%, transparent);
