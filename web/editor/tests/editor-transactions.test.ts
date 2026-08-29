@@ -610,6 +610,41 @@ describe("CodeMirror document transactions", () => {
     expect(lines).toHaveLength(1);
     expect(lines.at(-1)?.textContent).toBe("");
     expect(lines.at(-1)?.querySelector(".code-block-widget")).toBeNull();
+    expect(editor.view.posAtDOM(lines.at(-1)!, 0)).toBe(source.length + 1);
+  });
+
+  it("keeps blank-line geometry stable after a rendered soft block", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const equation = String.raw`\[ \boxed{\text{rectangular dual of }G \;\Rightarrow\; \text{orthogonal drawing of }G^\*} \]`;
+    const source = `${equation}\n\n\n# Orthogonal Drawings`;
+    editor.openDocument({
+      documentId: "soft-block-blank-lines",
+      path: "soft-block-blank-lines.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const firstBlank = editor.view.state.doc.line(2).from;
+    const secondBlank = editor.view.state.doc.line(3).from;
+
+    editor.view.dispatch({ selection: { anchor: firstBlank } });
+    expect(parent.querySelector(".math-display")).not.toBeNull();
+    const firstLineCount = parent.querySelectorAll(".cm-line").length;
+
+    editor.view.dispatch({ selection: { anchor: secondBlank } });
+    expect(parent.querySelectorAll(".cm-line")).toHaveLength(firstLineCount);
+
+    editor.view.dispatch({ selection: { anchor: firstBlank } });
+    const beforeEnter = parent.querySelectorAll(".cm-line").length;
+    expect(key(editor.view, "Enter")).toBe(true);
+    expect(editor.getDocument()).toBe(
+      `${equation}\n\n\n\n# Orthogonal Drawings`,
+    );
+    expect(parent.querySelectorAll(".cm-line"))
+      .toHaveLength(beforeEnter + 1);
   });
 
   it("builds sorted previews for nested rich lists and keeps list images inline", () => {
