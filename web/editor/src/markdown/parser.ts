@@ -280,6 +280,58 @@ function collectMarkdownLinks(text: string, protectedRanges: Range[]): MarkdownN
   return nodes;
 }
 
+function collectDisplayMathNodes(
+  text: string,
+  protectedRanges: Range[],
+): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
+  const opener = /\$\$|\\\[/g;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text))) {
+    const delimiterFrom = match.index;
+    const protectedRange = protectedRanges.find((range) =>
+      delimiterFrom >= range.from && delimiterFrom < range.to);
+    if (protectedRange) {
+      opener.lastIndex = protectedRange.to;
+      continue;
+    }
+    if (isMarkdownEscape(text, delimiterFrom) ||
+        (match[0] === "$$" &&
+          (text[delimiterFrom - 1] === "$" ||
+            text[delimiterFrom + 2] === "$"))) continue;
+
+    const closer = match[0] === "$$" ? "$$" : "\\]";
+    let close = text.indexOf(closer, delimiterFrom + match[0].length);
+    while (close >= 0) {
+      const validDollarPair = closer !== "$$" ||
+        (text[close - 1] !== "$" && text[close + 2] !== "$");
+      if (validDollarPair && !isMarkdownEscape(text, close) &&
+          !inside(close, protectedRanges)) break;
+      close = text.indexOf(closer, close + closer.length);
+    }
+    if (close < 0) continue;
+
+    const lineFrom = text.lastIndexOf("\n", delimiterFrom - 1) + 1;
+    const prefix = text.slice(lineFrom, delimiterFrom);
+    const from = /^ {0,3}$/.test(prefix) ? lineFrom : delimiterFrom;
+    let to = close + closer.length;
+    const closingLineEnd = lineEnd(text, to);
+    if (from === lineFrom && /^\s*$/.test(text.slice(to, closingLineEnd)))
+      to = closingLineEnd;
+    const contentFrom = delimiterFrom + match[0].length;
+    nodes.push({
+      kind: "display-math",
+      from,
+      to,
+      contentFrom,
+      contentTo: close,
+      text: text.slice(contentFrom, close).trim(),
+    });
+    opener.lastIndex = to;
+  }
+  return nodes;
+}
+
 export function parseMarkdownNodes(text: string): MarkdownNode[] {
   const fencedCodeNodes = collectFencedCodeNodes(text);
   const fencedRanges = fencedCodeNodes.map(({ from, to }) => ({ from, to }));
@@ -309,52 +361,20 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     }
   }
 
-  const displayOpener = /^( {0,3})(\$\$|\\\[)[ \t]*(.*)$/gm;
-  let displayMatch: RegExpExecArray | null;
-  while ((displayMatch = displayOpener.exec(text))) {
-    const from = displayMatch.index;
-    if (inside(from, protectedRanges)) continue;
-    const opener = displayMatch[2];
-    const closer = opener === "$$" ? "$$" : "\\]";
-    const openingLineEnd = lineEnd(text, from);
-    const sameLine = displayMatch[3];
-    if (sameLine.endsWith(closer) && sameLine.length > closer.length) {
-      const content = sameLine.slice(0, -closer.length).trim();
-      nodes.push({
-        kind: "display-math",
-        from,
-        to: openingLineEnd,
-        contentFrom: from + displayMatch[1].length + opener.length,
-        contentTo: openingLineEnd - closer.length,
-        text: content,
-      });
-      displayOpener.lastIndex = openingLineEnd;
-      continue;
-    }
-    const closingPattern = new RegExp(
-      `^ {0,3}${closer === "$$" ? "\\$\\$" : "\\\\\\]"}[ \\t]*$`, "gm",
-    );
-    closingPattern.lastIndex = openingLineEnd < text.length ? openingLineEnd + 1 : openingLineEnd;
-    const closing = closingPattern.exec(text);
-    if (!closing) continue;
-    const contentFrom = Math.min(openingLineEnd + 1, text.length);
-    const contentTo = closing.index;
-    const to = lineEnd(text, closing.index);
-    nodes.push({
-      kind: "display-math",
-      from,
-      to,
-      contentFrom,
-      contentTo,
-      text: text.slice(contentFrom, contentTo).trim(),
-    });
-    displayOpener.lastIndex = to;
-  }
+  nodes.push(...collectDisplayMathNodes(text, protectedRanges));
   const occupiedMath = nodes.filter((node) => node.kind === "display-math");
   const inlineMath = /(?<!\\)(\$|\\\()([^\n]+?)(?<!\\)(\$|\\\))/g;
-  for (const match of text.matchAll(inlineMath)) {
+  let inlineMatch: RegExpExecArray | null;
+  while ((inlineMatch = inlineMath.exec(text))) {
+    const match = inlineMatch;
     const from = match.index;
-    if (inside(from, protectedRanges) || inside(from, occupiedMath)) continue;
+    if (inside(from, protectedRanges)) continue;
+    const display = occupiedMath.find((node) =>
+      from < node.to && from + match[0].length > node.from);
+    if (display) {
+      inlineMath.lastIndex = Math.max(inlineMath.lastIndex, display.to);
+      continue;
+    }
     if ((match[1] === "$" && match[3] !== "$") ||
         (match[1] === "\\(" && match[3] !== "\\)")) continue;
     nodes.push({

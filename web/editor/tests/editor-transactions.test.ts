@@ -471,6 +471,35 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
+  it("splits source lines around embedded display math", () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: () => document.createElement("mjx-container"),
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = String.raw`before$$x$$between\[y\]after`;
+    editor.openDocument({
+      documentId: "embedded-display-math",
+      path: "embedded-display-math.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 0 } });
+
+    expect(editor.getDocument()).toBe(text);
+    expect(parent.querySelectorAll(".math-display")).toHaveLength(2);
+    expect([...parent.querySelectorAll<HTMLElement>(".cm-line")]
+      .map((line) => line.textContent)).toEqual([
+        "before",
+        "between",
+        "after",
+      ]);
+  });
+
   it("syntax-highlights LaTeX and enables cursor-aware conceal on demand", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },

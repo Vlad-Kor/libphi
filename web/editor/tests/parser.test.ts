@@ -138,6 +138,24 @@ $$`;
     expect(selectionTouches(math!, { from: source.length, to: source.length })).toBe(false);
   });
 
+  it("parses display math embedded within source lines", () => {
+    const source = String.raw`$a$ before$$x + 1$$after \[ y + 2 \] tail $b$`;
+    const nodes = parseMarkdownNodes(source);
+    const display = nodes.filter((node) => node.kind === "display-math");
+
+    expect(display).toHaveLength(2);
+    expect(display.map((node) => source.slice(node.from, node.to))).toEqual([
+      "$$x + 1$$",
+      String.raw`\[ y + 2 \]`,
+    ]);
+    expect(display.map((node) => node.text)).toEqual(["x + 1", "y + 2"]);
+    expect(nodes.filter((node) => node.kind === "math")
+      .map((node) => node.text)).toEqual(["a", "b"]);
+    expect(mathModeAt(source, source.indexOf("x + 1"))).toBe("display");
+    expect(mathModeAt(source, source.indexOf("y + 2"))).toBe("display");
+    expect(mathModeAt(source, source.indexOf("tail"))).toBe("none");
+  });
+
   it("limits callouts to contiguous quoted lines and removes the marker from their body", () => {
     const source = "> [!info] test\n> test\n\n\nplain";
     const callout = parseMarkdownNodes(source).find((node) => node.kind === "callout");
