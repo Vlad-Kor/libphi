@@ -1326,6 +1326,60 @@ describe("LaTeX Suite transactions", () => {
     expect(view.state.doc.toString()).toBe("- $\\textcolor{red}{x}$");
   });
 
+  it("expands a manual snippet inside an active outer math tabstop", async () => {
+    setCustomSnippets(JSON.stringify([
+      {
+        trigger: "ml",
+        replacement: "${\\displaystyle $0 }$$1",
+        options: "tA",
+      },
+      {
+        trigger: "redm",
+        replacement: "\\textcolor{#ed4564}{$0}$1",
+        options: "t",
+        priority: 2,
+      },
+      {
+        trigger: "redm",
+        replacement: "\\textcolor{#ed4564}{$0}$1",
+        options: "m",
+        priority: 2,
+      },
+    ]));
+    const view = viewFor("", 0, 0, latexSuite);
+    view.dispatch({
+      changes: { from: 0, insert: "ml" },
+      selection: { anchor: 2 },
+      userEvent: "input.type",
+    });
+    await settle();
+    const cursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: cursor, insert: "redm" },
+      selection: { anchor: cursor + 4 },
+      userEvent: "input.type",
+    });
+
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.doc.toString())
+      .toBe("${\\displaystyle \\textcolor{#ed4564}{} }$");
+    expect(view.state.selection.main.head)
+      .toBe(view.state.doc.toString().indexOf("{}") + 1);
+
+    const nestedCursor = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: nestedCursor, insert: "x" },
+      selection: { anchor: nestedCursor + 1 },
+      userEvent: "input.type",
+    });
+    await settle();
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head)
+      .toBe(view.state.doc.toString().indexOf("} }") + 1);
+    expect(key(view, "Tab")).toBe(true);
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+  });
+
   it("ends remaining snippet navigation when continuing a list", () => {
     setCustomSnippets(JSON.stringify([
       {

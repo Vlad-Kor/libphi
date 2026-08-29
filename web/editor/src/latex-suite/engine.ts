@@ -709,8 +709,8 @@ export const latexSuite = [
     keydown: (event, view) => expandVisualShortcut(view, event),
   })),
   Prec.high(keymap.of([
-    { key: "Tab", run: nextTabstop },
     { key: "Tab", run: expandManualSnippet },
+    { key: "Tab", run: nextTabstop },
     { key: "Tab", run: matrixTab },
     { key: "Tab", run: tabOut },
     { key: "Tab", run: exitMath },
