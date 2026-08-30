@@ -7,9 +7,11 @@ const outdir = resolve(process.argv[2] ?? "dist");
 await mkdir(outdir, { recursive: true });
 await rm(resolve(outdir, "mathjax"), { recursive: true, force: true });
 await rm(resolve(outdir, "mathjax-font"), { recursive: true, force: true });
+await rm(resolve(outdir, "mathjax-dsfont-font-extension"), { recursive: true, force: true });
 await rm(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true, force: true });
 await rm(resolve(outdir, "chunks"), { recursive: true, force: true });
 await mkdir(resolve(outdir, "mathjax"), { recursive: true });
+await mkdir(resolve(outdir, "mathjax-dsfont-font-extension"), { recursive: true });
 await mkdir(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true });
 
 const legalBanner = "/*! Third-party licenses: THIRD_PARTY_LICENSES.txt */";
@@ -63,6 +65,10 @@ await cp("node_modules/mathjax/a11y", resolve(outdir, "mathjax/a11y"), { recursi
 await cp("node_modules/mathjax/sre", resolve(outdir, "mathjax/sre"), { recursive: true });
 await cp("node_modules/@mathjax/mathjax-newcm-font/svg", resolve(outdir, "mathjax-font/svg"), { recursive: true });
 await copyFile(
+  "node_modules/@mathjax/mathjax-dsfont-font-extension/svg.js",
+  resolve(outdir, "mathjax-dsfont-font-extension/svg.js"),
+);
+await copyFile(
   "node_modules/@mathjax/mathjax-mhchem-font-extension/svg.js",
   resolve(outdir, "mathjax-mhchem-font-extension/svg.js"),
 );
@@ -75,6 +81,7 @@ await generateThirdPartyLicenses({
     "node_modules/@mathjax/src",
     "node_modules/mathjax",
     "node_modules/@mathjax/mathjax-newcm-font",
+    "node_modules/@mathjax/mathjax-dsfont-font-extension",
     "node_modules/@mathjax/mathjax-mhchem-font-extension",
     "node_modules/mhchemparser",
     "node_modules/mj-context-menu",

@@ -1217,6 +1217,24 @@ $$`;
     expect(configured?.tex?.tags).toBe("none");
   });
 
+  it("loads dsfont and its SVG font extension from offline assets", () => {
+    const source = readFileSync(
+      "src/math/mathjax-config.js",
+      "utf8",
+    );
+    new Function("window", source)(window);
+    const configured = (window as unknown as {
+      MathJax?: {
+        loader?: { paths?: Record<string, string>; load?: string[] };
+        tex?: { packages?: { "[+]"?: string[] } };
+      };
+    }).MathJax;
+    expect(configured?.loader?.paths?.["mathjax-dsfont-extension"])
+      .toBe("app://editor/mathjax-dsfont-font-extension");
+    expect(configured?.loader?.load).toContain("[tex]/dsfont");
+    expect(configured?.tex?.packages?.["[+]"]).toContain("dsfont");
+  });
+
   it("keeps the final callout source line active when clicking its empty area", () => {
     const parent = document.createElement("div");
     document.body.append(parent);

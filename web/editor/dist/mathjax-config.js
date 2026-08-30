@@ -3,12 +3,13 @@ window.MathJax = {
     paths: {
       mathjax: "app://editor/mathjax",
       "mathjax-newcm": "app://editor/mathjax-font",
+      "mathjax-dsfont-extension": "app://editor/mathjax-dsfont-font-extension",
       "mathjax-mhchem-extension": "app://editor/mathjax-mhchem-font-extension"
     },
     load: [
       "[tex]/ams", "[tex]/autoload", "[tex]/newcommand", "[tex]/configmacros",
       "[tex]/textmacros", "[tex]/mathtools", "[tex]/physics",
-      "[tex]/mhchem", "[tex]/bussproofs", "[tex]/cancel", "[tex]/braket",
+      "[tex]/dsfont", "[tex]/mhchem", "[tex]/bussproofs", "[tex]/cancel", "[tex]/braket",
       "[tex]/color", "[tex]/cases", "[tex]/empheq", "[tex]/enclose",
       "[tex]/gensymb", "[tex]/upgreek", "[tex]/unicode", "[tex]/units",
     ],
@@ -31,7 +32,7 @@ window.MathJax = {
     packages: {
       "[+]": [
         "ams", "autoload", "newcommand", "configmacros", "textmacros",
-        "mathtools", "physics", "mhchem", "bussproofs", "cancel", "braket",
+        "mathtools", "physics", "dsfont", "mhchem", "bussproofs", "cancel", "braket",
         "color", "cases", "empheq", "enclose", "gensymb", "upgreek",
         "unicode", "units"
       ]
