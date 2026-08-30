@@ -18,6 +18,7 @@
 #define MAX_ZOOM 10.0
 #define ZOOM_STEP 1.2
 #define PAGE_GAP 10
+#define PAGE_BOTTOM_MARGIN 6
 #define RENDER_PREFETCH_DISTANCE 3
 #define RASTER_SCALE_QUANTUM 64.0
 #define RASTER_TILE_SIZE 1024
@@ -353,6 +354,16 @@ is_fitted_presentation(PdfvDocumentView* self)
         self->zoom <= self->minimum_zoom * 1.0001 + 0.000001;
 }
 
+static gdouble
+get_max_scroll_y(PdfvDocumentView* self, gint viewport_height)
+{
+    if (self->total_height <= viewport_height)
+        return 0;
+
+    /* Leave just enough room below the last page for its soft shadow. */
+    return self->total_height + PAGE_BOTTOM_MARGIN - viewport_height;
+}
+
 static void
 update_adjustments(PdfvDocumentView* self)
 {
@@ -392,9 +403,9 @@ update_adjustments(PdfvDocumentView* self)
          * non-continuous slide is shorter than the viewport, using the raw
          * document height produces a bogus scroll range and a visible,
          * draggable scrollbar. */
-        gdouble upper = MAX(self->total_height, (gdouble)height);
-        self->scroll_y = CLAMP(self->scroll_y, 0,
-                               MAX(0, upper - height));
+        gdouble max_scroll_y = get_max_scroll_y(self, height);
+        gdouble upper = max_scroll_y + height;
+        self->scroll_y = CLAMP(self->scroll_y, 0, max_scroll_y);
         gtk_adjustment_configure(self->vadjustment,
             self->scroll_y,
             0, upper,
@@ -621,7 +632,7 @@ ensure_page_loaded_and_update_layout(PdfvDocumentView* self, gint page_num)
                 self, &layout_anchor) - layout_focus_y;
             self->scroll_y = CLAMP(
                 self->scroll_y, 0,
-                MAX(0, self->total_height - viewport_height));
+                get_max_scroll_y(self, viewport_height));
         }
         self->max_width = 0;
         for (guint i = 0; i < self->page_widths->len; i++)
@@ -2741,7 +2752,7 @@ zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom, gdouble anchor_x,
     self->scroll_y = vertical_anchor_position(self, anchor_y) - focus_y;
 
     /* Clamp vertical scroll */
-    gdouble max_scroll_y = MAX(0, self->total_height - height);
+    gdouble max_scroll_y = get_max_scroll_y(self, height);
     self->scroll_y = CLAMP(self->scroll_y, 0, max_scroll_y);
 
     /* Clamp horizontal scroll - same logic as update_adjustments */

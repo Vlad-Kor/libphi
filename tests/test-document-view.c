@@ -184,6 +184,36 @@ static void test_fit_width_after_restoring_later_page(void) {
   g_object_unref(document);
 }
 
+static void test_bottom_shadow_margin(void) {
+  PhiDocument *document = open_two_page_fixture();
+  PdfvDocumentView *view = pdfv_document_view_new();
+  g_object_ref_sink(view);
+  GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
+  GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
+  g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
+               NULL);
+  pdfv_document_view_set_document(view, document);
+
+  gtk_widget_allocate(GTK_WIDGET(view), 1000, 700, -1, NULL);
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_upper(vertical), 1616,
+                                 0.01);
+  gtk_adjustment_set_value(vertical, G_MAXDOUBLE);
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 916,
+                                 0.01);
+
+  /* A fitting document must not gain a tiny, otherwise useless scrollbar. */
+  gtk_widget_allocate(GTK_WIDGET(view), 1000, 2000, -1, NULL);
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_upper(vertical), 2000,
+                                 0.01);
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 0,
+                                 0.01);
+
+  g_object_unref(horizontal);
+  g_object_unref(vertical);
+  g_object_unref(view);
+  g_object_unref(document);
+}
+
 int main(int argc, char **argv) {
   gtk_test_init(&argc, &argv, NULL);
   g_test_add_func("/document-view/internal-link-history",
@@ -194,5 +224,7 @@ int main(int argc, char **argv) {
                   test_scroll_state_survives_zoom);
   g_test_add_func("/document-view/fit-width-after-restoring-later-page",
                   test_fit_width_after_restoring_later_page);
+  g_test_add_func("/document-view/bottom-shadow-margin",
+                  test_bottom_shadow_margin);
   return g_test_run();
 }
