@@ -1381,6 +1381,31 @@ snapshot_cached_scale(PdfvDocumentView* self, GtkSnapshot* snapshot,
 }
 
 static void
+snapshot_page_shadow(GtkSnapshot* snapshot, gdouble x, gdouble y,
+                     gdouble width, gdouble height)
+{
+    /* Soft, layered card shadow
+     * Keep the outline square so the shadow follows the PDF's paper edge. */
+    static const GdkRGBA outline_color = {0, 0, 0.024, 0.03};
+    static const GdkRGBA near_color = {0, 0, 0.024, 0.07};
+    static const GdkRGBA far_color = {0, 0, 0.024, 0.03};
+    GskRoundedRect outline;
+    gsk_rounded_rect_init_from_rect(
+        &outline, &GRAPHENE_RECT_INIT(x, y, width, height), 0);
+
+    /* CSS equivalent, back to front:
+     *   0 0 0 1px rgb(0 0 6 / 3%),
+     *   0 1px 3px 1px rgb(0 0 6 / 7%),
+     *   0 2px 6px 2px rgb(0 0 6 / 3%). */
+    gtk_snapshot_append_outset_shadow(
+        snapshot, &outline, &far_color, 0, 2, 2, 6);
+    gtk_snapshot_append_outset_shadow(
+        snapshot, &outline, &near_color, 0, 1, 1, 3);
+    gtk_snapshot_append_outset_shadow(
+        snapshot, &outline, &outline_color, 0, 0, 1, 0);
+}
+
+static void
 pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
 {
     PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(widget);
@@ -1443,7 +1468,6 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         &GRAPHENE_RECT_INIT(0, 0, width, height));
     
     /* Render visible pages - start from first visible page */
-    static const GdkRGBA shadow_color = {0, 0, 0, 0.2};
     static const GdkRGBA page_bg_light = {1.0, 1.0, 1.0, 1.0};   /* #ffffff */
     static const GdkRGBA page_bg_dark = {0.102, 0.102, 0.102, 1.0}; /* #1a1a1a */
     const GdkRGBA* page_bg = self->inverted ? &page_bg_dark : &page_bg_light;
@@ -1466,9 +1490,7 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
             ? y_offset - self->scroll_y
             : MAX(0, (height - ph) / 2.0) - self->scroll_y;
         
-        /* Page shadow */
-        gtk_snapshot_append_color(snapshot, &shadow_color,
-            &GRAPHENE_RECT_INIT(x + 3, y + 3, pw, ph));
+        snapshot_page_shadow(snapshot, x, y, pw, ph);
         
         /* Page background */
         gtk_snapshot_append_color(snapshot, page_bg,
