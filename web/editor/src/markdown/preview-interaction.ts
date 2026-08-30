@@ -20,6 +20,7 @@ import {
   previewSourceRange,
 } from "./source-edit";
 import { selectionTouches, type MarkdownNode } from "./parser";
+import { focusRichTableBoundary } from "../widgets/table";
 
 export interface HardPreviewSelection {
   from: number;
@@ -121,6 +122,10 @@ function hardNodes(state: EditorState): MarkdownNode[] {
   return hard;
 }
 
+function isRichTableNode(node: Pick<MarkdownNode, "kind">): boolean {
+  return node.kind === "table";
+}
+
 export const hardPreviewSelection =
   StateField.define<HardPreviewSelection | null>({
     create: () => null,
@@ -187,8 +192,16 @@ const hardPreviewDOM = ViewPlugin.fromClass(class {
 
 export function chooseHardPreview(
   view: EditorView,
-  node: Pick<MarkdownNode, "from" | "to">,
+  node: Pick<MarkdownNode, "from" | "to"> & Partial<Pick<MarkdownNode, "kind">>,
 ): void {
+  const table = node.kind === "table" || hardNodes(view.state).find(
+    (candidate) => candidate.kind === "table" &&
+      candidate.from === node.from && candidate.to === node.to,
+  );
+  if (table) {
+    focusRichTableBoundary(view, node.from, node.to, true, false);
+    return;
+  }
   view.dispatch({
     effects: [
       selectHardPreview.of({ from: node.from, to: node.to }),
@@ -233,7 +246,11 @@ function leaveHardPreview(
     view.state, selected, forward, vertical,
   );
   if (adjacent) {
-    chooseHardPreview(view, adjacent);
+    if (isRichTableNode(adjacent))
+      focusRichTableBoundary(
+        view, adjacent.from, adjacent.to, forward, vertical,
+      );
+    else chooseHardPreview(view, adjacent);
     return true;
   }
   if (vertical && movePastStandaloneImageLine(view, selected, forward))
@@ -316,10 +333,13 @@ function previewNodeAt(
 function selectVerticalTarget(
   view: EditorView,
   position: number,
+  forward: boolean,
 ): boolean {
   const node = previewNodeAt(view.state, position);
   if (node && isHardRenderedNode(node)) {
-    chooseHardPreview(view, node);
+    if (isRichTableNode(node))
+      focusRichTableBoundary(view, node.from, node.to, forward, true);
+    else chooseHardPreview(view, node);
     return true;
   }
   const target = node && position === node.to &&
@@ -357,6 +377,7 @@ function movePastStandaloneImageLine(
   return selectVerticalTarget(
     view,
     sourceColumnPosition(view.state, lineNumber, column),
+    forward,
   );
 }
 
@@ -369,7 +390,11 @@ function moveHorizontally(view: EditorView, forward: boolean): boolean {
     view.state, selection.head, forward,
   );
   if (containing) {
-    chooseHardPreview(view, containing);
+    if (isRichTableNode(containing))
+      focusRichTableBoundary(
+        view, containing.from, containing.to, forward, false,
+      );
+    else chooseHardPreview(view, containing);
     return true;
   }
   const moved = view.moveByChar(selection, forward);
@@ -378,7 +403,9 @@ function moveHorizontally(view: EditorView, forward: boolean): boolean {
     view.state, selection.head, moved.head, forward,
   );
   if (!hard) return false;
-  chooseHardPreview(view, hard);
+  if (isRichTableNode(hard))
+    focusRichTableBoundary(view, hard.from, hard.to, forward, false);
+  else chooseHardPreview(view, hard);
   return true;
 }
 
@@ -403,7 +430,11 @@ function moveVerticallyThroughPreview(
     view.state, selection.head, forward,
   );
   if (containing) {
-    chooseHardPreview(view, containing);
+    if (isRichTableNode(containing))
+      focusRichTableBoundary(
+        view, containing.from, containing.to, forward, true,
+      );
+    else chooseHardPreview(view, containing);
     return true;
   }
   const currentLine = view.state.doc.lineAt(selection.head);
@@ -431,7 +462,7 @@ function moveVerticallyThroughPreview(
       });
       return true;
     }
-    return selectVerticalTarget(view, position);
+    return selectVerticalTarget(view, position, forward);
   }
   return false;
 }

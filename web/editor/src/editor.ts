@@ -29,6 +29,10 @@ import { markdownCompletion } from "./markdown/completion";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { smartPairs } from "./markdown/pairs";
 import {
+  canonicalMarkdownTable,
+  newMarkdownTable,
+} from "./markdown/table";
+import {
   inputPerformanceExtension,
   measurePerformance,
 } from "./performance";
@@ -38,6 +42,7 @@ import {
   seedPreviewImageGeometry,
   setPreviewGeometryContext,
 } from "./widgets/preview";
+import { focusRichTableCell } from "./widgets/table";
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
@@ -103,6 +108,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private documentClassFrontmatter: string | null = null;
   private darkTheme = document.documentElement.dataset.theme === "dark";
   private fontScale = 1;
+  private tablePicker: HTMLElement | null = null;
+  private tablePickerOutside: ((event: PointerEvent) => void) | null = null;
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -120,6 +127,139 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         });
       }, 160);
     }, { passive: true });
+  }
+
+  private closeTablePicker(): void {
+    if (this.tablePickerOutside)
+      document.removeEventListener("pointerdown", this.tablePickerOutside, true);
+    this.tablePickerOutside = null;
+    this.tablePicker?.remove();
+    this.tablePicker = null;
+  }
+
+  private showTablePicker(): void {
+    this.closeTablePicker();
+    const position = Math.max(0, Math.min(
+      this.view.state.doc.length,
+      this.view.state.selection.main.head,
+    ));
+
+    const picker = document.createElement("div");
+    picker.className = "phi-table-picker";
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-modal", "true");
+    picker.setAttribute("aria-label", "Insert table");
+    const heading = document.createElement("div");
+    heading.className = "phi-table-picker-heading";
+    heading.textContent = "Insert Table";
+    const size = document.createElement("div");
+    size.className = "phi-table-picker-size";
+    const grid = document.createElement("div");
+    grid.className = "phi-table-picker-grid";
+    grid.setAttribute("role", "grid");
+
+    const buttons: HTMLButtonElement[] = [];
+    const select = (rows: number, columns: number) => {
+      size.textContent = `${rows} × ${columns}`;
+      for (const button of buttons) {
+        const row = Number(button.dataset.row);
+        const column = Number(button.dataset.column);
+        button.classList.toggle("phi-table-picker-selected",
+          row <= rows && column <= columns);
+      }
+    };
+    for (let row = 1; row <= 10; row++) {
+      for (let column = 1; column <= 10; column++) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "phi-table-picker-cell";
+        button.dataset.row = String(row);
+        button.dataset.column = String(column);
+        button.setAttribute("role", "gridcell");
+        button.setAttribute("aria-label", `${row} rows by ${column} columns`);
+        button.addEventListener("pointerenter", () => select(row, column));
+        button.addEventListener("focus", () => select(row, column));
+        button.addEventListener("click", () => {
+          this.closeTablePicker();
+          this.insertTable(row, column, position);
+        });
+        buttons.push(button);
+        grid.append(button);
+      }
+    }
+    select(1, 1);
+    picker.append(heading, grid, size);
+    document.body.append(picker);
+    this.tablePicker = picker;
+
+    let caret: ReturnType<EditorView["coordsAtPos"]> = null;
+    try {
+      caret = this.view.coordsAtPos(position);
+    } catch {
+      /* DOM-only test environments do not provide Range geometry. The
+       * centered fallback is also appropriate while a WebKit layout is being
+       * rebuilt after the native context menu closes. */
+    }
+    const left = caret?.left ?? Math.max(12, window.innerWidth / 2 - 120);
+    const top = caret?.bottom ?? Math.max(12, window.innerHeight / 2 - 120);
+    const bounds = picker.getBoundingClientRect();
+    picker.style.left = `${Math.max(8, Math.min(
+      window.innerWidth - bounds.width - 8, left,
+    ))}px`;
+    picker.style.top = `${Math.max(8, Math.min(
+      window.innerHeight - bounds.height - 8, top + 6,
+    ))}px`;
+    buttons[0]?.focus({ preventScroll: true });
+
+    const outside = (event: PointerEvent) => {
+      if (picker.contains(event.target as Node)) return;
+      this.closeTablePicker();
+    };
+    this.tablePickerOutside = outside;
+    document.addEventListener("pointerdown", outside, true);
+    picker.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.closeTablePicker();
+        this.view.focus();
+        return;
+      }
+      if (!/^Arrow/.test(event.key)) return;
+      const focused = document.activeElement as HTMLButtonElement | null;
+      if (!focused?.classList.contains("phi-table-picker-cell")) return;
+      const row = Number(focused.dataset.row);
+      const column = Number(focused.dataset.column);
+      const nextRow = Math.max(1, Math.min(10,
+        row + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0),
+      ));
+      const nextColumn = Math.max(1, Math.min(10,
+        column + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0),
+      ));
+      event.preventDefault();
+      buttons[(nextRow - 1) * 10 + nextColumn - 1]?.focus();
+    });
+  }
+
+  private insertTable(rows: number, columns: number, at: number): void {
+    at = Math.max(0, Math.min(this.view.state.doc.length, at));
+    const source = canonicalMarkdownTable(newMarkdownTable(rows, columns));
+    const prefix = at > 0 && this.view.state.sliceDoc(at - 1, at) !== "\n"
+      ? "\n" : "";
+    const suffix = at < this.view.state.doc.length &&
+      this.view.state.sliceDoc(at, at + 1) !== "\n" ? "\n" : "";
+    const insert = `${prefix}${source}${suffix}`;
+    const tableFrom = at + prefix.length;
+    this.view.dispatch({
+      changes: { from: at, insert },
+      selection: EditorSelection.cursor(tableFrom),
+      scrollIntoView: true,
+      userEvent: "input.insert-table",
+    });
+    if (this.settings.sourceMode) {
+      this.view.dispatch({ selection: EditorSelection.cursor(tableFrom + 2) });
+      this.view.focus();
+    } else queueMicrotask(() =>
+      focusRichTableCell(this.view, tableFrom, 0, 0, "start"));
   }
 
   private createState(text: string): EditorState {
@@ -532,6 +672,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   }
 
   openDocument(document: OpenDocument): void {
+    this.closeTablePicker();
     window.clearTimeout(this.snapshotTimer);
     window.clearTimeout(this.scrollTimer);
     this.documentId = document.documentId;
@@ -693,6 +834,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         break;
       case "navigation/reveal": this.revealFragment(String(payload.target ?? "")); break;
       case "command/run": this.runCommand(String(payload.command ?? "")); break;
+      case "table/show-picker": this.showTablePicker(); break;
       case "document/flush": void this.flush().then((snapshot) => sendNative("document/flush", { ...snapshot }, message.id)); break;
       case "vault/files-changed": break;
       default: reportError(new Error(`Unknown native message: ${message.type}`), "bridge", this.documentPath);

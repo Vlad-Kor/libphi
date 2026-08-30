@@ -28,6 +28,7 @@ import {
   estimatedListLineHeight,
 } from "../widgets/preview";
 import { rawHtmlIsBlock } from "./render";
+import { RichTableWidget } from "../widgets/table";
 import { pinPreviewSource, previewSourceRange } from "./source-edit";
 import { previewInteraction, previewNodeIsActive } from "./preview-interaction";
 import {
@@ -127,7 +128,10 @@ function blockReplacement(node: MarkdownNode, state: EditorState): Decoration | 
       widget: new HtmlPreviewWidget(node.text, node.from, "blockquote-widget"),
       block: true,
     });
-    case "table": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "table-widget", node.to, true), block: true });
+    case "table": return Decoration.replace({
+      widget: new RichTableWidget(node.text, node.from, node.to),
+      block: true,
+    });
     case "mermaid": return Decoration.replace({ widget: new MermaidWidget(node.text, node.from), block: true });
     case "code-block": return Decoration.replace({ widget: new HtmlPreviewWidget(node.text, node.from, "code-block-widget"), block: true });
     case "html": return Decoration.replace({ widget: new RawHtmlWidget(node.text, node.from, node.to), block: rawHtmlIsBlock(node.text) });

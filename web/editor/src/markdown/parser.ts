@@ -1,3 +1,8 @@
+import {
+  parseMarkdownTable,
+  splitMarkdownTableRow,
+} from "./table";
+
 export type MarkdownNodeKind =
   | "frontmatter"
   | "heading"
@@ -551,10 +556,37 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     blockquote.lastIndex = to;
   }
 
-  const table = /^(\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*\n(?:.*\|.*(?:\n|$))+)/gm;
-  for (const match of text.matchAll(table)) {
-    if (!inside(match.index, protectedRanges))
-      nodes.push({ kind: "table", from: match.index, to: match.index + match[1].trimEnd().length, text: match[1].trimEnd() });
+  /* Tables need a line-wise parser rather than a regular expression. Besides
+   * accepting outer-pipe-free GFM rows, this keeps escaped/content pipes from
+   * becoming false columns and leaves adjacent blank lines outside the hard
+   * replacement range. */
+  for (let from = 0; from < text.length;) {
+    const headerTo = lineEnd(text, from);
+    if (headerTo >= text.length || inside(from, protectedRanges)) {
+      from = headerTo + 1;
+      continue;
+    }
+    const separatorFrom = headerTo + 1;
+    const separatorTo = lineEnd(text, separatorFrom);
+    const firstTwo = text.slice(from, separatorTo);
+    const initial = parseMarkdownTable(firstTwo);
+    if (!initial || inside(separatorFrom, protectedRanges)) {
+      from = headerTo + 1;
+      continue;
+    }
+    let to = separatorTo;
+    while (to < text.length) {
+      const rowFrom = to + 1;
+      const rowTo = lineEnd(text, rowFrom);
+      const line = text.slice(rowFrom, rowTo);
+      if (!line.trim() || inside(rowFrom, protectedRanges) ||
+          !splitMarkdownTableRow(line)) break;
+      to = rowTo;
+    }
+    const source = text.slice(from, to);
+    if (parseMarkdownTable(source))
+      nodes.push({ kind: "table", from, to, text: source });
+    from = to < text.length ? to + 1 : text.length;
   }
 
   for (const match of text.matchAll(/^ {0,3}(?:-[ \t]*){3,}$/gm)) {

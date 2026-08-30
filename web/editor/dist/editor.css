@@ -94,6 +94,54 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   background: color-mix(in srgb, var(--editor-accent) 22%, transparent);
   color: var(--editor-fg);
 }
+.phi-table-picker {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: 248px;
+  padding: 12px;
+  border: 1px solid var(--editor-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--editor-bg) 96%, var(--editor-fg));
+  color: var(--editor-fg);
+  box-shadow: 0 8px 28px color-mix(in srgb, black 26%, transparent);
+  font: 14px/1.3 "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif;
+}
+.phi-table-picker-heading {
+  margin: 0 2px 9px;
+  font-weight: 700;
+}
+.phi-table-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 17px);
+  gap: 5px;
+}
+.phi-table-picker-cell {
+  box-sizing: border-box;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--editor-fg) 22%, transparent);
+  border-radius: 4px;
+  outline: 0;
+  background: var(--editor-entry-bg);
+  box-shadow: inset 0 1px color-mix(in srgb, white 15%, transparent);
+  cursor: pointer;
+}
+.phi-table-picker-cell.phi-table-picker-selected {
+  border-color: color-mix(in srgb, var(--editor-accent) 72%, transparent);
+  background: color-mix(in srgb, var(--editor-accent) 72%, transparent);
+}
+.phi-table-picker-cell:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--editor-accent) 38%, transparent);
+}
+.phi-table-picker-size {
+  margin: 9px 2px 0;
+  color: var(--editor-muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .cm-editor .cm-completionIcon { display: none; }
 .cm-panels { background: var(--editor-bg); color: var(--editor-fg); border-color: var(--editor-border) !important; }
 .cm-panel.cm-search {
@@ -462,10 +510,123 @@ sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
 .markdown-preview, .table-widget, .mermaid-widget, .properties-widget, .note-embed, .callout, .blockquote-widget, .code-block-widget { box-sizing: border-box; color: var(--editor-fg); font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; }
 .code-block-widget { display: block; padding: .35em 0; }
 .code-block-widget pre { margin: 0; }
-.table-widget { display: block; overflow-x: auto; padding: .35em 0; }
+.table-widget { display: block; padding: .35em 0; }
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid var(--editor-border); padding: .35em .65em; text-align: start; }
 th { background: var(--editor-code-bg); }
+.rich-table-widget {
+  position: relative;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 1.15em 1.2em 1.3em;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+.rich-table-widget.cm-hard-selected { outline-color: transparent; }
+.rich-table-grid {
+  width: 100%;
+  min-width: max-content;
+  table-layout: auto;
+}
+.rich-table-grid :is(th, td):not(.rich-table-handle-corner, .rich-table-column-handle-cell, .rich-table-row-handle-cell) {
+  min-width: 5em;
+}
+.rich-table-column-handles { height: 18px; }
+.rich-table-grid :is(.rich-table-handle-corner, .rich-table-column-handle-cell, .rich-table-row-handle-cell) {
+  width: 20px;
+  min-width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.rich-table-row-handle-cell { position: relative; }
+.rich-table-cell {
+  box-sizing: border-box;
+  min-height: 1.65em;
+  min-width: 2.5em;
+  border-radius: 4px;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.rich-table-cell > :first-child { margin-top: 0; }
+.rich-table-cell > :last-child { margin-bottom: 0; }
+.rich-table-cell-active {
+  outline-color: var(--editor-accent);
+  background: color-mix(in srgb, var(--editor-accent) 7%, transparent);
+  caret-color: var(--editor-fg) !important;
+}
+.rich-table-handle {
+  box-sizing: border-box;
+  display: grid;
+  width: 20px;
+  height: 18px;
+  margin: 0;
+  padding: 3px 5px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--editor-muted);
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+  transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+}
+.rich-table-column-handle-cell:hover > .rich-table-handle,
+.rich-table-row-handle-cell:hover > .rich-table-handle,
+.rich-table-handle:focus-visible,
+.rich-table-handle-dragging,
+.rich-table-handle-target { opacity: 1; }
+.rich-table-handle:hover,
+.rich-table-handle:focus-visible { background: var(--editor-button-hover); color: var(--editor-fg); }
+.rich-table-handle-dragging { cursor: grabbing; }
+.rich-table-handle-target {
+  background: color-mix(in srgb, var(--editor-accent) 18%, transparent);
+  color: var(--editor-accent);
+}
+.rich-table-handle-dots {
+  display: grid;
+  grid-template-columns: repeat(3, 2px);
+  gap: 2px;
+}
+.rich-table-handle-dots i {
+  display: block;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.rich-table-row-handle { position: absolute; right: 0; top: 50%; translate: 0 -50%; }
+.rich-table-add {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0 0 2px;
+  place-items: center;
+  border: 1px solid var(--editor-border);
+  border-radius: 999px;
+  background: var(--editor-toolbar-bg);
+  color: var(--editor-muted);
+  box-shadow: 0 1px 3px color-mix(in srgb, black 18%, transparent);
+  font: 700 17px/1 "Adwaita Sans", Inter, sans-serif;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+}
+.rich-table-add-column { right: 3px; top: 50%; translate: 0 -30%; }
+.rich-table-add-row { left: 50%; bottom: 1px; translate: -30% 0; }
+.rich-table-add:hover,
+.rich-table-add:focus-visible { opacity: 1; }
+.rich-table-add:hover { background: var(--editor-entry-bg); color: var(--editor-accent); }
+.rich-table-source-button { top: 1.45em; right: 1.45em; z-index: 3; }
+.rich-table-widget:hover > .rich-table-source-button,
+.rich-table-widget:focus-within > .rich-table-source-button { opacity: 1; }
 pre, code { font-family: ui-monospace, monospace; background: var(--editor-code-bg); border-radius: 5px; }
 code { padding: .1em .28em; }
 pre { padding: .8em 1em; overflow-x: auto; }

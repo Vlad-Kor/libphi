@@ -1232,10 +1232,45 @@ static WebKitContextMenuItem *vault_image_menu_item(
   return item;
 }
 
+static void on_insert_table(GSimpleAction *action, GVariant *parameter,
+                            gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  pdfv_markdown_editor_bridge_send(self->bridge, "table/show-picker", NULL,
+                                   NULL);
+}
+
+static void append_insert_table_menu_item(WebKitContextMenu *menu,
+                                          PdfvMarkdownEditor *self) {
+  GSimpleAction *action = g_simple_action_new("insert-table", NULL);
+  g_signal_connect_object(action, "activate", G_CALLBACK(on_insert_table),
+                          self, 0);
+  WebKitContextMenuItem *item = webkit_context_menu_item_new_from_gaction(
+      G_ACTION(action), "Insert Table", NULL);
+  g_object_unref(action);
+
+  gint position = 0;
+  gboolean found_emoji = FALSE;
+  for (GList *at = webkit_context_menu_get_items(menu); at;
+       at = at->next, position++) {
+    if (webkit_context_menu_item_get_stock_action(at->data) ==
+        WEBKIT_CONTEXT_MENU_ACTION_INSERT_EMOJI) {
+      found_emoji = TRUE;
+      break;
+    }
+  }
+  if (found_emoji)
+    webkit_context_menu_insert(menu, item, position);
+  else
+    webkit_context_menu_append(menu, item);
+}
+
 static gboolean on_context_menu(WebKitWebView *view, WebKitContextMenu *menu,
                                 WebKitHitTestResult *hit,
                                 PdfvMarkdownEditor *self) {
   (void)view;
+  append_insert_table_menu_item(menu, self);
   if (!webkit_hit_test_result_context_is_image(hit))
     return FALSE;
   GFile *file = vault_image_file_for_uri(

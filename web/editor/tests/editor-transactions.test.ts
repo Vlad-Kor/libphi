@@ -14,6 +14,7 @@ import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
 import { smartPairs, smartPairTransaction } from "../src/markdown/pairs";
+import { parseMarkdownTable } from "../src/markdown/table";
 import {
   chooseHardPreview,
   selectedHardPreview,
@@ -1481,7 +1482,7 @@ $$`;
     expect(parent.querySelector(".cm-live-heading-1")).not.toBeNull();
   });
 
-  it("keeps a table hard-rendered on body clicks and edits it with Enter", () => {
+  it("edits rendered table cells directly and exposes a source button", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
@@ -1497,16 +1498,155 @@ $$`;
 
     parent.querySelector<HTMLElement>(".table-widget")?.click();
     expect(parent.querySelector(".table-widget")).not.toBeNull();
-    chooseHardPreview(editor.view, {
-      from: 0,
-      to: table.length,
-    });
-    expect(key(editor.view, "Enter")).toBe(true);
-    expect(parent.querySelector(".table-widget")).toBeNull();
-    editor.view.dispatch({ selection: { anchor: table.indexOf("2") } });
+    expect(parent.querySelector(".cm-hard-selected")).toBeNull();
+
+    const first = parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="0"][data-column="0"]',
+    )!;
+    first.focus();
+    first.blur();
+    expect(editor.view.state.doc.toString()).toBe(`${table}\n\nOutside`);
+    first.focus();
+    first.textContent = "Left | right";
+    first.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(editor.view.state.doc.toString()).toContain("Left \\| right");
+    expect(parent.querySelector(".table-widget")).not.toBeNull();
+    first.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "z", ctrlKey: true, bubbles: true, cancelable: true,
+    }));
+    expect(editor.view.state.doc.toString()).toBe(`${table}\n\nOutside`);
+
+    parent.querySelector<HTMLButtonElement>(".rich-table-source-button")
+      ?.click();
     expect(parent.querySelector(".table-widget")).toBeNull();
     editor.view.dispatch({ selection: { anchor: table.length + 2 } });
     expect(parent.querySelector(".table-widget")).not.toBeNull();
+  });
+
+  it("inserts a selected table size without destroying surrounding text", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "insert-table",
+      path: "insert-table.md",
+      text: "alphaomega",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 5 } });
+    editor.receive({ protocol: 1, type: "table/show-picker" });
+
+    const picker = document.querySelector<HTMLElement>(".phi-table-picker");
+    expect(picker).not.toBeNull();
+    picker?.querySelector<HTMLButtonElement>(
+      '.phi-table-picker-cell[data-row="3"][data-column="4"]',
+    )?.click();
+
+    const source = editor.view.state.doc.toString();
+    expect(source.startsWith("alpha\n")).toBe(true);
+    expect(source.endsWith("\nomega")).toBe(true);
+    const table = parseMarkdownTable(source.slice(6, -6));
+    expect(table?.cells).toHaveLength(3);
+    expect(table?.alignments).toHaveLength(4);
+    expect(document.querySelector(".phi-table-picker")).toBeNull();
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe("alphaomega");
+  });
+
+  it("tabs through rich cells, leaves at the boundary, and supports Ctrl+A", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const text = `Before\n${table}\nAfter`;
+    editor.openDocument({
+      documentId: "table-navigation",
+      path: "table-navigation.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const cells = () => [...parent.querySelectorAll<HTMLElement>(
+      ".rich-table-cell",
+    )];
+    cells()[0].focus();
+    for (let index = 1; index < 4; index++) {
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab", bubbles: true, cancelable: true,
+      }));
+      await settle();
+      expect(document.activeElement).toBe(cells()[index]);
+    }
+    document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Tab", bubbles: true, cancelable: true,
+    }));
+    await settle();
+    expect(editor.view.state.selection.main.head).toBe(text.indexOf("After"));
+    expect(parent.querySelector(".cm-hard-selected")).toBeNull();
+
+    cells()[0].focus();
+    cells()[0].dispatchEvent(new KeyboardEvent("keydown", {
+      key: "a", ctrlKey: true, bubbles: true, cancelable: true,
+    }));
+    expect(editor.view.state.selection.main).toMatchObject({
+      from: 0,
+      to: text.length,
+    });
+    expect(parent.querySelector(".table-widget")).toBeNull();
+  });
+
+  it("adds, removes, and reorders table rows and columns through one-step undoable edits", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const table = "| A | B |\n| :--- | ---: |\n| 1 | 2 |";
+    editor.openDocument({
+      documentId: "table-structure",
+      path: "table-structure.md",
+      text: table,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const parsed = () => parseMarkdownTable(editor.view.state.doc.toString())!;
+
+    parent.querySelector<HTMLButtonElement>(".rich-table-add-row")?.click();
+    expect(parsed().cells).toHaveLength(3);
+    expect(undo(editor.view)).toBe(true);
+    expect(parsed().cells).toHaveLength(2);
+
+    parent.querySelector<HTMLButtonElement>(".rich-table-add-column")?.click();
+    expect(parsed().alignments).toHaveLength(3);
+    expect(undo(editor.view)).toBe(true);
+    expect(parsed().alignments).toHaveLength(2);
+
+    parent.querySelector<HTMLElement>(
+      '.rich-table-row-handle[data-index="1"]',
+    )?.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true,
+    }));
+    expect(parsed().cells).toHaveLength(1);
+    expect(undo(editor.view)).toBe(true);
+
+    const columns = parent.querySelectorAll<HTMLElement>(
+      ".rich-table-column-handle",
+    );
+    columns[0].dispatchEvent(new Event("dragstart", {
+      bubbles: true, cancelable: true,
+    }));
+    columns[1].dispatchEvent(new Event("dragover", {
+      bubbles: true, cancelable: true,
+    }));
+    columns[1].dispatchEvent(new Event("drop", {
+      bubbles: true, cancelable: true,
+    }));
+    expect(parsed().cells).toEqual([["B", "A"], ["2", "1"]]);
+    expect(parsed().alignments).toEqual(["right", "left"]);
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe(table);
   });
 
   it("syntax-highlights an HTML span while its source is active", () => {
