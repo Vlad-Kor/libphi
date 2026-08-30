@@ -500,6 +500,44 @@ describe("CodeMirror document transactions", () => {
       ]);
   });
 
+  it("keeps text after embedded display math aligned with list content", () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: () => document.createElement("mjx-container"),
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const listItem = String.raw`4. The path\[u-v-\cdots-w\]is the next ear \(P_{i+1}\).`;
+    const text = `Elsewhere\n\n${listItem}`;
+    editor.openDocument({
+      documentId: "list-embedded-display-math",
+      path: "list-embedded-display-math.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    const listLine = parent.querySelector<HTMLElement>(".cm-live-list-item");
+    const continuation = parent.querySelector<HTMLElement>(
+      ".cm-live-list-continuation",
+    );
+    expect(listLine?.textContent).toBe("4.The path");
+    expect(continuation?.textContent).toBe("is the next ear P_{i+1}.");
+    expect(continuation?.parentElement?.classList.contains("cm-line")).toBe(true);
+    expect(continuation).not.toBeNull();
+    expect(continuation?.style.getPropertyValue("--phi-list-content-indent"))
+      .toBe("1.59em");
+    expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
+    expect(parent.querySelectorAll(".math-inline")).toHaveLength(1);
+
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    expect(css).toMatch(
+      /\.cm-live-list-continuation\s*\{[^}]*display: inline-block[^}]*width: 100%[^}]*padding-inline-start:/s,
+    );
+  });
+
   it("syntax-highlights LaTeX and enables cursor-aware conceal on demand", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },

@@ -59,6 +59,13 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   padding-inline-start: calc(2px + var(--phi-list-content-indent)) !important;
   text-indent: calc(-1 * var(--phi-list-content-indent));
 }
+.cm-live-list-continuation {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-inline-start: calc(2px + var(--phi-list-content-indent)) !important;
+  vertical-align: top;
+}
 .cm-gutters { display: none; }
 .cm-activeLine, .cm-activeLineGutter { background: transparent !important; }
 .cm-selectionBackground, .cm-content ::selection { background: var(--editor-selection) !important; }

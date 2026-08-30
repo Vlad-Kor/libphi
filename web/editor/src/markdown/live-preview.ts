@@ -224,6 +224,14 @@ function buildDecorations(state: EditorState): DecorationSet {
 function buildDecorationsNow(state: EditorState,
                              analysis: MarkdownAnalysis): DecorationSet {
   const nodes = analysis.nodes;
+  const inactiveDisplayMathByLine = new Map<number, MarkdownNode[]>();
+  for (const node of nodes) {
+    if (node.kind !== "display-math" || active(node, state)) continue;
+    const lineFrom = state.doc.lineAt(node.from).from;
+    const lineMath = inactiveDisplayMathByLine.get(lineFrom);
+    if (lineMath) lineMath.push(node);
+    else inactiveDisplayMathByLine.set(lineFrom, [node]);
+  }
   const ranges: Range<Decoration>[] = [];
   const builder: DecorationSink = {
     add(from, to, decoration) {
@@ -276,12 +284,29 @@ function buildDecorationsNow(state: EditorState,
         const contentIndent = node.meta?.task
           ? `calc(${indentColumns ? `${indentColumns * 0.375}em + ` : ""}18px + 0.4em)`
           : `${Number((indentColumns * 0.375 + markerIndent).toFixed(2))}em`;
+        const listAttributes = {
+          class: `cm-live-list-item${ordered ? " cm-live-ordered-list-item" : ""}`,
+          style: `--phi-list-content-indent:${contentIndent}`,
+        };
         builder.add(node.from, node.from, Decoration.line({
           attributes: {
-            class: `cm-live-list-item${ordered ? " cm-live-ordered-list-item" : ""}`,
-            style: `--phi-list-content-indent:${contentIndent}`,
+            ...listAttributes,
           },
         }));
+        /* A block replacement in the middle of a source line makes
+         * CodeMirror start a fresh .cm-line after the widget. Line
+         * decorations from the physical line's start do not carry over to
+         * that visual continuation. Wrap the remainder after the first
+         * rendered display equation so it retains the list content indent,
+         * including when that remainder wraps again. */
+        const firstDisplay = (inactiveDisplayMathByLine.get(node.from) ?? [])
+          .find((display) => display.from >= node.from && display.to < node.to);
+        if (firstDisplay) {
+          builder.add(firstDisplay.to, node.to, Decoration.mark({
+            class: "cm-live-list-continuation",
+            attributes: { style: listAttributes.style },
+          }));
+        }
         const listLine = state.doc.lineAt(node.from);
         const listText = state.sliceDoc(
           Number(node.meta?.contentFrom ?? node.from), listLine.to,
