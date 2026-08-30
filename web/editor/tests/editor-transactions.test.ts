@@ -1205,6 +1205,18 @@ $$`;
     expect(configured?.svg?.linebreaks?.inline).toBe(false);
   });
 
+  it("disables automatic MathJax equation numbering", () => {
+    const source = readFileSync(
+      "src/math/mathjax-config.js",
+      "utf8",
+    );
+    new Function("window", source)(window);
+    const configured = (window as unknown as {
+      MathJax?: { tex?: { tags?: string } };
+    }).MathJax;
+    expect(configured?.tex?.tags).toBe("none");
+  });
+
   it("keeps the final callout source line active when clicking its empty area", () => {
     const parent = document.createElement("div");
     document.body.append(parent);

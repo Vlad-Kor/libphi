@@ -24,7 +24,7 @@ window.MathJax = {
     displayMath: [["$$", "$$"], ["\\[", "\\]"]],
     processEscapes: true,
     processEnvironments: true,
-    tags: "ams",
+    tags: "none",
     require: {
       prefix: "tex"
     },
