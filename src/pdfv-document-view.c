@@ -18,6 +18,7 @@
 #define MAX_ZOOM 10.0
 #define ZOOM_STEP 1.2
 #define PAGE_GAP 10
+#define PAGE_TOP_MARGIN 6
 #define PAGE_BOTTOM_MARGIN 6
 #define RENDER_PREFETCH_DISTANCE 3
 #define RASTER_SCALE_QUANTUM 64.0
@@ -355,13 +356,36 @@ is_fitted_presentation(PdfvDocumentView* self)
 }
 
 static gdouble
+get_page_top_margin(PdfvDocumentView* self, gint viewport_height)
+{
+    return self->total_height > viewport_height ? PAGE_TOP_MARGIN : 0;
+}
+
+static gdouble
+get_page_display_offset(PdfvDocumentView* self, gint page)
+{
+    gint viewport_height = gtk_widget_get_height(GTK_WIDGET(self));
+    gdouble top_margin = get_page_top_margin(self, viewport_height);
+    if (self->continuous)
+        return g_array_index(self->page_offsets, gdouble, page) + top_margin;
+
+    gdouble page_height =
+        g_array_index(self->page_heights, gdouble, page);
+    return top_margin > 0
+        ? top_margin
+        : MAX(0, (viewport_height - page_height) / 2.0);
+}
+
+static gdouble
 get_max_scroll_y(PdfvDocumentView* self, gint viewport_height)
 {
     if (self->total_height <= viewport_height)
         return 0;
 
-    /* Leave just enough room below the last page for its soft shadow. */
-    return self->total_height + PAGE_BOTTOM_MARGIN - viewport_height;
+    /* Leave just enough room around the document for the first and last page
+     * shadows. These margins only apply when the document already scrolls. */
+    return self->total_height + PAGE_TOP_MARGIN + PAGE_BOTTOM_MARGIN -
+        viewport_height;
 }
 
 static void
@@ -430,28 +454,29 @@ get_page_at_offset(PdfvDocumentView* self, gdouble y, gdouble* page_offset)
 
     if (!self->continuous) {
         gint page = CLAMP(self->current_page, 0, n_pages - 1);
-        if (page_offset) {
-            gdouble page_height =
-                g_array_index(self->page_heights, gdouble, page);
-            gint view_height = gtk_widget_get_height(GTK_WIDGET(self));
-            *page_offset = MAX(0, (view_height - page_height) / 2.0);
-        }
+        if (page_offset)
+            *page_offset = get_page_display_offset(self, page);
         return page;
     }
+
+    gdouble top_margin = get_page_top_margin(
+        self, gtk_widget_get_height(GTK_WIDGET(self)));
+    gdouble content_y = y - top_margin;
     
     /* Binary search for the page containing y */
     gint low = 0, high = n_pages - 1;
     while (low < high) {
         gint mid = (low + high + 1) / 2;
         gdouble mid_offset = g_array_index(self->page_offsets, gdouble, mid);
-        if (mid_offset <= y)
+        if (mid_offset <= content_y)
             low = mid;
         else
             high = mid - 1;
     }
     
     if (page_offset)
-        *page_offset = g_array_index(self->page_offsets, gdouble, low);
+        *page_offset =
+            g_array_index(self->page_offsets, gdouble, low) + top_margin;
     return low;
 }
 
@@ -481,11 +506,14 @@ vertical_anchor_at(PdfvDocumentView* self, gdouble document_y)
     if (!self->document || self->page_offsets->len == 0)
         return anchor;
 
+    gdouble top_margin = get_page_top_margin(
+        self, gtk_widget_get_height(GTK_WIDGET(self)));
+    gdouble visual_y = document_y + top_margin;
     gdouble page_offset = 0;
-    anchor.page = get_page_at_offset(self, document_y, &page_offset);
+    anchor.page = get_page_at_offset(self, visual_y, &page_offset);
     gdouble page_height =
         g_array_index(self->page_heights, gdouble, anchor.page);
-    gdouble within_page = MAX(0, document_y - page_offset);
+    gdouble within_page = MAX(0, visual_y - page_offset);
     if (within_page > page_height &&
         anchor.page + 1 < (gint)self->page_offsets->len) {
         anchor.page_fraction = 1.0;
@@ -748,13 +776,10 @@ page_display_geometry(PdfvDocumentView* self, gint page, gdouble* x,
                       gdouble* y, gdouble* width, gdouble* height)
 {
     gint view_width = gtk_widget_get_width(GTK_WIDGET(self));
-    gint view_height = gtk_widget_get_height(GTK_WIDGET(self));
     *width = g_array_index(self->page_widths, gdouble, page);
     *height = g_array_index(self->page_heights, gdouble, page);
     *x = (view_width - *width) / 2.0 - self->scroll_x;
-    *y = self->continuous
-        ? g_array_index(self->page_offsets, gdouble, page) - self->scroll_y
-        : MAX(0, (view_height - *height) / 2.0) - self->scroll_y;
+    *y = get_page_display_offset(self, page) - self->scroll_y;
 }
 
 static TileRange
@@ -1484,8 +1509,7 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
     const GdkRGBA* page_bg = self->inverted ? &page_bg_dark : &page_bg_light;
     
     for (gint i = first_visible; i < n_pages; i++) {
-        gdouble y_offset = self->continuous
-            ? g_array_index(self->page_offsets, gdouble, i) : 0;
+        gdouble y_offset = get_page_display_offset(self, i);
         
         /* Stop if past visible area */
         if (self->continuous && y_offset > view_bottom)
@@ -1497,9 +1521,7 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
         
         /* Center page horizontally */
         gdouble x = (width - pw) / 2.0 - self->scroll_x;
-        gdouble y = self->continuous
-            ? y_offset - self->scroll_y
-            : MAX(0, (height - ph) / 2.0) - self->scroll_y;
+        gdouble y = y_offset - self->scroll_y;
         
         snapshot_page_shadow(snapshot, x, y, pw, ph);
         

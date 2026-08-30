@@ -184,7 +184,7 @@ static void test_fit_width_after_restoring_later_page(void) {
   g_object_unref(document);
 }
 
-static void test_bottom_shadow_margin(void) {
+static void test_page_shadow_margins(void) {
   PhiDocument *document = open_two_page_fixture();
   PdfvDocumentView *view = pdfv_document_view_new();
   g_object_ref_sink(view);
@@ -195,10 +195,10 @@ static void test_bottom_shadow_margin(void) {
   pdfv_document_view_set_document(view, document);
 
   gtk_widget_allocate(GTK_WIDGET(view), 1000, 700, -1, NULL);
-  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_upper(vertical), 1616,
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_upper(vertical), 1622,
                                  0.01);
   gtk_adjustment_set_value(vertical, G_MAXDOUBLE);
-  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 916,
+  g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 922,
                                  0.01);
 
   /* A fitting document must not gain a tiny, otherwise useless scrollbar. */
@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
                   test_scroll_state_survives_zoom);
   g_test_add_func("/document-view/fit-width-after-restoring-later-page",
                   test_fit_width_after_restoring_later_page);
-  g_test_add_func("/document-view/bottom-shadow-margin",
-                  test_bottom_shadow_margin);
+  g_test_add_func("/document-view/page-shadow-margins",
+                  test_page_shadow_margins);
   return g_test_run();
 }
