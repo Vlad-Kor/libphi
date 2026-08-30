@@ -20,6 +20,7 @@ struct _PdfvSettings {
   gboolean readable_line_width;
   gboolean allow_remote_images;
   gboolean latex_conceal;
+  gboolean latex_snippets_enabled;
   gboolean pdf_inverted;
   gboolean remember_document_positions;
   gint window_width;
@@ -78,6 +79,11 @@ PdfvSettings *pdfv_settings_new(void) {
         self->file, SETTINGS_GROUP, "latex-conceal", &error);
     if (!error)
       self->latex_conceal = conceal;
+    g_clear_error(&error);
+    gboolean snippets_enabled = g_key_file_get_boolean(
+        self->file, SETTINGS_GROUP, "latex-snippets-enabled", &error);
+    if (!error)
+      self->latex_snippets_enabled = snippets_enabled;
     g_clear_error(&error);
     gboolean inverted = g_key_file_get_boolean(
         self->file, SETTINGS_GROUP, "pdf-inverted", &error);
@@ -142,6 +148,9 @@ gboolean pdfv_settings_save(PdfvSettings *self, GError **error) {
                          self->allow_remote_images);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "latex-conceal",
                          self->latex_conceal);
+  g_key_file_set_boolean(self->file, SETTINGS_GROUP,
+                         "latex-snippets-enabled",
+                         self->latex_snippets_enabled);
   g_key_file_set_boolean(self->file, SETTINGS_GROUP, "pdf-inverted",
                          self->pdf_inverted);
   g_key_file_set_boolean(self->file, GENERAL_GROUP,
@@ -223,6 +232,17 @@ void pdfv_settings_set_latex_conceal(PdfvSettings *self,
                                      gboolean enabled) {
   g_return_if_fail(self != NULL);
   self->latex_conceal = enabled;
+}
+
+gboolean pdfv_settings_get_latex_snippets_enabled(PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, FALSE);
+  return self->latex_snippets_enabled;
+}
+
+void pdfv_settings_set_latex_snippets_enabled(PdfvSettings *self,
+                                              gboolean enabled) {
+  g_return_if_fail(self != NULL);
+  self->latex_snippets_enabled = enabled;
 }
 
 gboolean pdfv_settings_get_pdf_inverted(PdfvSettings *self) {
@@ -427,6 +447,7 @@ void pdfv_settings_copy(PdfvSettings *destination,
   destination->readable_line_width = source->readable_line_width;
   destination->allow_remote_images = source->allow_remote_images;
   destination->latex_conceal = source->latex_conceal;
+  destination->latex_snippets_enabled = source->latex_snippets_enabled;
   destination->pdf_inverted = source->pdf_inverted;
   destination->remember_document_positions =
       source->remember_document_positions;

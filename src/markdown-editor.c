@@ -74,6 +74,7 @@ struct _PdfvMarkdownEditor {
   gboolean allow_remote_images;
   gboolean readable_line_width;
   gboolean latex_conceal;
+  gboolean snippets_enabled;
   gboolean image_paste_wiki_embed;
   gboolean workspace_mode;
   gdouble font_scale;
@@ -330,6 +331,8 @@ static void send_settings(PdfvMarkdownEditor *self) {
                                  self->readable_line_width);
   json_object_set_boolean_member(payload, "latexConceal",
                                  self->latex_conceal);
+  json_object_set_boolean_member(payload, "executableSnippets",
+                                 self->snippets_enabled);
   json_object_set_string_member(
       payload, "imagePasteStyle",
       self->image_paste_wiki_embed ? "wiki-embed" : "markdown-link");
@@ -1754,6 +1757,14 @@ void pdfv_markdown_editor_set_latex_conceal(
     PdfvMarkdownEditor *self, gboolean enabled) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
   self->latex_conceal = enabled;
+  self->settings_set = TRUE;
+  send_settings(self);
+}
+
+void pdfv_markdown_editor_set_snippets_enabled(
+    PdfvMarkdownEditor *self, gboolean enabled) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  self->snippets_enabled = enabled;
   self->settings_set = TRUE;
   send_settings(self);
 }

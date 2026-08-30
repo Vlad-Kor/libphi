@@ -439,6 +439,8 @@ static void apply_preferences_to_editor(PdfvWindow *self,
       editor, pdfv_settings_get_readable_line_width(self->settings));
   pdfv_markdown_editor_set_latex_conceal(
       editor, pdfv_settings_get_latex_conceal(self->settings));
+  pdfv_markdown_editor_set_snippets_enabled(
+      editor, pdfv_settings_get_latex_snippets_enabled(self->settings));
   pdfv_markdown_editor_set_snippets(
       editor, pdfv_settings_get_latex_snippets(self->settings));
   pdfv_markdown_editor_set_snippet_variables(
@@ -5201,6 +5203,25 @@ static void on_preferences_latex_conceal_changed(AdwSwitchRow *row,
   schedule_preferences_update(self, 40);
 }
 
+static void on_preferences_latex_snippets_enabled_changed(
+    AdwSwitchRow *row, GParamSpec *pspec, PdfvWindow *self) {
+  (void)pspec;
+  gboolean enabled = adw_switch_row_get_active(row);
+  pdfv_settings_set_latex_snippets_enabled(self->settings, enabled);
+
+  const gchar *targets[] = {
+      "latex-conceal-row",
+      "latex-snippet-definitions",
+      "latex-snippet-variables",
+  };
+  for (guint i = 0; i < G_N_ELEMENTS(targets); i++) {
+    GtkWidget *target = g_object_get_data(G_OBJECT(row), targets[i]);
+    if (target)
+      gtk_widget_set_sensitive(target, enabled);
+  }
+  schedule_preferences_update(self, 40);
+}
+
 static void on_preferences_snippets_changed(GtkTextBuffer *buffer,
                                             PdfvWindow *self) {
   GtkTextIter start;
@@ -5677,14 +5698,26 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   adw_preferences_group_set_title(enhancements, "Editor enhancement");
   adw_preferences_page_add(latex_page, enhancements);
 
+  gboolean snippets_enabled =
+      pdfv_settings_get_latex_snippets_enabled(self->settings);
+  AdwSwitchRow *enable_snippets = ADW_SWITCH_ROW(adw_switch_row_new());
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(enable_snippets),
+                                "Enable LaTeX snippets");
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(enable_snippets),
+      "Expand automatic and Tab-triggered snippets while editing");
+  adw_switch_row_set_active(enable_snippets, snippets_enabled);
+  adw_preferences_group_add(enhancements, GTK_WIDGET(enable_snippets));
+
   AdwSwitchRow *conceal = ADW_SWITCH_ROW(adw_switch_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(conceal),
                                 "Conceal LaTeX syntax");
   adw_action_row_set_subtitle(
       ADW_ACTION_ROW(conceal),
-      "Show readable symbols outside the cursor; disabled by default");
+      "Show readable symbols outside the cursor");
   adw_switch_row_set_active(
       conceal, pdfv_settings_get_latex_conceal(self->settings));
+  gtk_widget_set_sensitive(GTK_WIDGET(conceal), snippets_enabled);
   adw_preferences_group_add(enhancements, GTK_WIDGET(conceal));
   g_signal_connect_object(conceal, "notify::active",
                           G_CALLBACK(on_preferences_latex_conceal_changed),
@@ -5706,6 +5739,7 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
                      G_CALLBACK(on_compatibility_note_tooltip), NULL);
   }
   adw_preferences_page_add(latex_page, snippets);
+  gtk_widget_set_sensitive(GTK_WIDGET(snippets), snippets_enabled);
 
   AdwActionRow *documentation = ADW_ACTION_ROW(adw_action_row_new());
   adw_preferences_row_set_title(
@@ -5744,6 +5778,7 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
       "Named regular-expression fragments available to triggers as "
       "${NAME}.");
   adw_preferences_page_add(latex_page, variables);
+  gtk_widget_set_sensitive(GTK_WIDGET(variables), snippets_enabled);
   const gchar *custom_variables =
       pdfv_settings_get_latex_snippet_variables(self->settings);
   GError *variables_error = NULL;
@@ -5765,6 +5800,16 @@ static void action_preferences(GSimpleAction *action, GVariant *parameter,
   }
   g_free(variable_defaults);
   adw_preferences_group_add(variables, variable_box);
+
+  g_object_set_data(G_OBJECT(enable_snippets), "latex-conceal-row",
+                    conceal);
+  g_object_set_data(G_OBJECT(enable_snippets),
+                    "latex-snippet-definitions", snippets);
+  g_object_set_data(G_OBJECT(enable_snippets), "latex-snippet-variables",
+                    variables);
+  g_signal_connect_object(
+      enable_snippets, "notify::active",
+      G_CALLBACK(on_preferences_latex_snippets_enabled_changed), self, 0);
 
   adw_dialog_present(dialog, GTK_WIDGET(self));
 }

@@ -1,5 +1,6 @@
 import {
   Annotation,
+  Facet,
   Prec,
   StateEffect,
   StateField,
@@ -33,6 +34,14 @@ interface TabstopState { stops: Tabstop[]; active: number }
 const setTabstops = StateEffect.define<TabstopState | null>();
 const startTabstops = StateEffect.define<Tabstop[]>();
 const automaticPairExpansion = Annotation.define<boolean>();
+export const latexSnippetsEnabled = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? true,
+});
+
+function snippetsAreEnabled(state: EditorState): boolean {
+  return state.facet(latexSnippetsEnabled);
+}
+
 const tabstopState = StateField.define<TabstopState | null>({
   create: () => null,
   update(value, transaction) {
@@ -315,6 +324,7 @@ function applyMatch(view: EditorView, match: Match, to: number, visual = "",
 }
 
 const nextTabstop: Command = (view) => {
+  if (!snippetsAreEnabled(view.state)) return false;
   const value = view.state.field(tabstopState);
   if (!value?.stops.length) return false;
   if (value.active < 0) {
@@ -353,6 +363,7 @@ const nextTabstop: Command = (view) => {
 };
 
 const previousTabstop: Command = (view) => {
+  if (!snippetsAreEnabled(view.state)) return false;
   const value = view.state.field(tabstopState);
   if (!value?.stops.length) return false;
   const active = Math.max(value.active - 1, 0);
@@ -362,6 +373,7 @@ const previousTabstop: Command = (view) => {
 };
 
 const expandManualSnippet: Command = (view) => {
+  if (!snippetsAreEnabled(view.state)) return false;
   const range = view.state.selection.main;
   const match = findMatch(view.state, range.head, false);
   return match ? applyMatch(view, match, range.head) : false;
@@ -373,7 +385,8 @@ const expandManualSnippet: Command = (view) => {
  * the same `(` keystroke. */
 const automaticPairInput = Prec.highest(EditorView.inputHandler.of(
   (view, from, to, insert) => {
-    if (view.state.readOnly || from !== to || insert.length !== 1 ||
+    if (!snippetsAreEnabled(view.state) || view.state.readOnly ||
+        from !== to || insert.length !== 1 ||
         view.state.selection.ranges.length !== 1 ||
         !Object.hasOwn({ "(": ")", "[": "]", "{": "}" }, insert))
       return false;
@@ -411,7 +424,8 @@ const automaticPairInput = Prec.highest(EditorView.inputHandler.of(
 ));
 
 function expandVisualShortcut(view: EditorView, event: KeyboardEvent): boolean {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1)
+  if (!snippetsAreEnabled(view.state) || event.ctrlKey || event.metaKey ||
+      event.altKey || event.key.length !== 1)
     return false;
   const range = view.state.selection.main;
   if (range.empty || view.state.selection.ranges.length !== 1)
@@ -535,7 +549,8 @@ function autoFraction(view: EditorView): boolean {
 const automaticPlugin = ViewPlugin.fromClass(class {
   private dispatching = false;
   update(update: ViewUpdate): void {
-    if (this.dispatching || !update.docChanged ||
+    if (this.dispatching || !snippetsAreEnabled(update.state) ||
+        !update.docChanged ||
         update.transactions.some((transaction) =>
           transaction.annotation(automaticPairExpansion)) ||
         !update.transactions.some((transaction) => transaction.isUserEvent("input.type"))) return;
@@ -545,7 +560,8 @@ const automaticPlugin = ViewPlugin.fromClass(class {
       ? ""
       : update.startState.sliceDoc(previous.from, previous.to);
     queueMicrotask(() => {
-      if (view.state.selection.ranges.length !== 1) return;
+      if (!snippetsAreEnabled(view.state) ||
+          view.state.selection.ranges.length !== 1) return;
       this.dispatching = true;
       try {
         measurePerformance("latex/snippet-automatic", () => {

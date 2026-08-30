@@ -18,7 +18,11 @@ import {
   PHI_MARKDOWN_CLIPBOARD_TYPE,
 } from "./clipboard";
 import { formattingKeymap, runEditingCommand } from "./commands";
-import { latexSuite, setCustomSnippets } from "./latex-suite/engine";
+import {
+  latexSnippetsEnabled,
+  latexSuite,
+  setCustomSnippets,
+} from "./latex-suite/engine";
 import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
@@ -39,6 +43,7 @@ const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const latexEnhancementsCompartment = new Compartment();
+const latexSnippetsCompartment = new Compartment();
 
 type SearchIcon = "search" | "replace" | "previous" | "next" |
   "options" | "close" | "select-all";
@@ -153,8 +158,13 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
           indentWithTab,
         ]),
         ...latexSuite,
+        latexSnippetsCompartment.of(
+          latexSnippetsEnabled.of(this.settings.executableSnippets),
+        ),
         latexEnhancementsCompartment.of(
-          latexEnhancements(this.settings.latexConceal),
+          latexEnhancements(
+            this.settings.executableSnippets && this.settings.latexConceal,
+          ),
         ),
         previewCompartment.of(this.settings.sourceMode ? [] : livePreview),
         wrappingCompartment.of(this.settings.lineWrapping ? EditorView.lineWrapping : []),
@@ -559,9 +569,16 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       effects.push(previewCompartment.reconfigure(this.settings.sourceMode ? [] : livePreview));
     if (previous.lineWrapping !== this.settings.lineWrapping)
       effects.push(wrappingCompartment.reconfigure(this.settings.lineWrapping ? EditorView.lineWrapping : []));
-    if (previous.latexConceal !== this.settings.latexConceal)
+    if (previous.executableSnippets !== this.settings.executableSnippets)
+      effects.push(latexSnippetsCompartment.reconfigure(
+        latexSnippetsEnabled.of(this.settings.executableSnippets),
+      ));
+    if (previous.latexConceal !== this.settings.latexConceal ||
+        previous.executableSnippets !== this.settings.executableSnippets)
       effects.push(latexEnhancementsCompartment.reconfigure(
-        latexEnhancements(this.settings.latexConceal),
+        latexEnhancements(
+          this.settings.executableSnippets && this.settings.latexConceal,
+        ),
       ));
     if (previous.allowRemoteImages !== this.settings.allowRemoteImages)
       effects.push(refreshLivePreview.of(null));

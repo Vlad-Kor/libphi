@@ -528,6 +528,9 @@ describe("CodeMirror document transactions", () => {
     editor.view.dispatch({ selection: { anchor: text.indexOf(" + ") + 1 } });
 
     editor.updateSettings({ latexConceal: true });
+    expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
+
+    editor.updateSettings({ executableSnippets: true });
     const concealed = [...parent.querySelectorAll<HTMLElement>(".cm-latex-conceal")];
     expect(concealed.map((element) => element.textContent)).toEqual(
       expect.arrayContaining(["(", ")", "/", "1", "α", "x\u0307", "2", "ℝ", "hällo"]),
@@ -544,6 +547,12 @@ describe("CodeMirror document transactions", () => {
     editor.view.dispatch({ selection: { anchor: 0 } });
     expect(parent.querySelector(".math-inline")).not.toBeNull();
     expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
+
+    editor.updateSettings({ executableSnippets: false });
+    editor.view.dispatch({ selection: { anchor: text.indexOf(" + ") + 1 } });
+    expect(parent.querySelector(".cm-latex-conceal")).toBeNull();
+    editor.updateSettings({ executableSnippets: true });
+    expect(parent.querySelector(".cm-latex-conceal")).not.toBeNull();
   });
 
   it("keeps inline-code styling while its delimiters are visible", () => {
@@ -1682,6 +1691,42 @@ $$`;
 });
 
 describe("LaTeX Suite transactions", () => {
+  it("keeps snippets disabled until the master setting is enabled", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const snippets = JSON.stringify([
+      { trigger: "@a", replacement: "\\alpha", options: "mA" },
+    ]);
+    editor.updateSettings({ snippets });
+    editor.openDocument({
+      documentId: "snippets-disabled",
+      path: "snippets-disabled.md",
+      text: "$@$",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 2 } });
+
+    input(editor.view, "a");
+    await settle();
+    expect(editor.getDocument()).toBe("$@a$");
+
+    editor.updateSettings({ executableSnippets: true });
+    editor.openDocument({
+      documentId: "snippets-enabled",
+      path: "snippets-enabled.md",
+      text: "$@$",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 2 } });
+    input(editor.view, "a");
+    await settle();
+    expect(editor.getDocument()).toBe("$\\alpha$");
+  });
+
   it("keeps text-mode snippets available after a math-heavy callout", async () => {
     setCustomSnippets(JSON.stringify([{
       trigger: "ml",

@@ -17,6 +17,7 @@ static void test_workspace_attachment_policy(void) {
   PdfvSettings *settings = pdfv_settings_new();
   g_assert_true(pdfv_settings_get_readable_line_width(settings));
   g_assert_false(pdfv_settings_get_latex_conceal(settings));
+  g_assert_false(pdfv_settings_get_latex_snippets_enabled(settings));
   g_assert_false(pdfv_settings_get_pdf_inverted(settings));
   g_assert_false(
       pdfv_settings_get_remember_document_positions(settings));
@@ -40,6 +41,7 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_markdown_font_scale(settings, 1.25);
   pdfv_settings_set_readable_line_width(settings, FALSE);
   pdfv_settings_set_latex_conceal(settings, TRUE);
+  pdfv_settings_set_latex_snippets_enabled(settings, TRUE);
   pdfv_settings_set_pdf_inverted(settings, TRUE);
   pdfv_settings_set_remember_document_positions(settings, TRUE);
   pdfv_settings_set_window_size(settings, 1280, 840);
@@ -48,6 +50,13 @@ static void test_workspace_attachment_policy(void) {
   pdfv_settings_set_latex_snippets(settings, "[{trigger:'x'}]");
   pdfv_settings_set_latex_snippet_variables(settings,
                                              "{GREEK:'alpha'}");
+  pdfv_settings_set_latex_snippets_enabled(settings, FALSE);
+  g_assert_true(pdfv_settings_get_latex_conceal(settings));
+  g_assert_cmpstr(pdfv_settings_get_latex_snippets(settings), ==,
+                  "[{trigger:'x'}]");
+  g_assert_cmpstr(pdfv_settings_get_latex_snippet_variables(settings), ==,
+                  "{GREEK:'alpha'}");
+  pdfv_settings_set_latex_snippets_enabled(settings, TRUE);
   GError *error = NULL;
   g_assert_true(pdfv_settings_save(settings, &error));
   g_assert_no_error(error);
@@ -65,6 +74,7 @@ static void test_workspace_attachment_policy(void) {
                     1.25);
   g_assert_false(pdfv_settings_get_readable_line_width(settings));
   g_assert_true(pdfv_settings_get_latex_conceal(settings));
+  g_assert_true(pdfv_settings_get_latex_snippets_enabled(settings));
   g_assert_true(pdfv_settings_get_pdf_inverted(settings));
   g_assert_true(
       pdfv_settings_get_remember_document_positions(settings));
