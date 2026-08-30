@@ -236,6 +236,8 @@ function leaveHardPreview(
     chooseHardPreview(view, adjacent);
     return true;
   }
+  if (vertical && movePastStandaloneImageLine(view, selected, forward))
+    return true;
   const anchor = forward ? selected.to : selected.from;
   view.dispatch({
     selection: EditorSelection.cursor(anchor),
@@ -275,6 +277,32 @@ function hardNodeAtCursor(
     (forward === false && position === node.to));
 }
 
+function targetIsImage(target: string): boolean {
+  return /\.(?:png|jpe?g|gif|webp|svg|avif)(?:$|[?#])/i.test(
+    target.split("|")[0],
+  );
+}
+
+function isRenderedImageNode(node: MarkdownNode): boolean {
+  return node.kind === "markdown-image" ||
+    (node.kind === "embed" &&
+      targetIsImage(String(node.meta?.target ?? node.text))) ||
+    (node.kind === "markdown-link" &&
+      /^(?:!\[|<img\b)/i.test(String(node.meta?.alias ?? "").trim()));
+}
+
+function isStandaloneImageLine(
+  state: EditorState,
+  node: MarkdownNode,
+): boolean {
+  if (!isRenderedImageNode(node)) return false;
+  const line = state.doc.lineAt(node.from);
+  const last = state.doc.lineAt(Math.max(node.from, node.to - 1));
+  return line.number === last.number &&
+    state.sliceDoc(line.from, node.from).trim() === "" &&
+    state.sliceDoc(node.to, line.to).trim() === "";
+}
+
 function previewNodeAt(
   state: EditorState,
   position: number,
@@ -283,6 +311,53 @@ function previewNodeAt(
     positionTouchesPreviewNode(node, position)) ??
     markdownAnalysis(state).nodes.find((node) =>
       positionTouchesPreviewNode(node, position));
+}
+
+function selectVerticalTarget(
+  view: EditorView,
+  position: number,
+): boolean {
+  const node = previewNodeAt(view.state, position);
+  if (node && isHardRenderedNode(node)) {
+    chooseHardPreview(view, node);
+    return true;
+  }
+  const target = node && position === node.to &&
+      !softBlockEndpointBelongsToNode(node)
+    ? Math.max(node.from, position - 1)
+    : position;
+  view.dispatch({
+    selection: EditorSelection.cursor(target),
+    effects: selectHardPreview.of(null),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+  return true;
+}
+
+function movePastStandaloneImageLine(
+  view: EditorView,
+  selected: HardPreviewSelection,
+  forward: boolean,
+): boolean {
+  const node = hardNodes(view.state).find((candidate) =>
+    sameHardNode(candidate, selected));
+  if (!node || !isStandaloneImageLine(view.state, node)) return false;
+
+  const imageLine = view.state.doc.lineAt(node.from);
+  const lineNumber = imageLine.number + (forward ? 1 : -1);
+  /* At a document edge there is no before/after text row to enter. Keep the
+   * image selected, just as a normal vertical arrow at the edge keeps the
+   * caret where it is. */
+  if (lineNumber < 1 || lineNumber > view.state.doc.lines) return true;
+
+  const caret = view.state.selection.main.head;
+  const caretLine = view.state.doc.lineAt(caret);
+  const column = caret - caretLine.from;
+  return selectVerticalTarget(
+    view,
+    sourceColumnPosition(view.state, lineNumber, column),
+  );
 }
 
 function moveHorizontally(view: EditorView, forward: boolean): boolean {
@@ -356,20 +431,7 @@ function moveVerticallyThroughPreview(
       });
       return true;
     }
-    if (isHardRenderedNode(node)) {
-      chooseHardPreview(view, node);
-      return true;
-    }
-    const target = position === node.to &&
-      !softBlockEndpointBelongsToNode(node)
-      ? Math.max(node.from, position - 1)
-      : position;
-    view.dispatch({
-      selection: EditorSelection.cursor(target),
-      scrollIntoView: true,
-      userEvent: "select",
-    });
-    return true;
+    return selectVerticalTarget(view, position);
   }
   return false;
 }

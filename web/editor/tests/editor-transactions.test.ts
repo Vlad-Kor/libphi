@@ -993,6 +993,56 @@ $$`;
     expect(hardParent.querySelector(".image-widget")).not.toBeNull();
   });
 
+  it("moves vertically from a selected standalone image to the next line", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const image = "![[Pasted image 2026-08-30 120343.png|177]]";
+    const text = `## $st$-Ordering\n${image}\nVertex order`;
+    editor.openDocument({
+      documentId: "standalone-image-arrows",
+      path: "standalone-image-arrows.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const imageFrom = text.indexOf(image);
+    const imageTo = imageFrom + image.length;
+    const heading = editor.view.state.doc.line(1);
+    const below = editor.view.state.doc.line(3);
+    const move = vi.spyOn(editor.view, "moveVertically");
+
+    editor.view.dispatch({ selection: { anchor: below.from + 4 } });
+    move.mockReturnValue(EditorSelection.cursor(imageFrom + 4));
+    expect(key(editor.view, "ArrowUp")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toMatchObject({
+      from: imageFrom,
+      to: imageTo,
+    });
+    expect(key(editor.view, "ArrowUp")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toBeNull();
+    expect(editor.view.state.selection.main.head).toBe(heading.from + 4);
+
+    editor.view.dispatch({ selection: { anchor: heading.from + 4 } });
+    move.mockReturnValue(EditorSelection.cursor(imageFrom + 4));
+    expect(key(editor.view, "ArrowDown")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toMatchObject({
+      from: imageFrom,
+      to: imageTo,
+    });
+    expect(key(editor.view, "ArrowDown")).toBe(true);
+    expect(selectedHardPreview(editor.view.state)).toBeNull();
+    expect(editor.view.state.selection.main.head).toBe(below.from + 4);
+
+    chooseHardPreview(editor.view, { from: imageFrom, to: imageTo });
+    expect(key(editor.view, "ArrowLeft")).toBe(true);
+    expect(editor.view.state.selection.main.head).toBe(imageFrom);
+    chooseHardPreview(editor.view, { from: imageFrom, to: imageTo });
+    expect(key(editor.view, "ArrowRight")).toBe(true);
+    expect(editor.view.state.selection.main.head).toBe(imageTo);
+  });
+
   it("stops on blank lines crossed between or inside soft previews", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
