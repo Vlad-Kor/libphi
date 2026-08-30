@@ -285,23 +285,72 @@ function collectDisplayMathNodes(
   protectedRanges: Range[],
 ): MarkdownNode[] {
   const nodes: MarkdownNode[] = [];
-  const opener = /\$\$|\\\[/g;
-  let match: RegExpExecArray | null;
-  while ((match = opener.exec(text))) {
-    const delimiterFrom = match.index;
-    const protectedRange = protectedRanges.find((range) =>
-      delimiterFrom >= range.from && delimiterFrom < range.to);
-    if (protectedRange) {
-      opener.lastIndex = protectedRange.to;
+  const ranges = [...protectedRanges].sort((left, right) =>
+    left.from - right.from || right.to - left.to);
+  let rangeIndex = 0;
+  let inlineDollar = false;
+  let inlineParen = false;
+  for (let delimiterFrom = 0; delimiterFrom < text.length;) {
+    if (text[delimiterFrom] === "\n") {
+      inlineDollar = false;
+      inlineParen = false;
+      delimiterFrom++;
       continue;
     }
-    if (isMarkdownEscape(text, delimiterFrom) ||
-        (match[0] === "$$" &&
-          (text[delimiterFrom - 1] === "$" ||
-            text[delimiterFrom + 2] === "$"))) continue;
+    while (rangeIndex < ranges.length && ranges[rangeIndex].to <= delimiterFrom)
+      rangeIndex++;
+    const protectedRange = ranges[rangeIndex];
+    if (protectedRange && delimiterFrom >= protectedRange.from) {
+      const protectedNewline = text.indexOf("\n", delimiterFrom);
+      if (protectedNewline >= 0 && protectedNewline < protectedRange.to) {
+        inlineDollar = false;
+        inlineParen = false;
+      }
+      delimiterFrom = protectedRange.to;
+      continue;
+    }
+    if (isMarkdownEscape(text, delimiterFrom)) {
+      delimiterFrom++;
+      continue;
+    }
 
-    const closer = match[0] === "$$" ? "$$" : "\\]";
-    let close = text.indexOf(closer, delimiterFrom + match[0].length);
+    /* When two inline expressions touch, their close/open boundary is `$$`.
+     * Consume the first dollar as the current inline closer, then reconsider
+     * the second as the next inline opener instead of creating one display
+     * node that can swallow source through a much later display delimiter. */
+    if (inlineDollar) {
+      if (text[delimiterFrom] === "$") inlineDollar = false;
+      delimiterFrom++;
+      continue;
+    }
+    if (inlineParen) {
+      if (text.startsWith("\\)", delimiterFrom)) {
+        inlineParen = false;
+        delimiterFrom += 2;
+      } else {
+        delimiterFrom++;
+      }
+      continue;
+    }
+
+    if (text.startsWith("\\(", delimiterFrom)) {
+      inlineParen = true;
+      delimiterFrom += 2;
+      continue;
+    }
+
+    const dollarDisplay = text.startsWith("$$", delimiterFrom) &&
+      text[delimiterFrom - 1] !== "$" && text[delimiterFrom + 2] !== "$";
+    const bracketDisplay = text.startsWith("\\[", delimiterFrom);
+    if (!dollarDisplay && !bracketDisplay) {
+      if (text[delimiterFrom] === "$") inlineDollar = true;
+      delimiterFrom++;
+      continue;
+    }
+
+    const opener = dollarDisplay ? "$$" : "\\[";
+    const closer = dollarDisplay ? "$$" : "\\]";
+    let close = text.indexOf(closer, delimiterFrom + opener.length);
     while (close >= 0) {
       const validDollarPair = closer !== "$$" ||
         (text[close - 1] !== "$" && text[close + 2] !== "$");
@@ -309,7 +358,10 @@ function collectDisplayMathNodes(
           !inside(close, protectedRanges)) break;
       close = text.indexOf(closer, close + closer.length);
     }
-    if (close < 0) continue;
+    if (close < 0) {
+      delimiterFrom += opener.length;
+      continue;
+    }
 
     const lineFrom = text.lastIndexOf("\n", delimiterFrom - 1) + 1;
     const prefix = text.slice(lineFrom, delimiterFrom);
@@ -318,7 +370,7 @@ function collectDisplayMathNodes(
     const closingLineEnd = lineEnd(text, to);
     if (from === lineFrom && /^\s*$/.test(text.slice(to, closingLineEnd)))
       to = closingLineEnd;
-    const contentFrom = delimiterFrom + match[0].length;
+    const contentFrom = delimiterFrom + opener.length;
     nodes.push({
       kind: "display-math",
       from,
@@ -327,7 +379,7 @@ function collectDisplayMathNodes(
       contentTo: close,
       text: text.slice(contentFrom, close).trim(),
     });
-    opener.lastIndex = to;
+    delimiterFrom = to;
   }
   return nodes;
 }

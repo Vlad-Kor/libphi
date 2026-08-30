@@ -97,6 +97,15 @@ describe("Markdown extension parser precedence", () => {
     expect(mathModeAt(adjacentInline, adjacentInline.indexOf("b")))
       .toBe("inline");
     expect(mathModeAt(adjacentInline, adjacentInline.length)).toBe("none");
+    const followedByDisplay = `${adjacentInline}\n\n$$\nc = d\n$$`;
+    const parsedMath = parseMarkdownNodes(followedByDisplay).filter((node) =>
+      node.kind === "math" || node.kind === "display-math");
+    expect(parsedMath.map((node) => ({ kind: node.kind, text: node.text })))
+      .toEqual([
+        { kind: "math", text: "{a}" },
+        { kind: "math", text: "{b}" },
+        { kind: "display-math", text: "c = d" },
+      ]);
   });
 
   it("recognizes horizontal rules without treating frontmatter fences as rules", () => {
