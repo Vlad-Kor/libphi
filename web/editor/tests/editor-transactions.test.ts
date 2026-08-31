@@ -2010,7 +2010,9 @@ $$`;
       payload: tableContext!.payload,
     });
     expect(parsed().cells).toHaveLength(1);
-    expect(undo(editor.view)).toBe(true);
+    expect(editor.view.hasFocus).toBe(true);
+    expect(key(editor.view, "z", false, true)).toBe(true);
+    expect(parsed().cells).toHaveLength(2);
 
     let cellContext: { type: string; payload: Record<string, unknown> } | null = null;
     window.addEventListener("phi-native-message", (event) => {
@@ -2043,10 +2045,34 @@ $$`;
     editor.receive({
       protocol: 1,
       type: "table/remove",
+      payload: { from: 0, kind: "row", index: 1 },
+    });
+    expect(parsed().cells).toEqual([["A", "B"]]);
+    expect(parsed().alignments).toHaveLength(2);
+    const remainingAfterRow = parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="0"][data-column="0"]',
+    )!;
+    expect(remainingAfterRow.dataset.rowRemovable).toBe("false");
+    expect(remainingAfterRow.dataset.columnRemovable).toBe("true");
+    expect(editor.view.hasFocus).toBe(true);
+    expect(key(editor.view, "z", false, true)).toBe(true);
+    expect(parsed().cells).toEqual([["A", "B"], ["1", "2"]]);
+
+    editor.receive({
+      protocol: 1,
+      type: "table/remove",
       payload: { from: 0, kind: "column", index: 1 },
     });
+    expect(parsed().cells).toEqual([["A"], ["1"]]);
     expect(parsed().alignments).toHaveLength(1);
-    expect(undo(editor.view)).toBe(true);
+    const remainingAfterColumn = parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="0"][data-column="0"]',
+    )!;
+    expect(remainingAfterColumn.dataset.rowRemovable).toBe("true");
+    expect(remainingAfterColumn.dataset.columnRemovable).toBe("false");
+    expect(editor.view.hasFocus).toBe(true);
+    expect(key(editor.view, "z", false, true)).toBe(true);
+    expect(parsed().alignments).toHaveLength(2);
 
     const columns = parent.querySelectorAll<HTMLElement>(
       ".rich-table-column-handle",

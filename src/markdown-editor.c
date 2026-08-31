@@ -1330,7 +1330,11 @@ static void append_remove_table_part_item(PdfvMarkdownEditor *self,
                                           WebKitContextMenu *menu,
                                           const gchar *kind, gint64 from,
                                           gint index, gboolean removable) {
-  GSimpleAction *action = g_simple_action_new("remove-table-part", NULL);
+  /* WebKit keys actions in one context menu by name. Cell menus contain both
+   * removals, so sharing a name makes their target and enabled state collide. */
+  const gchar *action_name = g_str_equal(kind, "row")
+      ? "remove-table-row" : "remove-table-column";
+  GSimpleAction *action = g_simple_action_new(action_name, NULL);
   gint64 *stored_from = g_new(gint64, 1);
   *stored_from = from;
   g_object_set_data_full(G_OBJECT(action), "phi-table-kind", g_strdup(kind),

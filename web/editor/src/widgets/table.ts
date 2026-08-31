@@ -1077,6 +1077,9 @@ class RichTableController {
       for (const row of next.cells) row.splice(index, 1);
     }
     this.commitModel(next, `input.table-remove-${kind}`);
+    /* Removing a dimension rebuilds the table and destroys the clicked cell
+     * or handle. Restore focus so the next Mod-Z reaches the outer history. */
+    this.view.focus();
   }
 }
 
