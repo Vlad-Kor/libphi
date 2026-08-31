@@ -67,6 +67,12 @@ interface DragState {
   pointerCoordinate: number | null;
 }
 
+interface SelectedPart {
+  kind: HandleKind;
+  index: number;
+  handle: HTMLButtonElement;
+}
+
 interface RichTableGeometryContext {
   documentPath: string;
   textWidth: number;
@@ -176,6 +182,8 @@ function measureTableHeight(
 class RichTableController {
   private active: ActiveCell | null = null;
   private drag: DragState | null = null;
+  private selectedPart: SelectedPart | null = null;
+  private selectedPartOutside: ((event: PointerEvent) => void) | null = null;
   private syncingCell = false;
   private overflowObserver: ResizeObserver | null = null;
   private pointerDragCleanup: (() => void) | null = null;
@@ -195,11 +203,24 @@ class RichTableController {
             event.target.classList.contains("rich-table-scroll")))
         event.preventDefault();
     });
+    root.addEventListener("keydown", (event) => {
+      const selected = this.selectedPart;
+      if (!selected || (event.key !== "Delete" && event.key !== "Backspace"))
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      const count = selected.kind === "row"
+        ? this.model.cells.length : this.model.alignments.length;
+      if (count <= 1) return;
+      this.clearPartSelection();
+      this.remove(selected.kind, selected.index);
+    });
     this.render();
   }
 
   destroy(): void {
     this.cancelDrag();
+    this.clearPartSelection();
     this.overflowObserver?.disconnect();
     this.overflowObserver = null;
     this.active?.editor.destroy();
@@ -245,6 +266,7 @@ class RichTableController {
 
   private render(): void {
     this.cancelDrag();
+    this.clearPartSelection();
     this.overflowObserver?.disconnect();
     this.overflowObserver = null;
     this.discardActive();
@@ -320,10 +342,13 @@ class RichTableController {
     });
 
     this.root.append(frame, addColumn, addRow);
-    const updateOverflow = () => scroller.classList.toggle(
-      "rich-table-overflowing",
-      scroller.scrollWidth > scroller.clientWidth + 1,
-    );
+    const updateOverflow = () => {
+      scroller.classList.toggle(
+        "rich-table-overflowing",
+        scroller.scrollWidth > scroller.clientWidth + 1,
+      );
+      this.positionPartSelection();
+    };
     queueMicrotask(updateOverflow);
     if (typeof ResizeObserver !== "undefined") {
       this.overflowObserver = new ResizeObserver(updateOverflow);
@@ -729,6 +754,69 @@ class RichTableController {
     queueMicrotask(() => this.focusCell(target, column, "preserve", offset));
   }
 
+  private clearPartSelection(): void {
+    if (this.selectedPartOutside)
+      document.removeEventListener(
+        "pointerdown", this.selectedPartOutside, true,
+      );
+    this.selectedPartOutside = null;
+    if (this.selectedPart) {
+      this.selectedPart.handle.classList.remove("rich-table-handle-selected");
+      this.selectedPart.handle.setAttribute("aria-pressed", "false");
+    }
+    this.selectedPart = null;
+    this.root.querySelector(".rich-table-part-selection")?.remove();
+  }
+
+  private selectPart(
+    kind: HandleKind,
+    index: number,
+    handle: HTMLButtonElement,
+  ): void {
+    this.commitActive();
+    this.clearPartSelection();
+    this.selectedPart = { kind, index, handle };
+    handle.classList.add("rich-table-handle-selected");
+    handle.setAttribute("aria-pressed", "true");
+    handle.focus({ preventScroll: true });
+    this.positionPartSelection();
+    this.selectedPartOutside = (event) => {
+      if (event.target instanceof Node && handle.contains(event.target)) return;
+      this.clearPartSelection();
+    };
+    document.addEventListener("pointerdown", this.selectedPartOutside, true);
+  }
+
+  private positionPartSelection(): void {
+    const selected = this.selectedPart;
+    if (!selected) return;
+    const scroller = this.root.querySelector<HTMLElement>(".rich-table-scroll");
+    if (!scroller) return;
+    const selector = selected.kind === "row"
+      ? `.rich-table-grid tr[data-row="${selected.index}"] > .rich-table-data-cell`
+      : `.rich-table-grid .rich-table-data-cell[data-column="${selected.index}"]`;
+    const cells = [...this.root.querySelectorAll<HTMLElement>(selector)];
+    if (!cells.length) return;
+    const bounds = cells.map((cell) => cell.getBoundingClientRect());
+    const scrollerBounds = scroller.getBoundingClientRect();
+    const left = Math.min(...bounds.map((value) => value.left));
+    const top = Math.min(...bounds.map((value) => value.top));
+    const right = Math.max(...bounds.map((value) => value.right));
+    const bottom = Math.max(...bounds.map((value) => value.bottom));
+    let outline = scroller.querySelector<HTMLElement>(
+      ":scope > .rich-table-part-selection",
+    );
+    if (!outline) {
+      outline = document.createElement("div");
+      outline.className = "rich-table-part-selection";
+      scroller.append(outline);
+    }
+    outline.style.left = `${left - scrollerBounds.left + scroller.scrollLeft}px`;
+    outline.style.top = `${top - scrollerBounds.top + scroller.scrollTop}px`;
+    outline.style.width = `${right - left}px`;
+    outline.style.height = `${bottom - top}px`;
+  }
+
   private handle(kind: HandleKind, index: number): HTMLButtonElement {
     const handle = document.createElement("button");
     handle.type = "button";
@@ -737,12 +825,16 @@ class RichTableController {
     handle.dataset.index = String(index);
     handle.dataset.removable = String((kind === "row"
       ? this.model.cells.length : this.model.alignments.length) > 1);
+    handle.setAttribute("aria-pressed", "false");
     /* Pointer dragging lets the real handle slide on its table axis without
      * also showing the browser's freely moving native drag ghost. */
     handle.draggable = false;
     handle.title = `Drag to reorder ${kind}`;
     handle.setAttribute("aria-label", `${kind === "row" ? "Row" : "Column"} ${index + 1} handle`);
     handle.append(dots());
+    handle.addEventListener("click", (event) => {
+      if (event.detail === 0) this.selectPart(kind, index, handle);
+    });
     handle.addEventListener("dragstart", (event) => {
       this.startDrag(kind, index, handle);
       event.dataTransfer?.setData("text/plain", `${kind}:${index}`);
@@ -769,6 +861,7 @@ class RichTableController {
     handle: HTMLButtonElement,
     pointerCoordinate?: number,
   ): void {
+    this.clearPartSelection();
     const origin = handle.getBoundingClientRect();
     const originStart = kind === "column" ? origin.left : origin.top;
     this.drag = {
@@ -847,6 +940,7 @@ class RichTableController {
       const up = () => {
         cleanup();
         if (started) this.finishDrag();
+        else this.selectPart(kind, index, handle);
       };
       const cancel = () => {
         cleanup();

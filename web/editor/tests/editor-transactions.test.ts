@@ -2104,6 +2104,121 @@ $$`;
       .not.toBeNull();
   });
 
+  it("selects whole rows and columns from handles and deletes them undoably", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    editor.openDocument({
+      documentId: "table-part-selection",
+      path: "table-part-selection.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const parsed = () => parseMarkdownTable(editor.view.state.doc.toString())!;
+    const bounds = (left: number, top: number, right: number, bottom: number) => ({
+      x: left,
+      y: top,
+      left,
+      right,
+      top,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const clickHandle = (handle: HTMLElement) => {
+      handle.dispatchEvent(new MouseEvent("pointerdown", {
+        bubbles: true, button: 0,
+      }));
+      document.dispatchEvent(new MouseEvent("pointerup", {
+        bubbles: true, button: 0,
+      }));
+    };
+
+    const rowScroller = parent.querySelector<HTMLElement>(".rich-table-scroll")!;
+    vi.spyOn(rowScroller, "getBoundingClientRect")
+      .mockReturnValue(bounds(100, 50, 320, 170));
+    const rowCells = parent.querySelectorAll<HTMLElement>(
+      '.rich-table-grid tr[data-row="1"] > .rich-table-data-cell',
+    );
+    vi.spyOn(rowCells[0], "getBoundingClientRect")
+      .mockReturnValue(bounds(120, 110, 220, 150));
+    vi.spyOn(rowCells[1], "getBoundingClientRect")
+      .mockReturnValue(bounds(220, 110, 320, 150));
+    const rowHandle = parent.querySelector<HTMLElement>(
+      '.rich-table-row-handle[data-index="1"]',
+    )!;
+    clickHandle(rowHandle);
+    const rowOutline = parent.querySelector<HTMLElement>(
+      ".rich-table-part-selection",
+    )!;
+    expect(rowHandle.getAttribute("aria-pressed")).toBe("true");
+    expect(rowOutline.style.left).toBe("20px");
+    expect(rowOutline.style.top).toBe("60px");
+    expect(rowOutline.style.width).toBe("200px");
+    expect(rowOutline.style.height).toBe("40px");
+
+    parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="1"][data-column="0"]',
+    )!.dispatchEvent(new MouseEvent("pointerdown", {
+      bubbles: true, button: 0,
+    }));
+    expect(parent.querySelector(".rich-table-part-selection")).toBeNull();
+    expect(editor.view.state.doc.toString()).toBe(source);
+
+    clickHandle(rowHandle);
+    rowHandle.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true, cancelable: true, key: "Backspace",
+    }));
+    expect(parsed().cells).toEqual([["A", "B"]]);
+    expect(editor.view.hasFocus).toBe(true);
+    expect(parent.querySelector(".rich-table-part-selection")).toBeNull();
+    expect(key(editor.view, "z", false, true)).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe(source);
+
+    const columnScroller = parent.querySelector<HTMLElement>(
+      ".rich-table-scroll",
+    )!;
+    vi.spyOn(columnScroller, "getBoundingClientRect")
+      .mockReturnValue(bounds(100, 50, 320, 170));
+    const columnCells = parent.querySelectorAll<HTMLElement>(
+      '.rich-table-data-cell[data-column="1"]',
+    );
+    vi.spyOn(columnCells[0], "getBoundingClientRect")
+      .mockReturnValue(bounds(220, 70, 320, 110));
+    vi.spyOn(columnCells[1], "getBoundingClientRect")
+      .mockReturnValue(bounds(220, 110, 320, 150));
+    const columnHandle = parent.querySelector<HTMLElement>(
+      '.rich-table-column-handle[data-index="1"]',
+    )!;
+    clickHandle(columnHandle);
+    const columnOutline = parent.querySelector<HTMLElement>(
+      ".rich-table-part-selection",
+    )!;
+    expect(columnOutline.style.left).toBe("120px");
+    expect(columnOutline.style.top).toBe("20px");
+    expect(columnOutline.style.width).toBe("100px");
+    expect(columnOutline.style.height).toBe("80px");
+    columnHandle.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true, cancelable: true, key: "Delete",
+    }));
+    expect(parsed().cells).toEqual([["A"], ["1"]]);
+    expect(editor.view.hasFocus).toBe(true);
+    expect(key(editor.view, "z", false, true)).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe(source);
+
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    expect(css).toMatch(
+      /\.rich-table-cell-active-parent \{[\s\S]*?border-radius: 4px;/,
+    );
+    expect(css).toMatch(
+      /\.rich-table-part-selection \{[\s\S]*?border-radius: 4px;[\s\S]*?box-shadow: inset 0 0 0 1px/,
+    );
+  });
+
   it("keeps a dragged column handle aligned with the pointer", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
