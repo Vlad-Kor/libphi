@@ -527,17 +527,24 @@ th { background: var(--editor-code-bg); }
   overflow: visible;
 }
 .rich-table-widget.cm-hard-selected { outline-color: transparent; }
+.rich-table-frame {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
 .rich-table-scroll {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow-x: hidden;
+  overflow-y: clip;
   scrollbar-width: thin;
 }
+.rich-table-scroll.rich-table-overflowing { overflow-x: auto; }
 .rich-table-grid {
-  width: 100%;
-  min-width: max-content;
+  width: max-content;
+  min-width: 100%;
   table-layout: auto;
 }
 .rich-table-grid :is(th, td):not(.rich-table-handle-corner, .rich-table-column-handle-cell, .rich-table-row-handle-cell) {
@@ -634,6 +641,7 @@ th { background: var(--editor-code-bg); }
   background: color-mix(in srgb, var(--editor-accent) 14%, var(--editor-bg));
   color: var(--editor-accent);
   cursor: grabbing;
+  transition: none;
 }
 .rich-table-handle-dots {
   display: grid;
@@ -648,10 +656,14 @@ th { background: var(--editor-code-bg); }
   background: currentColor;
 }
 .rich-table-row-handle { position: absolute; inset: 0; }
-.rich-table-drag-selected:not(tr),
-.rich-table-drag-selected > :not(.rich-table-row-handle-cell) {
-  background: color-mix(in srgb, var(--editor-accent) 9%, transparent);
-  box-shadow: inset 2px 0 var(--editor-accent), inset -2px 0 var(--editor-accent);
+.rich-table-drag-selection {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--editor-accent) 76%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--editor-accent) 8%, transparent);
+  pointer-events: none;
 }
 .rich-table-drop-indicator {
   position: absolute;
@@ -690,9 +702,9 @@ th { background: var(--editor-code-bg); }
 .rich-table-add:hover span,
 .rich-table-add:focus-visible span { opacity: 1; }
 .rich-table-add:hover { color: var(--editor-fg); }
-.rich-table-source-button { top: 26px; right: 26px; z-index: 7; }
-.rich-table-widget:hover > .rich-table-source-button,
-.rich-table-widget:focus-within > .rich-table-source-button { opacity: 1; }
+.rich-table-source-button { top: 28px; right: 8px; z-index: 7; }
+.rich-table-widget:hover .rich-table-source-button,
+.rich-table-widget:focus-within .rich-table-source-button { opacity: 1; }
 pre, code { font-family: ui-monospace, monospace; background: var(--editor-code-bg); border-radius: 5px; }
 code { padding: .1em .28em; }
 pre { padding: .8em 1em; overflow-x: auto; }

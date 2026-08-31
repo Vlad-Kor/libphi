@@ -86,6 +86,11 @@ struct _PdfvMarkdownEditor {
   gchar *theme_entry;
   gchar *theme_border;
   gchar *theme_accent;
+  gboolean table_context_inside;
+  gchar *table_handle_kind;
+  gint table_handle_index;
+  gint64 table_handle_from;
+  gboolean table_handle_removable;
   guint request_sequence;
   GHashTable *flush_tasks; /* request ID -> FlushPending */
 };
@@ -1042,6 +1047,26 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
                                       payload, "renderer", "unknown")
                                 : "unknown";
     g_debug("Markdown renderer ready: %s", renderer);
+  } else if (g_str_equal(type, "table/context")) {
+    self->table_context_inside = payload &&
+        json_object_get_boolean_member_with_default(payload, "inside", FALSE);
+    g_clear_pointer(&self->table_handle_kind, g_free);
+    self->table_handle_index = -1;
+    self->table_handle_from = -1;
+    self->table_handle_removable = FALSE;
+    const gchar *kind = payload
+        ? json_object_get_string_member_with_default(payload, "kind", "")
+        : "";
+    if (g_str_equal(kind, "row") || g_str_equal(kind, "column")) {
+      self->table_handle_kind = g_strdup(kind);
+      self->table_handle_index = (gint)json_object_get_int_member_with_default(
+          payload, "index", -1);
+      self->table_handle_from = json_object_get_int_member_with_default(
+          payload, "from", -1);
+      self->table_handle_removable =
+          json_object_get_boolean_member_with_default(payload, "removable",
+                                                      FALSE);
+    }
   } else if (g_str_equal(type, "log/error")) {
     const gchar *message = payload
                                ? json_object_get_string_member_with_default(
@@ -1266,11 +1291,91 @@ static void append_insert_table_menu_item(WebKitContextMenu *menu,
     webkit_context_menu_append(menu, item);
 }
 
+static void on_remove_table_part(GSimpleAction *action, GVariant *parameter,
+                                 gpointer user_data) {
+  (void)parameter;
+  PdfvMarkdownEditor *self = PDFV_MARKDOWN_EDITOR(user_data);
+  const gchar *kind = g_object_get_data(G_OBJECT(action), "phi-table-kind");
+  gint64 *from = g_object_get_data(G_OBJECT(action), "phi-table-from");
+  gint index = GPOINTER_TO_INT(
+      g_object_get_data(G_OBJECT(action), "phi-table-index")) - 1;
+  if (!kind || !from || *from < 0 || index < 0)
+    return;
+  JsonObject *payload = json_object_new_owned();
+  json_object_set_string_member(payload, "kind", kind);
+  json_object_set_int_member(payload, "from", *from);
+  json_object_set_int_member(payload, "index", index);
+  pdfv_markdown_editor_bridge_send(self->bridge, "table/remove", NULL,
+                                   payload);
+  json_object_unref(payload);
+}
+
+static void append_table_handle_menu(PdfvMarkdownEditor *self,
+                                     WebKitContextMenu *menu,
+                                     const gchar *kind, gint64 from,
+                                     gint index, gboolean removable) {
+  webkit_context_menu_remove_all(menu);
+  WebKitContextMenuAction text_actions[] = {
+      WEBKIT_CONTEXT_MENU_ACTION_CUT,
+      WEBKIT_CONTEXT_MENU_ACTION_COPY,
+      WEBKIT_CONTEXT_MENU_ACTION_PASTE,
+      WEBKIT_CONTEXT_MENU_ACTION_DELETE,
+      WEBKIT_CONTEXT_MENU_ACTION_SELECT_ALL,
+  };
+  for (guint i = 0; i < G_N_ELEMENTS(text_actions); i++)
+    webkit_context_menu_append(
+        menu, webkit_context_menu_item_new_from_stock_action(text_actions[i]));
+  webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+
+  GSimpleAction *action = g_simple_action_new("remove-table-part", NULL);
+  gint64 *stored_from = g_new(gint64, 1);
+  *stored_from = from;
+  g_object_set_data_full(G_OBJECT(action), "phi-table-kind", g_strdup(kind),
+                         g_free);
+  g_object_set_data_full(G_OBJECT(action), "phi-table-from", stored_from,
+                         g_free);
+  g_object_set_data(G_OBJECT(action), "phi-table-index",
+                    GINT_TO_POINTER(index + 1));
+  g_simple_action_set_enabled(action, removable);
+  g_signal_connect_object(action, "activate", G_CALLBACK(on_remove_table_part),
+                          self, 0);
+  gchar *label = g_strdup_printf("Remove %s", g_str_equal(kind, "row")
+                                                ? "Row"
+                                                : "Column");
+  WebKitContextMenuItem *remove_item =
+      webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, NULL);
+  webkit_context_menu_append(menu, remove_item);
+  g_free(label);
+  g_object_unref(action);
+
+  webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+  webkit_context_menu_append(
+      menu, webkit_context_menu_item_new_from_stock_action(
+                WEBKIT_CONTEXT_MENU_ACTION_INSERT_EMOJI));
+}
+
 static gboolean on_context_menu(WebKitWebView *view, WebKitContextMenu *menu,
                                 WebKitHitTestResult *hit,
                                 PdfvMarkdownEditor *self) {
   (void)view;
-  append_insert_table_menu_item(menu, self);
+  gboolean table_context_inside = self->table_context_inside;
+  gchar *table_handle_kind = g_steal_pointer(&self->table_handle_kind);
+  gint table_handle_index = self->table_handle_index;
+  gint64 table_handle_from = self->table_handle_from;
+  gboolean table_handle_removable = self->table_handle_removable;
+  self->table_context_inside = FALSE;
+  self->table_handle_index = -1;
+  self->table_handle_from = -1;
+  self->table_handle_removable = FALSE;
+
+  if (table_handle_kind) {
+    append_table_handle_menu(self, menu, table_handle_kind, table_handle_from,
+                             table_handle_index, table_handle_removable);
+    g_free(table_handle_kind);
+    return FALSE;
+  }
+  if (!table_context_inside)
+    append_insert_table_menu_item(menu, self);
   if (!webkit_hit_test_result_context_is_image(hit))
     return FALSE;
   GFile *file = vault_image_file_for_uri(
@@ -1953,6 +2058,7 @@ static void pdfv_markdown_editor_finalize(GObject *object) {
   g_free(self->theme_entry);
   g_free(self->theme_border);
   g_free(self->theme_accent);
+  g_free(self->table_handle_kind);
   G_OBJECT_CLASS(pdfv_markdown_editor_parent_class)->finalize(object);
 }
 
@@ -1996,6 +2102,8 @@ static void pdfv_markdown_editor_init(PdfvMarkdownEditor *self) {
   g_queue_init(&self->save_queue);
   self->font_scale = 1.0;
   self->image_paste_wiki_embed = TRUE;
+  self->table_handle_index = -1;
+  self->table_handle_from = -1;
   self->snippets = g_strdup("");
   self->snippet_variables = g_strdup("");
   self->flush_tasks = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,

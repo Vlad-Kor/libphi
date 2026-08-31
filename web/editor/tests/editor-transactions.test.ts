@@ -32,6 +32,11 @@ import {
   setPreviewGeometryContext,
   TaskWidget,
 } from "../src/widgets/preview";
+import {
+  resetRichTableGeometryCache,
+  RichTableWidget,
+  setRichTableGeometryContext,
+} from "../src/widgets/table";
 
 const views: EditorView[] = [];
 afterEach(() => {
@@ -43,7 +48,10 @@ afterEach(() => {
   delete (window as unknown as { MathJax?: unknown }).MathJax;
   resetPreviewGeometryCaches();
   setPreviewGeometryContext("", 780, 1);
+  resetRichTableGeometryCache();
+  setRichTableGeometryContext("", 780, 1);
   setCustomSnippets();
+  vi.unstubAllGlobals();
 });
 
 function viewFor(text: string, anchor = text.length, head = anchor, extensions: unknown[] = []): EditorView {
@@ -254,6 +262,38 @@ describe("CodeMirror document transactions", () => {
     const marker = new LineHeightEstimateWidget(72);
     expect(marker.estimatedHeight).toBe(72);
     expect(marker.toDOM().className).toBe("cm-height-estimate");
+  });
+
+  it("estimates rich-table height and reuses the measured height on remount", () => {
+    const source = `| ${"wrapped content ".repeat(18)} | B |\n| --- | --- |\n| C | D |`;
+    setRichTableGeometryContext("Tables.md", 260, 1);
+    const narrow = new RichTableWidget(source, 0, source.length)
+      .estimatedHeight;
+    setRichTableGeometryContext("Tables.md", 900, 1);
+    const wide = new RichTableWidget(source, 0, source.length)
+      .estimatedHeight;
+    expect(narrow).toBeGreaterThan(wide);
+
+    const view = viewFor(source);
+    let scheduled: {
+      read(view: EditorView): unknown;
+      write?(measurement: unknown, view: EditorView): void;
+    } | undefined;
+    vi.spyOn(view, "requestMeasure").mockImplementation((request) => {
+      scheduled = request as typeof scheduled;
+    });
+    const widget = new RichTableWidget(source, 0, source.length);
+    const dom = widget.toDOM(view);
+    document.body.append(dom);
+    vi.spyOn(dom, "getBoundingClientRect").mockReturnValue({
+      height: 222,
+    } as DOMRect);
+    const measured = scheduled!.read(view);
+    scheduled!.write?.(measured, view);
+
+    expect(new RichTableWidget(source, 0, source.length).estimatedHeight)
+      .toBe(222);
+    widget.destroy(dom);
   });
 
   it("reuses resolved image geometry when CodeMirror remounts a widget", async () => {
@@ -1529,6 +1569,34 @@ $$`;
     expect(parent.querySelector(".table-widget")).not.toBeNull();
   });
 
+  it("rerenders a pinned source table when a different table is entered", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const first = "| First |\n| --- |\n| 1 |";
+    const second = "| Second |\n| --- |\n| 2 |";
+    editor.openDocument({
+      documentId: "switch-rich-tables",
+      path: "switch-rich-tables.md",
+      text: `${first}\n\n${second}`,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    parent.querySelector<HTMLButtonElement>(".rich-table-source-button")
+      ?.click();
+    expect(parent.querySelectorAll(".rich-table-widget")).toHaveLength(1);
+    expect(parent.querySelectorAll(".cm-live-table-source")).toHaveLength(3);
+
+    parent.querySelector<HTMLElement>(".rich-table-scroll")?.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+    await settle();
+    expect(parent.querySelectorAll(".rich-table-widget")).toHaveLength(2);
+    expect(parent.querySelector(".cm-live-table-source")).toBeNull();
+  });
+
   it("uses live Markdown and LaTeX editing inside table cells", async () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },
@@ -1644,6 +1712,43 @@ $$`;
     expect(cells[1].contains(document.activeElement)).toBe(true);
   });
 
+  it("does not let a cell arrow bubble back into the outer table boundary", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const table = "| test |\n| --- |\n| next |";
+    editor.openDocument({
+      documentId: "table-boundary-bubbling",
+      path: "table-boundary-bubbling.md",
+      text: `s\n${table}\ne`,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    const outerMove = vi.spyOn(editor.view, "moveVertically")
+      .mockReturnValue(EditorSelection.cursor(2));
+
+    expect(key(editor.view, "ArrowDown")).toBe(true);
+    await settle();
+    const cells = [...parent.querySelectorAll<HTMLElement>(".rich-table-cell")];
+    const topEditor = EditorView.findFromDOM(
+      cells[0].querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    vi.spyOn(topEditor, "moveVertically").mockImplementation(
+      (selection) => selection,
+    );
+    topEditor.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    }));
+    await settle();
+
+    expect(cells[1].contains(document.activeElement)).toBe(true);
+    expect(outerMove).toHaveBeenCalledTimes(1);
+  });
+
   it("inserts a selected table size without destroying surrounding text", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -1674,6 +1779,68 @@ $$`;
     expect(document.querySelector(".phi-table-picker")).toBeNull();
     expect(undo(editor.view)).toBe(true);
     expect(editor.view.state.doc.toString()).toBe("alphaomega");
+  });
+
+  it("adds one safety blank line only when inserting immediately after a table", () => {
+    const existing = "| Existing |\n| --- |\n| value |";
+    const insertAt = (text: string, position: number, id: string) => {
+      const parent = document.createElement("div");
+      document.body.append(parent);
+      const editor = new PhiMarkdownEditor(parent);
+      views.push(editor.view);
+      editor.openDocument({
+        documentId: id,
+        path: `${id}.md`,
+        text,
+        revision: 1,
+        lineEnding: "LF",
+      });
+      editor.view.dispatch({ selection: { anchor: position } });
+      editor.receive({ protocol: 1, type: "table/show-picker" });
+      document.querySelector<HTMLButtonElement>(
+        '.phi-table-picker-cell[data-row="1"][data-column="1"]',
+      )?.click();
+      return editor.getDocument();
+    };
+
+    const adjacent = insertAt(
+      `${existing}\nTail`, existing.length + 1, "adjacent-table",
+    );
+    expect(adjacent.startsWith(`${existing}\n\n|`)).toBe(true);
+    expect(adjacent.startsWith(`${existing}\n\n\n|`)).toBe(false);
+
+    const alreadySeparated = insertAt(
+      `${existing}\n\nTail`, existing.length + 2, "separated-table",
+    );
+    expect(alreadySeparated.startsWith(`${existing}\n\n|`)).toBe(true);
+    expect(alreadySeparated.startsWith(`${existing}\n\n\n|`)).toBe(false);
+
+    const ordinary = insertAt("alpha\nTail", 6, "ordinary-table");
+    expect(ordinary.startsWith("alpha\n|")).toBe(true);
+    expect(ordinary.startsWith("alpha\n\n|")).toBe(false);
+
+    const crlfParent = document.createElement("div");
+    document.body.append(crlfParent);
+    const crlfEditor = new PhiMarkdownEditor(crlfParent);
+    views.push(crlfEditor.view);
+    const crlfExisting = existing.replaceAll("\n", "\r\n");
+    crlfEditor.openDocument({
+      documentId: "adjacent-table-crlf",
+      path: "adjacent-table-crlf.md",
+      text: `${crlfExisting}\r\nTail`,
+      revision: 1,
+      lineEnding: "CRLF",
+    });
+    crlfEditor.view.dispatch({
+      selection: { anchor: crlfEditor.view.state.doc.line(4).from },
+    });
+    crlfEditor.receive({ protocol: 1, type: "table/show-picker" });
+    document.querySelector<HTMLButtonElement>(
+      '.phi-table-picker-cell[data-row="1"][data-column="1"]',
+    )?.click();
+    expect(crlfEditor.getDocument().startsWith(
+      `${crlfExisting}\r\n\r\n|`,
+    )).toBe(true);
   });
 
   it("tabs through rich cells, leaves at the boundary, and supports Ctrl+A", async () => {
@@ -1747,11 +1914,31 @@ $$`;
     expect(undo(editor.view)).toBe(true);
     expect(parsed().alignments).toHaveLength(2);
 
-    parent.querySelector<HTMLElement>(
+    let tableContext: { type: string; payload: Record<string, unknown> } | null = null;
+    window.addEventListener("phi-native-message", (event) => {
+      const message = (event as CustomEvent).detail as {
+        type: string;
+        payload: Record<string, unknown>;
+      };
+      if (message.type === "table/context") tableContext = message;
+    }, { once: true });
+    const rowHandle = parent.querySelector<HTMLElement>(
       '.rich-table-row-handle[data-index="1"]',
-    )?.dispatchEvent(new MouseEvent("contextmenu", {
+    )!;
+    expect(rowHandle.title).not.toContain("right-click");
+    rowHandle.dispatchEvent(new MouseEvent("contextmenu", {
       bubbles: true, cancelable: true,
     }));
+    expect(parsed().cells).toHaveLength(2);
+    expect(tableContext).toMatchObject({
+      type: "table/context",
+      payload: { kind: "row", index: 1, removable: true },
+    });
+    editor.receive({
+      protocol: 1,
+      type: "table/remove",
+      payload: tableContext!.payload,
+    });
     expect(parsed().cells).toHaveLength(1);
     expect(undo(editor.view)).toBe(true);
 
@@ -1765,8 +1952,9 @@ $$`;
       bubbles: true, cancelable: true,
     }));
     expect(parent.querySelector(".rich-table-drop-indicator")).not.toBeNull();
-    expect(parent.querySelectorAll(".rich-table-drag-selected").length)
-      .toBeGreaterThan(0);
+    expect(parent.querySelectorAll(".rich-table-drag-selection"))
+      .toHaveLength(1);
+    expect(parent.querySelector(".rich-table-drag-selected")).toBeNull();
     expect(columns[0].style.transform).toContain("translateX");
     columns[1].dispatchEvent(new Event("drop", {
       bubbles: true, cancelable: true,
@@ -1778,8 +1966,104 @@ $$`;
     const root = parent.querySelector<HTMLElement>(".rich-table-widget")!;
     expect(root.querySelector(".rich-table-scroll .rich-table-source-button"))
       .toBeNull();
-    expect(root.querySelector(":scope > .rich-table-source-button"))
+    expect(root.querySelector(
+      ":scope > .rich-table-frame > .rich-table-source-button",
+    ))
       .not.toBeNull();
+  });
+
+  it("keeps a dragged column handle aligned with the pointer", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    editor.openDocument({
+      documentId: "table-drag-pointer",
+      path: "table-drag-pointer.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const handles = parent.querySelectorAll<HTMLElement>(
+      ".rich-table-column-handle",
+    );
+    const holders = parent.querySelectorAll<HTMLElement>(
+      ".rich-table-column-handle-cell",
+    );
+    const bounds = (left: number, right: number) => ({
+      x: left,
+      y: 0,
+      left,
+      right,
+      top: 0,
+      bottom: 20,
+      width: right - left,
+      height: 20,
+      toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(handles[0], "getBoundingClientRect")
+      .mockReturnValue(bounds(20, 120));
+    vi.spyOn(handles[1], "getBoundingClientRect")
+      .mockReturnValue(bounds(120, 220));
+    vi.spyOn(holders[0], "getBoundingClientRect")
+      .mockReturnValue(bounds(20, 120));
+    vi.spyOn(holders[1], "getBoundingClientRect")
+      .mockReturnValue(bounds(120, 220));
+
+    handles[0].dispatchEvent(new MouseEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      clientX: 50,
+      clientY: 10,
+    }));
+    document.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 145,
+      clientY: 10,
+    }));
+
+    expect(handles[0].style.transform).toBe("translateX(95px)");
+    document.dispatchEvent(new MouseEvent("pointercancel", { bubbles: true }));
+  });
+
+  it("enables horizontal table scrolling only for actual overflow", async () => {
+    let notifyResize = () => {};
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        notifyResize = () => callback([], this as unknown as ResizeObserver);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "table-overflow",
+      path: "table-overflow.md",
+      text: "| A |\n| --- |\n| B |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const scroller = parent.querySelector<HTMLElement>(".rich-table-scroll")!;
+    Object.defineProperties(scroller, {
+      clientWidth: { value: 400, configurable: true },
+      scrollWidth: { value: 400, configurable: true },
+    });
+    notifyResize();
+    await settle();
+    expect(scroller.classList.contains("rich-table-overflowing")).toBe(false);
+
+    Object.defineProperty(scroller, "scrollWidth", {
+      value: 520,
+      configurable: true,
+    });
+    notifyResize();
+    expect(scroller.classList.contains("rich-table-overflowing")).toBe(true);
   });
 
   it("syntax-highlights an HTML span while its source is active", () => {

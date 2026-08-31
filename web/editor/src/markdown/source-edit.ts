@@ -5,7 +5,7 @@ export interface PreviewSourceRange {
   to: number;
 }
 
-export const pinPreviewSource = StateEffect.define<PreviewSourceRange>();
+export const pinPreviewSource = StateEffect.define<PreviewSourceRange | null>();
 
 export const previewSourceRange = StateField.define<PreviewSourceRange | null>({
   create: () => null,

@@ -43,7 +43,11 @@ import {
   seedPreviewImageGeometry,
   setPreviewGeometryContext,
 } from "./widgets/preview";
-import { focusRichTableCell } from "./widgets/table";
+import {
+  focusRichTableCell,
+  removeRichTablePart,
+  setRichTableGeometryContext,
+} from "./widgets/table";
 
 const previewCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
@@ -120,8 +124,17 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       state: this.createState(""),
     });
     this.view.dom.addEventListener("contextmenu", (event) => {
-      this.tableContextInside = event.target instanceof Element &&
-        Boolean(event.target.closest(".rich-table-widget"));
+      const target = event.target instanceof Element ? event.target : null;
+      const table = target?.closest<HTMLElement>(".rich-table-widget") ?? null;
+      const handle = target?.closest<HTMLElement>(".rich-table-handle") ?? null;
+      this.tableContextInside = Boolean(table);
+      sendNative("table/context", {
+        inside: Boolean(table),
+        from: Number(table?.dataset.hardPreviewFrom ?? -1),
+        kind: handle?.dataset.tableHandle ?? "",
+        index: Number(handle?.dataset.index ?? -1),
+        removable: handle?.dataset.removable === "true",
+      });
     }, true);
     this.view.scrollDOM.addEventListener("scroll", () => {
       window.clearTimeout(this.scrollTimer);
@@ -253,10 +266,12 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     at = Math.max(0, Math.min(this.view.state.doc.length, at));
     if (this.tableInsertionIsInsideTable(at)) return;
     const source = canonicalMarkdownTable(newMarkdownTable(rows, columns));
-    const prefix = at > 0 && this.view.state.sliceDoc(at - 1, at) !== "\n"
-      ? "\n" : "";
+    const safetyPrefix = this.tableInsertionSafetyPrefix(at);
+    const prefix = safetyPrefix ??
+      (at > 0 &&
+          !this.view.state.sliceDoc(at - 1, at).endsWith("\n") ? "\n" : "");
     const suffix = at < this.view.state.doc.length &&
-      this.view.state.sliceDoc(at, at + 1) !== "\n" ? "\n" : "";
+      !this.view.state.sliceDoc(at, at + 1).endsWith("\n") ? "\n" : "";
     const insert = `${prefix}${source}${suffix}`;
     const tableFrom = at + prefix.length;
     this.view.dispatch({
@@ -278,6 +293,16 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       return true;
     return markdownAnalysis(this.view.state).nodes.some((node) =>
       node.kind === "table" && position >= node.from && position < node.to);
+  }
+
+  private tableInsertionSafetyPrefix(position: number): string | null {
+    const tables = markdownAnalysis(this.view.state).nodes.filter((node) =>
+      node.kind === "table");
+    if (tables.some((node) => node.to === position)) return "\n\n";
+    if (position > 0 &&
+        this.view.state.sliceDoc(position - 1, position).endsWith("\n") &&
+        tables.some((node) => node.to === position - 1)) return "\n";
+    return null;
   }
 
   private createState(text: string): EditorState {
@@ -538,6 +563,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         ? Math.min(780, viewportFallback)
         : viewportFallback;
     setPreviewGeometryContext(this.documentPath, width, this.fontScale);
+    setRichTableGeometryContext(this.documentPath, width, this.fontScale);
   }
 
   private sendSnapshot(type: string, id?: string): DocumentSnapshot {
@@ -853,6 +879,12 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       case "navigation/reveal": this.revealFragment(String(payload.target ?? "")); break;
       case "command/run": this.runCommand(String(payload.command ?? "")); break;
       case "table/show-picker": this.showTablePicker(); break;
+      case "table/remove": removeRichTablePart(
+        this.view,
+        Number(payload.from ?? -1),
+        String(payload.kind ?? ""),
+        Number(payload.index ?? -1),
+      ); break;
       case "document/flush": void this.flush().then((snapshot) => sendNative("document/flush", { ...snapshot }, message.id)); break;
       case "vault/files-changed": break;
       default: reportError(new Error(`Unknown native message: ${message.type}`), "bridge", this.documentPath);

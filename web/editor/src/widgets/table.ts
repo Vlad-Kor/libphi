@@ -20,7 +20,7 @@ import {
   type MarkdownTable,
 } from "../markdown/table";
 import { renderMarkdownInline, wireRenderedContent } from "../markdown/render";
-import { pinPreviewSource } from "../markdown/source-edit";
+import { pinPreviewSource, previewSourceRange } from "../markdown/source-edit";
 import { currentEditorSettings } from "../settings";
 
 type CellEdge = "start" | "end" | "preserve";
@@ -62,12 +62,122 @@ interface DragState {
   slot: number;
   moved: boolean;
   handle: HTMLButtonElement;
+  origin: DOMRect;
+  grabOffset: number | null;
+  pointerCoordinate: number | null;
+}
+
+interface RichTableGeometryContext {
+  documentPath: string;
+  textWidth: number;
+  fontScale: number;
+  key: string;
+}
+
+const TABLE_HEIGHT_CACHE_LIMIT = 256;
+const tableHeightCache = new Map<string, number>();
+let richTableGeometryContext: RichTableGeometryContext = {
+  documentPath: "",
+  textWidth: 780,
+  fontScale: 1,
+  key: "\u0000w780:s100",
+};
+
+export function setRichTableGeometryContext(
+  documentPath: string,
+  textWidth: number,
+  fontScale: number,
+): void {
+  const width = Math.max(160, Math.round((Number.isFinite(textWidth)
+    ? textWidth : 780) / 16) * 16);
+  const scale = Math.max(0.5, Math.min(3, Number.isFinite(fontScale)
+    ? fontScale : 1));
+  richTableGeometryContext = {
+    documentPath,
+    textWidth: width,
+    fontScale: scale,
+    key: `${documentPath}\u0000w${width}:s${Math.round(scale * 100)}`,
+  };
+}
+
+export function resetRichTableGeometryCache(): void {
+  tableHeightCache.clear();
+}
+
+function tableHeightCacheKey(
+  context: RichTableGeometryContext,
+  geometryKey: string,
+): string {
+  return `${context.key}\u0000${geometryKey}`;
+}
+
+function cachedTableHeight(
+  context: RichTableGeometryContext,
+  geometryKey: string,
+): number | undefined {
+  const key = tableHeightCacheKey(context, geometryKey);
+  const value = tableHeightCache.get(key);
+  if (value == null) return undefined;
+  tableHeightCache.delete(key);
+  tableHeightCache.set(key, value);
+  return value;
+}
+
+function rememberTableHeight(
+  context: RichTableGeometryContext,
+  geometryKey: string,
+  height: number,
+): void {
+  if (!Number.isFinite(height) || height < 1) return;
+  const key = tableHeightCacheKey(context, geometryKey);
+  tableHeightCache.delete(key);
+  tableHeightCache.set(key, Math.round(height * 2) / 2);
+  while (tableHeightCache.size > TABLE_HEIGHT_CACHE_LIMIT)
+    tableHeightCache.delete(tableHeightCache.keys().next().value!);
+}
+
+function estimatedTableHeight(
+  model: MarkdownTable,
+  context: RichTableGeometryContext,
+): number {
+  const fontSize = 16 * context.fontScale;
+  const lineHeight = fontSize * 1.62;
+  const columns = Math.max(1, model.alignments.length);
+  const contentWidth = Math.max(
+    44,
+    (context.textWidth - 36 - 20) / columns - fontSize * 1.3,
+  );
+  const rows = model.cells.reduce((height, row) => {
+    const visualLines = Math.max(1, ...row.map((cell) => {
+      const approximateText = cell.replace(/[*_~=`$\[\]\\]/g, "");
+      const width = Math.max(fontSize, approximateText.length * fontSize * 0.54);
+      return Math.max(1, Math.ceil(width / contentWidth));
+    }));
+    return height + visualLines * lineHeight + fontSize * 0.7 + 1;
+  }, 0);
+  /* Root padding, the handle rail, cell padding, and collapsed borders all
+   * contribute to the mounted block even before any cell text wraps. */
+  return Math.ceil(36 + 20 + rows);
+}
+
+function measureTableHeight(
+  view: EditorView,
+  root: HTMLElement,
+  context: RichTableGeometryContext,
+  geometryKey: string,
+): void {
+  view.requestMeasure({
+    key: root,
+    read: () => root.isConnected ? root.getBoundingClientRect().height : 0,
+    write: (height) => rememberTableHeight(context, geometryKey, height),
+  });
 }
 
 class RichTableController {
   private active: ActiveCell | null = null;
   private drag: DragState | null = null;
   private syncingCell = false;
+  private overflowObserver: ResizeObserver | null = null;
 
   constructor(
     readonly root: ControlledTable,
@@ -78,6 +188,7 @@ class RichTableController {
   ) {
     root[tableController] = this;
     root.addEventListener("pointerdown", (event) => {
+      if (event.button === 0) this.clearPinnedSource();
       if (event.target === root ||
           (event.target instanceof Element &&
             event.target.classList.contains("rich-table-scroll")))
@@ -87,6 +198,8 @@ class RichTableController {
   }
 
   destroy(): void {
+    this.overflowObserver?.disconnect();
+    this.overflowObserver = null;
     this.active?.editor.destroy();
     this.active = null;
     this.clearDragVisual();
@@ -129,6 +242,8 @@ class RichTableController {
   }
 
   private render(): void {
+    this.overflowObserver?.disconnect();
+    this.overflowObserver = null;
     this.discardActive();
     this.clearDragVisual();
     this.markRoot();
@@ -181,6 +296,10 @@ class RichTableController {
     scroller.className = "rich-table-scroll";
     scroller.append(table);
 
+    const frame = document.createElement("div");
+    frame.className = "rich-table-frame";
+    frame.append(scroller, source);
+
     const addColumn = this.addButton("column", "Add column to the right", () => {
       this.commitActive();
       const next = cloneMarkdownTable(this.model);
@@ -197,7 +316,17 @@ class RichTableController {
       queueMicrotask(() => this.focusCell(next.cells.length - 1, 0, "start"));
     });
 
-    this.root.append(scroller, source, addColumn, addRow);
+    this.root.append(frame, addColumn, addRow);
+    const updateOverflow = () => scroller.classList.toggle(
+      "rich-table-overflowing",
+      scroller.scrollWidth > scroller.clientWidth + 1,
+    );
+    queueMicrotask(updateOverflow);
+    if (typeof ResizeObserver !== "undefined") {
+      this.overflowObserver = new ResizeObserver(updateOverflow);
+      this.overflowObserver.observe(scroller);
+      this.overflowObserver.observe(table);
+    }
   }
 
   private addButton(
@@ -336,6 +465,7 @@ class RichTableController {
       this.active.editor.focus();
       return;
     }
+    this.clearPinnedSource();
     this.commitActive();
     element.replaceChildren();
     element.classList.add("rich-table-cell-active");
@@ -344,6 +474,10 @@ class RichTableController {
       parent: element,
       state: this.cellState(this.model.cells[row]?.[column] ?? "", row, column),
     });
+    /* The inner keymap still handles the event at this element. Stopping DOM
+     * propagation here prevents that same arrow from subsequently reaching
+     * the outer CodeMirror and re-entering the table from its boundary. */
+    editor.dom.addEventListener("keydown", (event) => event.stopPropagation());
     this.active = { element, editor, row, column };
     let position = editor.state.doc.length;
     if (coordinates) {
@@ -355,6 +489,11 @@ class RichTableController {
     }
     editor.dispatch({ selection: EditorSelection.cursor(position) });
     editor.focus();
+  }
+
+  private clearPinnedSource(): void {
+    if (this.view.state.field(previewSourceRange, false))
+      this.view.dispatch({ effects: pinPreviewSource.of(null) });
   }
 
   focusCell(
@@ -567,17 +706,14 @@ class RichTableController {
     handle.className = `rich-table-handle rich-table-${kind}-handle`;
     handle.dataset.tableHandle = kind;
     handle.dataset.index = String(index);
+    handle.dataset.removable = String((kind === "row"
+      ? this.model.cells.length : this.model.alignments.length) > 1);
     /* Pointer dragging lets the real handle slide on its table axis without
      * also showing the browser's freely moving native drag ghost. */
     handle.draggable = false;
-    handle.title = `Drag to reorder ${kind}; right-click to remove`;
+    handle.title = `Drag to reorder ${kind}`;
     handle.setAttribute("aria-label", `${kind === "row" ? "Row" : "Column"} ${index + 1} handle`);
     handle.append(dots());
-    handle.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.remove(kind, index);
-    });
     handle.addEventListener("dragstart", (event) => {
       this.startDrag(kind, index, handle);
       event.dataTransfer?.setData("text/plain", `${kind}:${index}`);
@@ -602,8 +738,21 @@ class RichTableController {
     kind: HandleKind,
     index: number,
     handle: HTMLButtonElement,
+    pointerCoordinate?: number,
   ): void {
-    this.drag = { kind, from: index, slot: index, moved: false, handle };
+    const origin = handle.getBoundingClientRect();
+    const originStart = kind === "column" ? origin.left : origin.top;
+    this.drag = {
+      kind,
+      from: index,
+      slot: index,
+      moved: false,
+      handle,
+      origin,
+      grabOffset: pointerCoordinate == null
+        ? null : pointerCoordinate - originStart,
+      pointerCoordinate: pointerCoordinate ?? null,
+    };
     this.root.classList.add("rich-table-is-dragging");
     handle.classList.add("rich-table-handle-dragging");
     this.updateDragVisual();
@@ -625,9 +774,16 @@ class RichTableController {
         ) < 5) return;
         if (!started) {
           started = true;
-          this.startDrag(kind, index, handle);
+          this.startDrag(
+            kind,
+            index,
+            handle,
+            kind === "column" ? startX : startY,
+          );
         }
         moveEvent.preventDefault();
+        if (this.drag) this.drag.pointerCoordinate = kind === "column"
+          ? moveEvent.clientX : moveEvent.clientY;
         this.setDragSlot(this.slotAtPoint(kind, moveEvent.clientX, moveEvent.clientY));
       };
       const cleanup = () => {
@@ -688,36 +844,70 @@ class RichTableController {
   private updateDragVisual(): void {
     const drag = this.drag;
     if (!drag) return;
-    this.root.querySelectorAll(".rich-table-drag-selected")
-      .forEach((element) => element.classList.remove("rich-table-drag-selected"));
-    if (drag.kind === "column") {
-      this.root.querySelectorAll<HTMLElement>(
-        `[data-column="${drag.from}"]`,
-      ).forEach((element) => {
-        if (element.matches("th, td")) element.classList.add("rich-table-drag-selected");
-        else element.parentElement?.classList.add("rich-table-drag-selected");
-      });
-    } else {
-      this.root.querySelector<HTMLElement>(
-        `.rich-table-grid tr[data-row="${drag.from}"]`,
-      )?.classList.add("rich-table-drag-selected");
-    }
+    this.positionDragSelection(drag);
 
-    const destination = this.dragDestination(drag);
-    const handles = [...this.root.querySelectorAll<HTMLElement>(
+    const candidates = [...this.root.querySelectorAll<HTMLElement>(
       `.rich-table-${drag.kind}-handle`,
     )];
-    const target = handles[destination];
-    if (target) {
-      const sourceBounds = drag.handle.getBoundingClientRect();
-      const targetBounds = target.getBoundingClientRect();
-      const distance = drag.kind === "column"
-        ? targetBounds.left - sourceBounds.left
-        : targetBounds.top - sourceBounds.top;
-      drag.handle.style.transform = drag.kind === "column"
-        ? `translateX(${distance}px)` : `translateY(${distance}px)`;
+    let distance: number | null = null;
+    if (drag.pointerCoordinate != null && drag.grabOffset != null &&
+        candidates.length) {
+      const first = candidates[0].getBoundingClientRect();
+      const last = candidates.at(-1)!.getBoundingClientRect();
+      const originStart = drag.kind === "column"
+        ? drag.origin.left : drag.origin.top;
+      const size = drag.kind === "column"
+        ? drag.origin.width : drag.origin.height;
+      const minimum = drag.kind === "column" ? first.left : first.top;
+      const maximum = (drag.kind === "column" ? last.right : last.bottom) - size;
+      const desired = drag.pointerCoordinate - drag.grabOffset;
+      distance = Math.max(minimum, Math.min(maximum, desired)) - originStart;
+    } else {
+      const target = candidates[this.dragDestination(drag)];
+      if (target) {
+        const bounds = target.getBoundingClientRect();
+        distance = drag.kind === "column"
+          ? bounds.left - drag.origin.left
+          : bounds.top - drag.origin.top;
+      }
     }
+    if (distance != null) drag.handle.style.transform = drag.kind === "column"
+      ? `translateX(${distance}px)` : `translateY(${distance}px)`;
     this.positionDropIndicator(drag);
+  }
+
+  private positionDragSelection(drag: DragState): void {
+    let selection = this.root.querySelector<HTMLElement>(
+      ".rich-table-drag-selection",
+    );
+    if (!selection) {
+      selection = document.createElement("div");
+      selection.className = "rich-table-drag-selection";
+      this.root.append(selection);
+    }
+    const rootBounds = this.root.getBoundingClientRect();
+    const grid = this.root.querySelector<HTMLElement>(".rich-table-grid");
+    const target = drag.kind === "column"
+      ? this.root.querySelector<HTMLElement>(
+        `.rich-table-column-handle-cell[data-column="${drag.from}"]`,
+      )
+      : this.root.querySelector<HTMLElement>(
+        `.rich-table-grid tr[data-row="${drag.from}"]`,
+      );
+    if (!grid || !target) return;
+    const gridBounds = grid.getBoundingClientRect();
+    const bounds = target.getBoundingClientRect();
+    if (drag.kind === "column") {
+      selection.style.left = `${bounds.left - rootBounds.left}px`;
+      selection.style.top = `${gridBounds.top - rootBounds.top}px`;
+      selection.style.width = `${bounds.width}px`;
+      selection.style.height = `${gridBounds.height}px`;
+    } else {
+      selection.style.left = `${gridBounds.left - rootBounds.left}px`;
+      selection.style.top = `${bounds.top - rootBounds.top}px`;
+      selection.style.width = `${gridBounds.width}px`;
+      selection.style.height = `${bounds.height}px`;
+    }
   }
 
   private positionDropIndicator(drag: DragState): void {
@@ -765,14 +955,14 @@ class RichTableController {
 
   private clearDragVisual(): void {
     this.root.classList.remove("rich-table-is-dragging");
-    this.root.querySelectorAll(
-      ".rich-table-handle-dragging, .rich-table-drag-selected",
-    ).forEach((element) => element.classList.remove(
-      "rich-table-handle-dragging", "rich-table-drag-selected",
-    ));
+    this.root.querySelectorAll(".rich-table-handle-dragging")
+      .forEach((element) => element.classList.remove(
+        "rich-table-handle-dragging",
+      ));
     this.root.querySelectorAll<HTMLElement>(".rich-table-handle")
       .forEach((handle) => handle.style.removeProperty("transform"));
     this.root.querySelector(".rich-table-drop-indicator")?.remove();
+    this.root.querySelector(".rich-table-drag-selection")?.remove();
   }
 
   private finishDrag(): void {
@@ -798,7 +988,7 @@ class RichTableController {
     this.commitModel(next, `input.table-reorder-${drag.kind}`);
   }
 
-  private remove(kind: HandleKind, index: number): void {
+  remove(kind: HandleKind, index: number): void {
     const count = kind === "row"
       ? this.model.cells.length : this.model.alignments.length;
     if (count <= 1) return;
@@ -814,6 +1004,8 @@ class RichTableController {
 }
 
 export class RichTableWidget extends WidgetType {
+  readonly geometryContext = richTableGeometryContext;
+
   constructor(
     readonly source: string,
     readonly from: number,
@@ -822,7 +1014,19 @@ export class RichTableWidget extends WidgetType {
 
   eq(other: RichTableWidget): boolean {
     return other.source === this.source && other.from === this.from &&
-      other.to === this.to;
+      other.to === this.to &&
+      other.geometryContext.key === this.geometryContext.key;
+  }
+
+  private get geometryKey(): string {
+    return `table:${this.source}`;
+  }
+
+  get estimatedHeight(): number {
+    const model = parseMarkdownTable(this.source);
+    if (!model) return -1;
+    return cachedTableHeight(this.geometryContext, this.geometryKey) ??
+      estimatedTableHeight(model, this.geometryContext);
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -834,6 +1038,9 @@ export class RichTableWidget extends WidgetType {
       return root;
     }
     new RichTableController(root, view, this.from, this.to, model);
+    measureTableHeight(
+      view, root, this.geometryContext, this.geometryKey,
+    );
     return root;
   }
 
@@ -842,6 +1049,9 @@ export class RichTableWidget extends WidgetType {
     const model = parseMarkdownTable(this.source);
     if (!controller || !model) return false;
     controller.update(view, this.from, this.to, model);
+    measureTableHeight(
+      view, dom, this.geometryContext, this.geometryKey,
+    );
     return true;
   }
 
@@ -857,6 +1067,20 @@ function controllerFor(view: EditorView, from: number): RichTableController | nu
     ".rich-table-widget",
   )].find((candidate) => Number(candidate.dataset.hardPreviewFrom) === from);
   return root?.[tableController] ?? null;
+}
+
+export function removeRichTablePart(
+  view: EditorView,
+  from: number,
+  kind: string,
+  index: number,
+): boolean {
+  if ((kind !== "row" && kind !== "column") || !Number.isInteger(index))
+    return false;
+  const controller = controllerFor(view, from);
+  if (!controller) return false;
+  controller.remove(kind, index);
+  return true;
 }
 
 export function focusRichTableCell(
