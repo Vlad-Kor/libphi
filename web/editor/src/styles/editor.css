@@ -601,11 +601,14 @@ th { background: var(--editor-code-bg); }
   min-height: 1.65em;
   margin: 0 !important;
   padding: 0 !important;
-  caret-color: var(--editor-fg) !important;
+  caret-color: transparent !important;
   font: inherit !important;
 }
 .rich-table-cell .cm-line { padding: 0; }
-.rich-table-cell .cm-cursor { border-left-color: var(--editor-fg); }
+.rich-table-cell .cm-cursor {
+  display: block !important;
+  border-left: 2px solid var(--editor-fg) !important;
+}
 .rich-table-cell .cm-selectionBackground {
   background: var(--editor-selection) !important;
 }
@@ -631,8 +634,12 @@ th { background: var(--editor-code-bg); }
 .rich-table-column-handle-cell:hover > .rich-table-handle,
 .rich-table-row-handle-cell:hover > .rich-table-handle,
 .rich-table-handle:focus-visible,
-.rich-table-handle-dragging,
-.rich-table-is-dragging .rich-table-handle { opacity: 1; }
+.rich-table-handle-dragging { opacity: 1; }
+.rich-table-widget.rich-table-is-dragging
+  .rich-table-handle:not(.rich-table-handle-dragging) { opacity: 0; }
+.rich-table-widget.rich-table-is-dragging .rich-table-handle-dragging {
+  opacity: 1;
+}
 .rich-table-handle:hover,
 .rich-table-handle:focus-visible { background: var(--editor-button-hover); color: var(--editor-fg); }
 .rich-table-handle-dragging {
@@ -702,7 +709,11 @@ th { background: var(--editor-code-bg); }
 .rich-table-add:hover span,
 .rich-table-add:focus-visible span { opacity: 1; }
 .rich-table-add:hover { color: var(--editor-fg); }
-.rich-table-source-button { top: 28px; right: 8px; z-index: 7; }
+.image-source-button.rich-table-source-button {
+  top: 28px;
+  right: 8px;
+  z-index: 7;
+}
 .rich-table-widget:hover .rich-table-source-button,
 .rich-table-widget:focus-within .rich-table-source-button { opacity: 1; }
 pre, code { font-family: ui-monospace, monospace; background: var(--editor-code-bg); border-radius: 5px; }

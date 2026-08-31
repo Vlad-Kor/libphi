@@ -38,6 +38,13 @@ import {
   setRichTableGeometryContext,
 } from "../src/widgets/table";
 
+if (!Range.prototype.getClientRects) {
+  Object.defineProperty(Range.prototype, "getClientRects", {
+    configurable: true,
+    value: () => [],
+  });
+}
+
 const views: EditorView[] = [];
 afterEach(() => {
   for (const view of views.splice(0)) view.destroy();
@@ -1749,6 +1756,69 @@ $$`;
     expect(outerMove).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects reversed live-preview cursor mapping at a table-row boundary", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "table-preview-arrow-boundary",
+      path: "table-preview-arrow-boundary.md",
+      text: "| **test** | 2 | 34 |\n| --- | --- | --- |\n| next | row | here |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const cells = [...parent.querySelectorAll<HTMLElement>(".rich-table-cell")];
+    cells[0].focus();
+    const cellEditor = EditorView.findFromDOM(
+      cells[0].querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    cellEditor.dispatch({ selection: EditorSelection.cursor(0) });
+    vi.spyOn(cellEditor, "moveVertically")
+      .mockReturnValue(EditorSelection.cursor(1));
+    vi.spyOn(cellEditor, "coordsAtPos").mockImplementation((position) => ({
+      left: 10 + position,
+      right: 10 + position,
+      top: position === 0 ? 20 : 4,
+      bottom: position === 0 ? 40 : 24,
+    }));
+
+    expect(key(cellEditor, "ArrowDown")).toBe(true);
+    await settle();
+    expect(cells[3].contains(document.activeElement)).toBe(true);
+  });
+
+  it("keeps vertical arrows inside genuinely wrapped cell lines", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "table-wrapped-arrow",
+      path: "table-wrapped-arrow.md",
+      text: "| wrapped words |\n| --- |\n| next |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const cells = [...parent.querySelectorAll<HTMLElement>(".rich-table-cell")];
+    cells[0].focus();
+    const cellEditor = EditorView.findFromDOM(
+      cells[0].querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    cellEditor.dispatch({ selection: EditorSelection.cursor(0) });
+    vi.spyOn(cellEditor, "moveVertically")
+      .mockReturnValue(EditorSelection.cursor(1));
+    vi.spyOn(cellEditor, "coordsAtPos").mockImplementation((position) => ({
+      left: 10,
+      right: 10,
+      top: position === 0 ? 20 : 46,
+      bottom: position === 0 ? 40 : 66,
+    }));
+
+    expect(key(cellEditor, "ArrowDown")).toBe(false);
+    expect(cells[0].contains(document.activeElement)).toBe(true);
+  });
+
   it("inserts a selected table size without destroying surrounding text", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
@@ -2024,7 +2094,95 @@ $$`;
     }));
 
     expect(handles[0].style.transform).toBe("translateX(95px)");
+    expect(parent.querySelectorAll(".rich-table-handle-dragging"))
+      .toHaveLength(1);
     document.dispatchEvent(new MouseEvent("pointercancel", { bubbles: true }));
+  });
+
+  it("clears a row handle dragged to the header edge", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "table-drag-top-cleanup",
+      path: "table-drag-top-cleanup.md",
+      text: "| Header |\n| --- |\n| value |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const root = parent.querySelector<HTMLElement>(".rich-table-widget")!;
+    const handles = root.querySelectorAll<HTMLElement>(".rich-table-row-handle");
+    const rows = root.querySelectorAll<HTMLElement>(
+      ".rich-table-grid tr[data-row]",
+    );
+    const bounds = (top: number, bottom: number) => ({
+      x: 0,
+      y: top,
+      left: 0,
+      right: 200,
+      top,
+      bottom,
+      width: 200,
+      height: bottom - top,
+      toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(handles[0], "getBoundingClientRect")
+      .mockReturnValue(bounds(20, 60));
+    vi.spyOn(handles[1], "getBoundingClientRect")
+      .mockReturnValue(bounds(60, 100));
+    vi.spyOn(rows[0], "getBoundingClientRect")
+      .mockReturnValue(bounds(20, 60));
+    vi.spyOn(rows[1], "getBoundingClientRect")
+      .mockReturnValue(bounds(60, 100));
+
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.assign(handles[1], {
+      setPointerCapture,
+      hasPointerCapture: () => true,
+      releasePointerCapture,
+    });
+    const pointerDown = new MouseEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      clientX: 10,
+      clientY: 80,
+    });
+    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
+    handles[1].dispatchEvent(pointerDown);
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    document.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 10,
+      clientY: 25,
+    }));
+    expect(root.classList.contains("rich-table-is-dragging")).toBe(true);
+    expect(handles[1].style.transform).toBe("translateY(-40px)");
+
+    document.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    await settle();
+    expect(root.classList.contains("rich-table-is-dragging")).toBe(false);
+    expect(root.querySelector(".rich-table-drag-selection")).toBeNull();
+    expect(root.querySelector(".rich-table-drop-indicator")).toBeNull();
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect([...root.querySelectorAll<HTMLElement>(".rich-table-handle")]
+      .every((handle) => handle.style.transform === "")).toBe(true);
+  });
+
+  it("keeps non-active handles hidden during drag and lowers the source button", () => {
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    const tableSource = readFileSync("src/widgets/table.ts", "utf8");
+    expect(css).toMatch(
+      /rich-table-handle:not\(\.rich-table-handle-dragging\)\s*\{\s*opacity: 0;/,
+    );
+    expect(css).toMatch(
+      /\.image-source-button\.rich-table-source-button \{[\s\S]*?top: 28px;/,
+    );
+    expect(css).toMatch(
+      /\.rich-table-cell \.cm-cursor \{[\s\S]*?border-left: 2px solid/,
+    );
+    expect(tableSource).toContain("drawSelection(),");
   });
 
   it("enables horizontal table scrolling only for actual overflow", async () => {

@@ -2,7 +2,7 @@ import { closeBrackets } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap, WidgetType } from "@codemirror/view";
+import { drawSelection, EditorView, keymap, WidgetType } from "@codemirror/view";
 import {
   handleLatexTab,
   latexSnippetsEnabled,
@@ -178,6 +178,7 @@ class RichTableController {
   private drag: DragState | null = null;
   private syncingCell = false;
   private overflowObserver: ResizeObserver | null = null;
+  private pointerDragCleanup: (() => void) | null = null;
 
   constructor(
     readonly root: ControlledTable,
@@ -198,6 +199,7 @@ class RichTableController {
   }
 
   destroy(): void {
+    this.cancelDrag();
     this.overflowObserver?.disconnect();
     this.overflowObserver = null;
     this.active?.editor.destroy();
@@ -242,6 +244,7 @@ class RichTableController {
   }
 
   private render(): void {
+    this.cancelDrag();
     this.overflowObserver?.disconnect();
     this.overflowObserver = null;
     this.discardActive();
@@ -432,6 +435,7 @@ class RichTableController {
         latexSnippetsEnabled.of(settings.executableSnippets),
         latexEnhancements(settings.executableSnippets && settings.latexConceal),
         cellLivePreview,
+        drawSelection(),
         EditorView.lineWrapping,
         EditorView.domEventHandlers({
           paste: (event, view) => {
@@ -651,7 +655,18 @@ class RichTableController {
     if (!selection.empty) return false;
     try {
       const moved = editor.moveVertically(selection, forward);
-      if (moved.head !== selection.head) return false;
+      if (moved.head !== selection.head) {
+        const current = editor.coordsAtPos(selection.head);
+        const target = editor.coordsAtPos(moved.head);
+        /* Live-preview replacements can make CodeMirror return a different
+         * source position on the same visual row, or even one whose geometry
+         * points in the opposite direction. Neither is vertical progress. */
+        const progressesOnVisualRows = current && target && (forward
+          ? target.top > current.top + 2
+          : target.top < current.top - 2);
+        if (!current || !target || progressesOnVisualRows)
+          return false;
+      }
     } catch {
       /* Empty cells and DOM-only tests have no measurable visual line. */
     }
@@ -765,9 +780,19 @@ class RichTableController {
   ): void {
     handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
+      this.cancelDrag();
       const startX = event.clientX;
       const startY = event.clientY;
+      const pointerId = event.pointerId;
       let started = false;
+      let cleaned = false;
+      if (typeof handle.setPointerCapture === "function") {
+        try {
+          handle.setPointerCapture(pointerId);
+        } catch {
+          /* WebKit may have cancelled the pointer before capture is set. */
+        }
+      }
       const move = (moveEvent: PointerEvent) => {
         if (!started && Math.hypot(
           moveEvent.clientX - startX, moveEvent.clientY - startY,
@@ -787,9 +812,22 @@ class RichTableController {
         this.setDragSlot(this.slotAtPoint(kind, moveEvent.clientX, moveEvent.clientY));
       };
       const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
         document.removeEventListener("pointermove", move);
         document.removeEventListener("pointerup", up);
         document.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("blur", cancel);
+        if (typeof handle.hasPointerCapture === "function" &&
+            handle.hasPointerCapture(pointerId)) {
+          try {
+            handle.releasePointerCapture(pointerId);
+          } catch {
+            /* Pointer capture was already released by the platform. */
+          }
+        }
+        if (this.pointerDragCleanup === cleanup)
+          this.pointerDragCleanup = null;
       };
       const up = () => {
         cleanup();
@@ -800,9 +838,11 @@ class RichTableController {
         this.drag = null;
         this.clearDragVisual();
       };
+      this.pointerDragCleanup = cleanup;
       document.addEventListener("pointermove", move);
       document.addEventListener("pointerup", up);
       document.addEventListener("pointercancel", cancel);
+      window.addEventListener("blur", cancel);
     });
   }
 
@@ -965,7 +1005,18 @@ class RichTableController {
     this.root.querySelector(".rich-table-drag-selection")?.remove();
   }
 
+  private cancelDrag(): void {
+    const cleanup = this.pointerDragCleanup;
+    this.pointerDragCleanup = null;
+    cleanup?.();
+    this.drag = null;
+    this.clearDragVisual();
+  }
+
   private finishDrag(): void {
+    const cleanup = this.pointerDragCleanup;
+    this.pointerDragCleanup = null;
+    cleanup?.();
     const drag = this.drag;
     this.drag = null;
     this.clearDragVisual();
@@ -986,6 +1037,9 @@ class RichTableController {
       next.alignments.splice(destination, 0, alignment);
     }
     this.commitModel(next, `input.table-reorder-${drag.kind}`);
+    /* A synchronous widget update may reuse the same handle DOM. Clear once
+     * more after that update so no translated handle can remain at an edge. */
+    queueMicrotask(() => this.clearDragVisual());
   }
 
   remove(kind: HandleKind, index: number): void {
