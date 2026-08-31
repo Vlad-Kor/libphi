@@ -382,6 +382,8 @@ class RichTableController {
       editor.className = "rich-table-cell";
       editor.dataset.row = String(row);
       editor.dataset.column = String(column);
+      editor.dataset.rowRemovable = String(this.model.cells.length > 1);
+      editor.dataset.columnRemovable = String(this.model.alignments.length > 1);
       editor.tabIndex = -1;
       editor.setAttribute("role", "textbox");
       editor.setAttribute("aria-label", `Row ${row + 1}, column ${column + 1}`);

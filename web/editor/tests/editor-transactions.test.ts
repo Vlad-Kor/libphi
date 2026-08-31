@@ -2012,6 +2012,42 @@ $$`;
     expect(parsed().cells).toHaveLength(1);
     expect(undo(editor.view)).toBe(true);
 
+    let cellContext: { type: string; payload: Record<string, unknown> } | null = null;
+    window.addEventListener("phi-native-message", (event) => {
+      const message = (event as CustomEvent).detail as {
+        type: string;
+        payload: Record<string, unknown>;
+      };
+      if (message.type === "table/context") cellContext = message;
+    }, { once: true });
+    const cell = parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="1"][data-column="1"]',
+    )!;
+    cell.focus();
+    cell.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true,
+    }));
+    expect(cellContext).toMatchObject({
+      type: "table/context",
+      payload: {
+        inside: true,
+        from: 0,
+        kind: "",
+        index: -1,
+        row: 1,
+        column: 1,
+        rowRemovable: true,
+        columnRemovable: true,
+      },
+    });
+    editor.receive({
+      protocol: 1,
+      type: "table/remove",
+      payload: { from: 0, kind: "column", index: 1 },
+    });
+    expect(parsed().alignments).toHaveLength(1);
+    expect(undo(editor.view)).toBe(true);
+
     const columns = parent.querySelectorAll<HTMLElement>(
       ".rich-table-column-handle",
     );

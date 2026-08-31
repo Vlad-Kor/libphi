@@ -127,6 +127,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       const target = event.target instanceof Element ? event.target : null;
       const table = target?.closest<HTMLElement>(".rich-table-widget") ?? null;
       const handle = target?.closest<HTMLElement>(".rich-table-handle") ?? null;
+      const cell = target?.closest<HTMLElement>(".rich-table-cell") ?? null;
       this.tableContextInside = Boolean(table);
       sendNative("table/context", {
         inside: Boolean(table),
@@ -134,6 +135,10 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         kind: handle?.dataset.tableHandle ?? "",
         index: Number(handle?.dataset.index ?? -1),
         removable: handle?.dataset.removable === "true",
+        row: Number(cell?.dataset.row ?? -1),
+        column: Number(cell?.dataset.column ?? -1),
+        rowRemovable: cell?.dataset.rowRemovable === "true",
+        columnRemovable: cell?.dataset.columnRemovable === "true",
       });
     }, true);
     this.view.scrollDOM.addEventListener("scroll", () => {
