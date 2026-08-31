@@ -38,6 +38,7 @@ import {
   type MarkdownAnalysis,
 } from "./analysis";
 import { measurePerformance } from "../performance";
+import { exportPreviewMode } from "../settings";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
 const emphasis = Decoration.mark({ class: "cm-live-emphasis" });
@@ -54,7 +55,7 @@ const htmlPunctuation = Decoration.mark({ class: "cm-html-punctuation" });
 export const refreshLivePreview = StateEffect.define<null>();
 
 function active(node: MarkdownNode, state: EditorState): boolean {
-  return previewNodeIsActive(node, state);
+  return !exportPreviewMode() && previewNodeIsActive(node, state);
 }
 
 function imageIsInsideListItem(state: EditorState, node: MarkdownNode): boolean {

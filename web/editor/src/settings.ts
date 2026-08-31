@@ -2,6 +2,7 @@ import type { EditorSettings, EditorTheme } from "./types";
 
 export const defaultSettings: Required<EditorSettings> = {
   sourceMode: false,
+  exportMode: false,
   lineWrapping: true,
   latexConceal: false,
   readableLineWidth: true,
@@ -22,6 +23,10 @@ export function updateRuntimeSettings(settings: Required<EditorSettings>): void 
 
 export function remoteImagesAllowed(): boolean {
   return runtimeSettings.allowRemoteImages;
+}
+
+export function exportPreviewMode(): boolean {
+  return runtimeSettings.exportMode;
 }
 
 export function currentEditorSettings(): Readonly<Required<EditorSettings>> {

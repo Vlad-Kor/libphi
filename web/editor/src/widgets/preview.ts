@@ -872,7 +872,11 @@ export class LinkWidget extends WidgetType {
     body.textContent = "Loading embed…";
     container.append(title, source, body);
     requestNative<{ text?: string; path?: string }>(
-      "embed/read", { target: this.target, depth: 1 },
+      "embed/read", {
+        target: this.target,
+        sourcePath: this.geometryContext.documentPath,
+        depth: 1,
+      },
     )
       .then((result) => {
         body.classList.remove("dimmed");

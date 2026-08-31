@@ -63,6 +63,7 @@ export interface EditorTheme {
 
 export interface EditorSettings {
   sourceMode?: boolean;
+  exportMode?: boolean;
   lineWrapping?: boolean;
   latexConceal?: boolean;
   readableLineWidth?: boolean;

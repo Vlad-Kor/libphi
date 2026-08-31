@@ -826,7 +826,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
           this.settings.executableSnippets && this.settings.latexConceal,
         ),
       ));
-    if (previous.allowRemoteImages !== this.settings.allowRemoteImages)
+    if (previous.allowRemoteImages !== this.settings.allowRemoteImages ||
+        previous.exportMode !== this.settings.exportMode)
       effects.push(refreshLivePreview.of(null));
     if (previous.readableLineWidth !== this.settings.readableLineWidth) {
       this.updatePreviewGeometryContext();
@@ -837,6 +838,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       setCustomSnippets(this.settings.snippets, this.settings.snippetVariables);
     if (effects.length) this.view.dispatch({ effects });
     document.body.classList.toggle("source-mode", this.settings.sourceMode);
+    document.body.classList.toggle("export-preview-mode", this.settings.exportMode);
   }
 
   updateTheme(theme: EditorTheme): void {

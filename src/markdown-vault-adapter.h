@@ -39,6 +39,9 @@ gchar *pdfv_markdown_vault_adapter_relative_path(
 gchar *pdfv_markdown_vault_adapter_read_text(
     PdfvMarkdownVaultAdapter *self, GFile *file, gchar **etag,
     GError **error);
+gchar *pdfv_markdown_vault_adapter_read_embed(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gchar **resolved_path, GError **error);
 GBytes *pdfv_markdown_vault_adapter_read_bytes(
     PdfvMarkdownVaultAdapter *self, const gchar *relative_path,
     gchar **content_type, GError **error);

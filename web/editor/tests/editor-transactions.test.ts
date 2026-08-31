@@ -520,6 +520,29 @@ describe("CodeMirror document transactions", () => {
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
+  it("keeps export preview syntax concealed when the selection touches it", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.updateSettings({ exportMode: true });
+    const text = "# Heading\n\n- bullet";
+    editor.openDocument({
+      documentId: "export-preview",
+      path: "export-preview.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    editor.view.dispatch({ selection: { anchor: 1 } });
+    expect(parent.querySelector(".cm-live-heading-1")?.textContent)
+      .toBe("Heading");
+    editor.view.dispatch({ selection: { anchor: text.indexOf("-") } });
+    expect(parent.querySelectorAll(".list-bullet")).toHaveLength(1);
+    expect(document.body.classList.contains("export-preview-mode")).toBe(true);
+  });
+
   it("splits source lines around embedded display math", () => {
     (window as unknown as { MathJax?: unknown }).MathJax = {
       startup: { promise: Promise.resolve() },

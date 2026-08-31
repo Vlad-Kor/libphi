@@ -30,6 +30,7 @@ pdfv_sources = [
 	'workspace-file-ops.c',
 	'pdfv-settings.c',
 	'markdown-editor.c',
+	'markdown-export.c',
 	'markdown-editor-bridge.c',
 	'markdown-resource-scheme.c',
 	'markdown-vault-adapter.c',

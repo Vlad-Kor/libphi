@@ -69,6 +69,8 @@ GFile *pdfv_markdown_editor_get_file(PdfvMarkdownEditor *self);
 GFile *pdfv_markdown_editor_get_vault_root(PdfvMarkdownEditor *self);
 const gchar *pdfv_markdown_editor_get_relative_path(
     PdfvMarkdownEditor *self);
+gchar *pdfv_markdown_editor_dup_text(PdfvMarkdownEditor *self);
+gchar *pdfv_markdown_editor_dup_preamble(PdfvMarkdownEditor *self);
 void pdfv_markdown_editor_set_initial_scroll_state(
     PdfvMarkdownEditor *self, gint64 anchor, gdouble offset, gdouble top);
 void pdfv_markdown_editor_clear_initial_scroll_state(

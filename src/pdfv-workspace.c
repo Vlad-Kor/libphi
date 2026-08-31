@@ -417,7 +417,9 @@ static gboolean filename_is_pdf(const gchar *name) {
 
 static gboolean filename_is_markdown(const gchar *name) {
   const gchar *dot = strrchr(name, '.');
-  return dot && g_ascii_strcasecmp(dot, ".md") == 0;
+  return dot && (g_ascii_strcasecmp(dot, ".md") == 0 ||
+                 g_ascii_strcasecmp(dot, ".markdown") == 0 ||
+                 g_ascii_strcasecmp(dot, ".txt") == 0);
 }
 
 static gint scan_item_compare(gconstpointer a, gconstpointer b) {

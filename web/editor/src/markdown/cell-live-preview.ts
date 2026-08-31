@@ -8,6 +8,7 @@ import {
 import { renderMath } from "../math/mathjax";
 import { markdownAnalysis, markdownAnalysisField } from "./analysis";
 import { selectionTouches, type MarkdownNode } from "./parser";
+import { exportPreviewMode } from "../settings";
 
 const hidden = Decoration.replace({});
 const emphasis = Decoration.mark({ class: "cm-live-emphasis" });
@@ -35,7 +36,7 @@ class CellMathWidget extends WidgetType {
 }
 
 function active(node: MarkdownNode, state: EditorState): boolean {
-  return state.selection.ranges.some((selection) =>
+  return !exportPreviewMode() && state.selection.ranges.some((selection) =>
     selectionTouches(node, selection));
 }
 

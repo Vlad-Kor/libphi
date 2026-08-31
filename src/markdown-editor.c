@@ -500,124 +500,15 @@ static void handle_link(PdfvMarkdownEditor *self, const gchar *type,
   g_clear_error(&error);
 }
 
-static guint markdown_heading_level(const gchar *line, gchar **title) {
-  guint level = 0;
-  while (level < 6 && line[level] == '#')
-    level++;
-  if (level == 0 || (line[level] != ' ' && line[level] != '\t'))
-    return 0;
-  gchar *value = g_strdup(line + level);
-  g_strstrip(value);
-  gsize length = strlen(value);
-  while (length && value[length - 1] == '#')
-    value[--length] = '\0';
-  g_strchomp(value);
-  if (title)
-    *title = value;
-  else
-    g_free(value);
-  return level;
-}
-
-static gchar *join_markdown_lines(gchar **lines, guint start, guint end) {
-  GString *result = g_string_new(NULL);
-  for (guint i = start; i < end; i++) {
-    g_string_append(result, lines[i]);
-    if (i + 1 < end)
-      g_string_append_c(result, '\n');
-  }
-  return g_string_free(result, FALSE);
-}
-
-static gboolean markdown_line_blank(const gchar *line) {
-  for (const guchar *at = (const guchar *)line; *at; at++)
-    if (!g_ascii_isspace(*at))
-      return FALSE;
-  return TRUE;
-}
-
-static gchar *extract_embed_fragment(const gchar *text, const gchar *target,
-                                     GError **error) {
-  const gchar *hash = target ? strchr(target, '#') : NULL;
-  if (!hash || !hash[1])
-    return g_strdup(text);
-  gchar *fragment = g_uri_unescape_string(hash + 1, NULL);
-  if (!fragment) {
-    g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
-                "Invalid embed fragment");
-    return NULL;
-  }
-  gchar **lines = g_strsplit(text, "\n", -1);
-  guint count = g_strv_length(lines);
-  gchar *result = NULL;
-
-  if (fragment[0] == '^') {
-    const gchar *id = fragment + 1;
-    for (guint i = 0; i < count; i++) {
-      gchar *trimmed = g_strdup(lines[i]);
-      g_strstrip(trimmed);
-      gchar *marker = g_strconcat("^", id, NULL);
-      gboolean match = g_str_has_suffix(trimmed, marker);
-      gsize prefix_length = match ? strlen(trimmed) - strlen(marker) : 0;
-      match = match &&
-              (prefix_length == 0 ||
-               g_ascii_isspace((guchar)trimmed[prefix_length - 1]));
-      g_free(marker);
-      g_free(trimmed);
-      if (!match)
-        continue;
-      guint start = i;
-      guint end = i + 1;
-      while (start > 0 && !markdown_line_blank(lines[start - 1]))
-        start--;
-      if (start == i && i > 1) {
-        guint previous = i - 1;
-        while (previous > 0 && markdown_line_blank(lines[previous]))
-          previous--;
-        start = previous;
-        while (start > 0 && !markdown_line_blank(lines[start - 1]))
-          start--;
-      }
-      while (end < count && !markdown_line_blank(lines[end]))
-        end++;
-      result = join_markdown_lines(lines, start, end);
-      break;
-    }
-  } else {
-    gchar *wanted = g_utf8_casefold(fragment, -1);
-    for (guint i = 0; i < count; i++) {
-      gchar *title = NULL;
-      guint level = markdown_heading_level(lines[i], &title);
-      gchar *folded = title ? g_utf8_casefold(title, -1) : NULL;
-      gboolean match = level && g_strcmp0(folded, wanted) == 0;
-      g_free(folded);
-      g_free(title);
-      if (!match)
-        continue;
-      guint end = i + 1;
-      for (; end < count; end++) {
-        guint next_level = markdown_heading_level(lines[end], NULL);
-        if (next_level && next_level <= level)
-          break;
-      }
-      result = join_markdown_lines(lines, i, end);
-      break;
-    }
-    g_free(wanted);
-  }
-  g_strfreev(lines);
-  if (!result)
-    g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                "Embed section '%s' was not found", fragment);
-  g_free(fragment);
-  return result;
-}
-
 static void handle_embed_read(PdfvMarkdownEditor *self, const gchar *id,
                               JsonObject *payload) {
   const gchar *target = payload ? json_object_get_string_member_with_default(
                                       payload, "target", "")
                                : "";
+  const gchar *source_path = payload
+      ? json_object_get_string_member_with_default(
+            payload, "sourcePath", self->relative_path)
+      : self->relative_path;
   gint64 depth = payload ? json_object_get_int_member_with_default(
                                payload, "depth", 0)
                          : 0;
@@ -626,30 +517,21 @@ static void handle_embed_read(PdfvMarkdownEditor *self, const gchar *id,
     return;
   }
   GError *error = NULL;
-  GFile *file = resolve_target_note(self, target, &error);
-  gchar *text = file ? pdfv_markdown_vault_adapter_read_text(
-                           self->vault, file, NULL, &error)
-                     : NULL;
-  if (text) {
-    gchar *fragment = extract_embed_fragment(text, target, &error);
-    g_free(text);
-    text = fragment;
-  }
+  gchar *relative = NULL;
+  gchar *text = pdfv_markdown_vault_adapter_read_embed(
+      self->vault, source_path, target, &relative, &error);
   if (!text) {
     send_response_error(self, id, error);
   } else {
     JsonObject *value = json_object_new_owned();
     json_object_set_string_member(value, "text", text);
-    gchar *relative = pdfv_markdown_vault_adapter_relative_path(self->vault,
-                                                                file);
     json_object_set_string_member(value, "path", relative);
     JsonNode *node = json_node_new(JSON_NODE_OBJECT);
     json_node_take_object(node, value);
     send_response_node(self, id, node, NULL);
-    g_free(relative);
   }
   g_free(text);
-  g_clear_object(&file);
+  g_free(relative);
   g_clear_error(&error);
 }
 
@@ -2107,6 +1989,16 @@ const gchar *pdfv_markdown_editor_get_relative_path(
     PdfvMarkdownEditor *self) {
   g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
   return self->relative_path;
+}
+
+gchar *pdfv_markdown_editor_dup_text(PdfvMarkdownEditor *self) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
+  return g_strdup(self->current_text ? self->current_text : "");
+}
+
+gchar *pdfv_markdown_editor_dup_preamble(PdfvMarkdownEditor *self) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_EDITOR(self), NULL);
+  return read_preamble(self);
 }
 
 GFile *pdfv_markdown_editor_resolve_new_note(PdfvMarkdownEditor *self,

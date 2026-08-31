@@ -199,6 +199,26 @@ static void test_note_metadata(VaultFixture *fixture, gconstpointer data) {
   g_free(relative);
   g_object_unref(resolved);
 
+  gchar *embed_path = NULL;
+  gchar *embed = pdfv_markdown_vault_adapter_read_embed(
+      fixture->vault, "Overview.md", "Nested/Other#Other heading",
+      &embed_path, &error);
+  g_assert_no_error(error);
+  g_assert_cmpstr(embed_path, ==, "Nested/Other.md");
+  g_assert_nonnull(g_strstr_len(embed, -1, "# Other heading"));
+  g_assert_nonnull(g_strstr_len(embed, -1, "A block. ^other-block"));
+  g_free(embed);
+  g_free(embed_path);
+
+  embed = pdfv_markdown_vault_adapter_read_embed(
+      fixture->vault, "Nested/Other.md", "#^other-block", &embed_path,
+      &error);
+  g_assert_no_error(error);
+  g_assert_cmpstr(embed_path, ==, "Nested/Other.md");
+  g_assert_nonnull(g_strstr_len(embed, -1, "A block. ^other-block"));
+  g_free(embed);
+  g_free(embed_path);
+
   GFile *new_note = pdfv_markdown_vault_adapter_resolve_new_note(
       fixture->vault, "Nested/Other.md", "New lecture#Section", &error);
   g_assert_no_error(error);

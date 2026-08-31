@@ -19,6 +19,7 @@
 #include "workspace-history.h"
 #include "workspace-file-ops.h"
 #include "markdown-editor.h"
+#include "markdown-export.h"
 #include "markdown-resource-scheme.h"
 #include <phi/phidocument.h>
 #include <phi/phipage.h>
@@ -624,7 +625,7 @@ static void update_sidebar_button(PdfvWindow *self) {
 }
 
 static void update_markdown_actions(PdfvWindow *self) {
-  const gchar *names[] = {"save", "toggle-markdown-source"};
+  const gchar *names[] = {"save", "toggle-markdown-source", "export-pdf"};
   for (guint i = 0; i < G_N_ELEMENTS(names); i++) {
     GAction *action =
         g_action_map_lookup_action(G_ACTION_MAP(self), names[i]);
@@ -632,6 +633,16 @@ static void update_markdown_actions(PdfvWindow *self) {
       g_simple_action_set_enabled(G_SIMPLE_ACTION(action),
                                   self->current_editor != NULL);
   }
+  GAction *combined = g_action_map_lookup_action(
+      G_ACTION_MAP(self), "export-notes-pdf");
+  GFile *file = self->current_editor
+      ? pdfv_markdown_editor_get_file(self->current_editor) : NULL;
+  GFile *root = self->workspace
+      ? pdfv_workspace_get_folder(self->workspace) : NULL;
+  if (combined)
+    g_simple_action_set_enabled(
+        G_SIMPLE_ACTION(combined),
+        file && root && pdfv_workspace_file_is_within(root, file));
   rebuild_main_menu(self);
 }
 
@@ -693,6 +704,16 @@ static void rebuild_main_menu(PdfvWindow *self) {
   if (has_pdf)
     g_menu_append(self->file_menu_section, "Document Properties…",
                   "win.document-properties");
+  if (self->current_editor) {
+    g_menu_append(self->file_menu_section, "Export to PDF…",
+                  "win.export-pdf");
+    GFile *file = pdfv_markdown_editor_get_file(self->current_editor);
+    GFile *root = self->workspace
+        ? pdfv_workspace_get_folder(self->workspace) : NULL;
+    if (file && root && pdfv_workspace_file_is_within(root, file))
+      g_menu_append(self->file_menu_section, "Export Notes as One PDF…",
+                    "win.export-notes-pdf");
+  }
 
   g_menu_remove_all(self->zoom_menu_section);
   if (has_pdf) {
@@ -1199,7 +1220,10 @@ static void tab_set_document_icon(AdwTabPage *page, gboolean markdown) {
 static gboolean file_is_markdown(GFile *file) {
   gchar *basename = g_file_get_basename(file);
   const gchar *dot = strrchr(basename, '.');
-  gboolean markdown = dot && g_ascii_strcasecmp(dot, ".md") == 0;
+  gboolean markdown = dot &&
+      (g_ascii_strcasecmp(dot, ".md") == 0 ||
+       g_ascii_strcasecmp(dot, ".markdown") == 0 ||
+       g_ascii_strcasecmp(dot, ".txt") == 0);
   g_free(basename);
   return markdown;
 }
@@ -3441,6 +3465,8 @@ static void action_open(GSimpleAction *action, GVariant *parameter,
   gtk_file_filter_add_mime_type(filter, "text/markdown");
   gtk_file_filter_add_pattern(filter, "*.pdf");
   gtk_file_filter_add_pattern(filter, "*.md");
+  gtk_file_filter_add_pattern(filter, "*.markdown");
+  gtk_file_filter_add_pattern(filter, "*.txt");
 
   GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
   g_list_store_append(filters, filter);
@@ -3608,6 +3634,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   if (forget)
     pdfv_workspace_history_clear_current();
   apply_markdown_preferences(self);
+  update_markdown_actions(self);
 
   gboolean has_document =
       self->current_view &&
@@ -4553,6 +4580,7 @@ static void open_workspace_folder_internal(PdfvWindow *self, GFile *folder,
   self->workspace = pdfv_workspace_new(folder);
   g_signal_connect(self->workspace, "index-updated",
                    G_CALLBACK(on_workspace_index_updated), self);
+  update_markdown_actions(self);
   GAction *search_action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
   GAction *close_action =
@@ -5136,6 +5164,78 @@ static void action_save(GSimpleAction *action, GVariant *parameter,
     pdfv_markdown_editor_save_async(self->current_editor, NULL,
                                     on_window_markdown_saved,
                                     g_object_ref(self));
+}
+
+typedef struct {
+  PdfvWindow *window;
+  PdfvMarkdownEditor *editor;
+  PdfvWorkspace *workspace;
+  gboolean multiple;
+} MarkdownExportRequest;
+
+static void markdown_export_request_free(MarkdownExportRequest *request) {
+  g_clear_object(&request->window);
+  g_clear_object(&request->editor);
+  g_clear_object(&request->workspace);
+  g_free(request);
+}
+
+static void on_markdown_export_flushed(GObject *source,
+                                       GAsyncResult *result,
+                                       gpointer user_data) {
+  MarkdownExportRequest *request = user_data;
+  GError *error = NULL;
+  if (!pdfv_markdown_editor_flush_finish(
+          PDFV_MARKDOWN_EDITOR(source), result, &error)) {
+    on_markdown_error(request->editor,
+                      error ? error->message
+                            : "Could not prepare the Markdown preview",
+                      request->window);
+  } else {
+    pdfv_markdown_export_present(
+        GTK_WIDGET(request->window), request->editor, request->workspace,
+        request->multiple,
+        pdfv_settings_get_allow_remote_images(request->window->settings),
+        pdfv_settings_get_markdown_font_scale(request->window->settings) *
+            16.0);
+  }
+  g_clear_error(&error);
+  markdown_export_request_free(request);
+}
+
+static void begin_markdown_export(PdfvWindow *self, gboolean multiple) {
+  if (!self->current_editor ||
+      !pdfv_markdown_editor_get_ready(self->current_editor))
+    return;
+  GFile *file = pdfv_markdown_editor_get_file(self->current_editor);
+  GFile *root = self->workspace
+      ? pdfv_workspace_get_folder(self->workspace) : NULL;
+  if (multiple && (!file || !root ||
+                   !pdfv_workspace_file_is_within(root, file)))
+    return;
+
+  MarkdownExportRequest *request = g_new0(MarkdownExportRequest, 1);
+  request->window = g_object_ref(self);
+  request->editor = g_object_ref(self->current_editor);
+  request->workspace = multiple ? g_object_ref(self->workspace) : NULL;
+  request->multiple = multiple;
+  pdfv_markdown_editor_flush_async(
+      request->editor, NULL, on_markdown_export_flushed, request);
+}
+
+static void action_export_pdf(GSimpleAction *action, GVariant *parameter,
+                              gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  begin_markdown_export(PDFV_WINDOW(user_data), FALSE);
+}
+
+static void action_export_notes_pdf(GSimpleAction *action,
+                                    GVariant *parameter,
+                                    gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  begin_markdown_export(PDFV_WINDOW(user_data), TRUE);
 }
 
 static void action_toggle_markdown_source(GSimpleAction *action,
@@ -6443,6 +6543,8 @@ static GActionEntry win_actions[] = {
     {.name = "close-tab", .activate = action_close_tab},
     {.name = "reopen-closed-tab", .activate = action_reopen_closed_tab},
     {.name = "save", .activate = action_save},
+    {.name = "export-pdf", .activate = action_export_pdf},
+    {.name = "export-notes-pdf", .activate = action_export_notes_pdf},
     {.name = "toggle-markdown-source",
      .activate = action_toggle_markdown_source},
     {.name = "allow-remote-images", .state = "false",

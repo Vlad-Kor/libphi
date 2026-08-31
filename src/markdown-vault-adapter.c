@@ -152,7 +152,9 @@ gchar *pdfv_markdown_vault_adapter_relative_path(
 
 static gboolean filename_is_markdown(const gchar *name) {
   const gchar *dot = strrchr(name, '.');
-  return dot && g_ascii_strcasecmp(dot, ".md") == 0;
+  return dot && (g_ascii_strcasecmp(dot, ".md") == 0 ||
+                 g_ascii_strcasecmp(dot, ".markdown") == 0 ||
+                 g_ascii_strcasecmp(dot, ".txt") == 0);
 }
 
 static gboolean fuzzy_match(const gchar *value, const gchar *query) {
@@ -460,6 +462,144 @@ gchar *pdfv_markdown_vault_adapter_read_text(
     return NULL;
   }
   return contents;
+}
+
+static guint embed_heading_level(const gchar *line, gchar **title) {
+  guint level = 0;
+  while (level < 6 && line[level] == '#')
+    level++;
+  if (level == 0 || (line[level] != ' ' && line[level] != '\t'))
+    return 0;
+  gchar *value = g_strdup(line + level);
+  g_strstrip(value);
+  gsize length = strlen(value);
+  while (length && value[length - 1] == '#')
+    value[--length] = '\0';
+  g_strchomp(value);
+  if (title)
+    *title = value;
+  else
+    g_free(value);
+  return level;
+}
+
+static gboolean embed_line_blank(const gchar *line) {
+  for (const guchar *at = (const guchar *)line; *at; at++)
+    if (!g_ascii_isspace(*at))
+      return FALSE;
+  return TRUE;
+}
+
+static gchar *join_embed_lines(gchar **lines, guint start, guint end) {
+  GString *result = g_string_new(NULL);
+  for (guint i = start; i < end; i++) {
+    g_string_append(result, lines[i]);
+    if (i + 1 < end)
+      g_string_append_c(result, '\n');
+  }
+  return g_string_free(result, FALSE);
+}
+
+static gchar *extract_embed_fragment(const gchar *text, const gchar *target,
+                                     GError **error) {
+  const gchar *hash = target ? strchr(target, '#') : NULL;
+  if (!hash || !hash[1])
+    return g_strdup(text);
+  gchar *fragment = g_uri_unescape_string(hash + 1, NULL);
+  if (!fragment) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                        "Invalid embed fragment");
+    return NULL;
+  }
+  gchar **lines = g_strsplit(text, "\n", -1);
+  guint count = g_strv_length(lines);
+  gchar *result = NULL;
+
+  if (fragment[0] == '^') {
+    const gchar *id = fragment + 1;
+    for (guint i = 0; i < count; i++) {
+      gchar *trimmed = g_strdup(lines[i]);
+      g_strstrip(trimmed);
+      gchar *marker = g_strconcat("^", id, NULL);
+      gboolean match = g_str_has_suffix(trimmed, marker);
+      gsize prefix_length = match ? strlen(trimmed) - strlen(marker) : 0;
+      match = match && (prefix_length == 0 ||
+                        g_ascii_isspace(trimmed[prefix_length - 1]));
+      g_free(marker);
+      g_free(trimmed);
+      if (!match)
+        continue;
+      guint start = i;
+      guint end = i + 1;
+      while (start > 0 && !embed_line_blank(lines[start - 1]))
+        start--;
+      if (start == i && i > 1) {
+        guint previous = i - 1;
+        while (previous > 0 && embed_line_blank(lines[previous]))
+          previous--;
+        start = previous;
+        while (start > 0 && !embed_line_blank(lines[start - 1]))
+          start--;
+      }
+      while (end < count && !embed_line_blank(lines[end]))
+        end++;
+      result = join_embed_lines(lines, start, end);
+      break;
+    }
+  } else {
+    gchar *wanted = g_utf8_casefold(fragment, -1);
+    for (guint i = 0; i < count; i++) {
+      gchar *title = NULL;
+      guint level = embed_heading_level(lines[i], &title);
+      gchar *folded = title ? g_utf8_casefold(title, -1) : NULL;
+      gboolean match = level && g_strcmp0(folded, wanted) == 0;
+      g_free(folded);
+      g_free(title);
+      if (!match)
+        continue;
+      guint end = i + 1;
+      for (; end < count; end++) {
+        guint next_level = embed_heading_level(lines[end], NULL);
+        if (next_level && next_level <= level)
+          break;
+      }
+      result = join_embed_lines(lines, i, end);
+      break;
+    }
+    g_free(wanted);
+  }
+  g_strfreev(lines);
+  if (!result)
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                "Embed section '%s' was not found", fragment);
+  g_free(fragment);
+  return result;
+}
+
+gchar *pdfv_markdown_vault_adapter_read_embed(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gchar **resolved_path, GError **error) {
+  g_return_val_if_fail(PDFV_IS_MARKDOWN_VAULT_ADAPTER(self), NULL);
+  if (resolved_path)
+    *resolved_path = NULL;
+
+  GFile *file = NULL;
+  if (!target || !*target || g_str_has_prefix(target, "#"))
+    file = pdfv_markdown_vault_adapter_resolve(self, source_path, error);
+  else
+    file = pdfv_markdown_vault_adapter_resolve_note(
+        self, source_path, target, error);
+  if (!file)
+    return NULL;
+
+  gchar *text = pdfv_markdown_vault_adapter_read_text(
+      self, file, NULL, error);
+  gchar *fragment = text ? extract_embed_fragment(text, target, error) : NULL;
+  if (fragment && resolved_path)
+    *resolved_path = pdfv_markdown_vault_adapter_relative_path(self, file);
+  g_free(text);
+  g_object_unref(file);
+  return fragment;
 }
 
 GBytes *pdfv_markdown_vault_adapter_read_bytes(

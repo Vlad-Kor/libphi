@@ -10,6 +10,9 @@ await rm(resolve(outdir, "mathjax-font"), { recursive: true, force: true });
 await rm(resolve(outdir, "mathjax-dsfont-font-extension"), { recursive: true, force: true });
 await rm(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true, force: true });
 await rm(resolve(outdir, "chunks"), { recursive: true, force: true });
+await rm(resolve(outdir, "export.js"), { force: true });
+await rm(resolve(outdir, "export.html"), { force: true });
+await rm(resolve(outdir, "export.css"), { force: true });
 await mkdir(resolve(outdir, "mathjax"), { recursive: true });
 await mkdir(resolve(outdir, "mathjax-dsfont-font-extension"), { recursive: true });
 await mkdir(resolve(outdir, "mathjax-mhchem-font-extension"), { recursive: true });
@@ -22,6 +25,20 @@ const editorBuild = await build({
   format: "iife",
   target: ["safari17"],
   outfile: resolve(outdir, "editor.js"),
+  minify: true,
+  sourcemap: false,
+  legalComments: "none",
+  banner: { js: legalBanner },
+  metafile: true,
+  loader: { ".txt": "text" },
+});
+
+const exportBuild = await build({
+  entryPoints: ["src/export-preview.ts"],
+  bundle: true,
+  format: "iife",
+  target: ["safari17"],
+  outfile: resolve(outdir, "export-preview.js"),
   minify: true,
   sourcemap: false,
   legalComments: "none",
@@ -44,7 +61,9 @@ const mermaidBuild = await build({
 });
 
 await copyFile("src/index.html", resolve(outdir, "index.html"));
+await copyFile("src/export-preview.html", resolve(outdir, "export-preview.html"));
 await copyFile("src/styles/editor.css", resolve(outdir, "editor.css"));
+await copyFile("src/styles/export-preview.css", resolve(outdir, "export-preview.css"));
 await copyFile("src/math/mathjax-config.js", resolve(outdir, "mathjax-config.js"));
 await copyFile("src/latex-suite/default-snippets.txt", resolve(outdir, "default-snippets.txt"));
 await copyFile(
@@ -74,7 +93,7 @@ await copyFile(
 );
 
 await generateThirdPartyLicenses({
-  metafiles: [editorBuild.metafile, mermaidBuild.metafile],
+  metafiles: [editorBuild.metafile, exportBuild.metafile, mermaidBuild.metafile],
   additionalPackageRoots: [
     // MathJax publishes some files as upstream-built bundles. Keep the exact
     // source package and its bundled runtime components in the inventory too.

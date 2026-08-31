@@ -1,0 +1,175 @@
+:root {
+  --pdf-font-size: 16px;
+  color-scheme: light;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: #d8d8d8;
+}
+
+body.export-preview-mode {
+  color: #202020;
+  caret-color: transparent;
+  user-select: none;
+}
+
+#export-preview {
+  box-sizing: border-box;
+  padding: 28px;
+}
+
+.pdf-document {
+  box-sizing: border-box;
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 18mm 17mm 20mm;
+  overflow: visible;
+  background: #fff;
+  color: #202020;
+  box-shadow: 0 2px 16px rgb(0 0 0 / 24%);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.pdf-cover {
+  min-height: 245mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+  break-after: page;
+}
+
+.pdf-cover h1 {
+  margin: 0;
+  font-size: 2.6em;
+  line-height: 1.12;
+}
+
+.pdf-cover p {
+  margin: 1.2em 0 0;
+  color: #606060;
+  font-size: 1.15em;
+}
+
+.pdf-note {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.pdf-note + .pdf-note {
+  break-before: page;
+}
+
+.pdf-note-title {
+  margin: 0 0 1.15em;
+  padding-bottom: .35em;
+  border-bottom: 2px solid color-mix(in srgb, currentColor 28%, transparent);
+  font-size: 2.1em;
+  line-height: 1.15;
+  break-after: avoid-page;
+}
+
+.export-note-editor,
+.export-note-editor .cm-editor,
+.export-note-editor .cm-scroller,
+.export-note-editor .cm-content {
+  box-sizing: border-box;
+  width: 100%;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.export-note-editor .cm-editor {
+  font-size: var(--pdf-font-size);
+  background: transparent;
+}
+
+.export-note-editor .cm-scroller {
+  display: block !important;
+}
+
+.export-note-editor .cm-content {
+  padding: 0 !important;
+  pointer-events: none;
+}
+
+.export-note-editor .cm-cursor,
+.export-note-editor .cm-dropCursor,
+.export-note-editor .cm-selectionBackground,
+.export-note-editor .cm-activeLine,
+.export-note-editor .cm-activeLineGutter,
+.export-note-editor .source-edit-button,
+.export-note-editor .embed-source-button,
+.export-note-editor .property-source-button,
+.export-note-editor .rich-table-handle,
+.export-note-editor .image-resize-handle,
+.export-note-editor .cm-tooltip,
+.export-note-editor button[aria-label^="Edit "] {
+  display: none !important;
+}
+
+/* Page boundaries must not split a rendered Markdown item. The visual rules
+ * for these items remain in editor.css; this file only adds print behavior. */
+.export-note-editor .cm-line,
+.export-note-editor .callout,
+.export-note-editor .note-embed,
+.export-note-editor .properties-widget,
+.export-note-editor .rich-table-widget,
+.export-note-editor .math-widget,
+.export-note-editor .mermaid-widget,
+.export-note-editor .raw-html-widget,
+.export-note-editor .html-preview-widget,
+.export-note-editor pre,
+.export-note-editor table,
+.export-note-editor blockquote,
+.export-note-editor img,
+.export-note-editor audio,
+.export-note-editor video {
+  break-inside: avoid-page;
+}
+
+.export-note-editor img,
+.export-note-editor video,
+.export-note-editor svg {
+  max-width: 100%;
+  max-height: 245mm;
+  object-fit: contain;
+}
+
+.export-note-editor .image-widget:has(.image-error),
+.export-note-editor .image-error {
+  line-height: 1.4;
+}
+
+@page {
+  size: A4;
+  margin: 0;
+}
+
+@media print {
+  html,
+  body,
+  #export-preview,
+  .pdf-document {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    background: #fff;
+    box-shadow: none;
+  }
+
+  .pdf-cover {
+    min-height: 250mm;
+  }
+}
