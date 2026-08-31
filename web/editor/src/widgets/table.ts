@@ -363,6 +363,18 @@ class RichTableController {
     tr.append(holder);
     for (let column = 0; column < this.model.alignments.length; column++) {
       const cell = document.createElement(header ? "th" : "td");
+      cell.className = "rich-table-data-cell";
+      if (row === 0 && column === 0)
+        cell.classList.add("rich-table-corner-top-left");
+      if (row === 0 && column === this.model.alignments.length - 1)
+        cell.classList.add("rich-table-corner-top-right");
+      if (row === this.model.cells.length - 1) {
+        cell.classList.add("rich-table-last-row-cell");
+        if (column === 0)
+          cell.classList.add("rich-table-corner-bottom-left");
+        if (column === this.model.alignments.length - 1)
+          cell.classList.add("rich-table-corner-bottom-right");
+      }
       const alignment = this.model.alignments[column];
       cell.style.textAlign = alignment === "none" ? "" : alignment;
       cell.dataset.column = String(column);

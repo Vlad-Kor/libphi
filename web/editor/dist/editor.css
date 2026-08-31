@@ -543,10 +543,22 @@ th { background: var(--editor-code-bg); }
 }
 .rich-table-scroll.rich-table-overflowing { overflow-x: auto; }
 .rich-table-grid {
+  border-collapse: separate;
+  border-spacing: 0;
   width: max-content;
   min-width: 100%;
   table-layout: auto;
 }
+.rich-table-data-cell {
+  border-right-width: 0;
+  border-bottom-width: 0;
+}
+.rich-table-data-cell:last-child { border-right-width: 1px; }
+.rich-table-last-row-cell { border-bottom-width: 1px; }
+.rich-table-corner-top-left { border-top-left-radius: 4px; }
+.rich-table-corner-top-right { border-top-right-radius: 4px; }
+.rich-table-corner-bottom-left { border-bottom-left-radius: 4px; }
+.rich-table-corner-bottom-right { border-bottom-right-radius: 4px; }
 .rich-table-grid :is(th, td):not(.rich-table-handle-corner, .rich-table-column-handle-cell, .rich-table-row-handle-cell) {
   min-width: 5em;
 }

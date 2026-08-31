@@ -2207,6 +2207,34 @@ $$`;
     expect(tableSource).toContain("drawSelection(),");
   });
 
+  it("slightly rounds the four visible table corners", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "table-corners",
+      path: "/tmp/table-corners.md",
+      text: "| Header | Other |\n| --- | --- |\n| Value | Cell |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    const grid = parent.querySelector<HTMLElement>(".rich-table-grid")!;
+    expect(grid.querySelectorAll(".rich-table-corner-top-left")).toHaveLength(1);
+    expect(grid.querySelectorAll(".rich-table-corner-top-right")).toHaveLength(1);
+    expect(grid.querySelectorAll(".rich-table-corner-bottom-left")).toHaveLength(1);
+    expect(grid.querySelectorAll(".rich-table-corner-bottom-right")).toHaveLength(1);
+
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    expect(css).toMatch(
+      /\.rich-table-corner-top-left \{ border-top-left-radius: 4px; \}/,
+    );
+    expect(css).toMatch(
+      /\.rich-table-corner-bottom-right \{ border-bottom-right-radius: 4px; \}/,
+    );
+  });
+
   it("enables horizontal table scrolling only for actual overflow", async () => {
     let notifyResize = () => {};
     class TestResizeObserver {
