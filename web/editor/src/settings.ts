@@ -24,6 +24,10 @@ export function remoteImagesAllowed(): boolean {
   return runtimeSettings.allowRemoteImages;
 }
 
+export function currentEditorSettings(): Readonly<Required<EditorSettings>> {
+  return runtimeSettings;
+}
+
 export function applyTheme(theme: EditorTheme): void {
   const root = document.documentElement;
   const setColor = (name: string, value: string | undefined) => {

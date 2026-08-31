@@ -336,7 +336,8 @@ function selectVerticalTarget(
   forward: boolean,
 ): boolean {
   const node = previewNodeAt(view.state, position);
-  if (node && isHardRenderedNode(node)) {
+  if (node && isHardRenderedNode(node) &&
+      !previewNodeIsActive(node, view.state)) {
     if (isRichTableNode(node))
       focusRichTableBoundary(view, node.from, node.to, forward, true);
     else chooseHardPreview(view, node);

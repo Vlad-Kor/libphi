@@ -196,6 +196,21 @@ function addCodeBlockSource(
   }
 }
 
+function addTableSource(
+  builder: DecorationSink,
+  state: EditorState,
+  node: MarkdownNode,
+): void {
+  const first = state.doc.lineAt(node.from);
+  const last = state.doc.lineAt(Math.max(node.from, node.to - 1));
+  for (let number = first.number; number <= last.number; number++) {
+    const line = state.doc.line(number);
+    builder.add(line.from, line.from, Decoration.line({
+      class: "cm-live-table-source",
+    }));
+  }
+}
+
 function addHtmlSyntax(builder: DecorationSink, node: MarkdownNode): void {
   for (const tagMatch of node.text.matchAll(/<\/?([A-Za-z][\w:-]*)([^<>]*)>/g)) {
     const tagFrom = node.from + tagMatch.index;
@@ -361,6 +376,9 @@ function buildDecorationsNow(state: EditorState,
       case "inline-code": addInlineCode(builder, node, isActive); break;
       case "mermaid":
       case "code-block": if (isActive) addCodeBlockSource(
+        builder, state, node,
+      ); break;
+      case "table": if (isActive) addTableSource(
         builder, state, node,
       ); break;
       case "comment": if (!isActive) builder.add(node.from, node.to, hidden); break;

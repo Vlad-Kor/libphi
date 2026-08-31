@@ -43,6 +43,7 @@ afterEach(() => {
   delete (window as unknown as { MathJax?: unknown }).MathJax;
   resetPreviewGeometryCaches();
   setPreviewGeometryContext("", 780, 1);
+  setCustomSnippets();
 });
 
 function viewFor(text: string, anchor = text.length, head = anchor, extensions: unknown[] = []): EditorView {
@@ -1504,16 +1505,21 @@ $$`;
       '.rich-table-cell[data-row="0"][data-column="0"]',
     )!;
     first.focus();
-    first.blur();
+    EditorView.findFromDOM(first.querySelector<HTMLElement>(".cm-editor")!)
+      ?.contentDOM.blur();
     expect(editor.view.state.doc.toString()).toBe(`${table}\n\nOutside`);
     first.focus();
-    first.textContent = "Left | right";
-    first.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    const cellEditor = EditorView.findFromDOM(
+      first.querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    cellEditor.dispatch({
+      changes: { from: 0, to: cellEditor.state.doc.length, insert: "Left | right" },
+      selection: { anchor: "Left | right".length },
+      userEvent: "input.type",
+    });
     expect(editor.view.state.doc.toString()).toContain("Left \\| right");
     expect(parent.querySelector(".table-widget")).not.toBeNull();
-    first.dispatchEvent(new KeyboardEvent("keydown", {
-      key: "z", ctrlKey: true, bubbles: true, cancelable: true,
-    }));
+    expect(key(cellEditor, "z", false, true)).toBe(true);
     expect(editor.view.state.doc.toString()).toBe(`${table}\n\nOutside`);
 
     parent.querySelector<HTMLButtonElement>(".rich-table-source-button")
@@ -1521,6 +1527,121 @@ $$`;
     expect(parent.querySelector(".table-widget")).toBeNull();
     editor.view.dispatch({ selection: { anchor: table.length + 2 } });
     expect(parent.querySelector(".table-widget")).not.toBeNull();
+  });
+
+  it("uses live Markdown and LaTeX editing inside table cells", async () => {
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: () => document.createElement("mjx-container"),
+    };
+    setCustomSnippets(JSON.stringify([{
+      trigger: "@a",
+      replacement: String.raw`\alpha`,
+      options: "mA",
+    }]));
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.updateSettings({ executableSnippets: true, latexConceal: true });
+    editor.openDocument({
+      documentId: "table-live-inline",
+      path: "table-live-inline.md",
+      text: "| *test* after |\n| --- |\n| $@ + \\beta$ |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    const emphasisCell = parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="0"][data-column="0"]',
+    )!;
+    emphasisCell.focus();
+    const emphasisEditor = EditorView.findFromDOM(
+      emphasisCell.querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    expect(emphasisCell.querySelector(".cm-live-emphasis")?.textContent)
+      .toBe("test");
+    emphasisEditor.dispatch({ selection: { anchor: 2 } });
+    expect(emphasisCell.querySelector(".cm-live-emphasis")).toBeNull();
+    emphasisEditor.dispatch({ selection: { anchor: emphasisEditor.state.doc.length } });
+    expect(emphasisCell.querySelector(".cm-live-emphasis")?.textContent)
+      .toBe("test");
+
+    const mathCell = parent.querySelector<HTMLElement>(
+      '.rich-table-cell[data-row="1"][data-column="0"]',
+    )!;
+    mathCell.focus();
+    const mathEditor = EditorView.findFromDOM(
+      mathCell.querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    mathEditor.dispatch({ selection: { anchor: 2 } });
+    input(mathEditor, "a");
+    await settle();
+    expect(parseMarkdownTable(editor.view.state.doc.toString())?.cells[1][0])
+      .toBe(String.raw`$\alpha + \beta$`);
+    mathEditor.dispatch({
+      selection: { anchor: mathEditor.state.doc.toString().indexOf("+") },
+    });
+    expect(mathCell.querySelector(".cm-latex-conceal")).not.toBeNull();
+    mathEditor.dispatch({ selection: { anchor: mathEditor.state.doc.length } });
+    expect(mathCell.querySelector(".math-inline")).not.toBeNull();
+  });
+
+  it("blocks nested table insertion and keeps source-table navigation editable", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const table = "| A |\n| --- |\n| B |";
+    editor.openDocument({
+      documentId: "table-source-navigation",
+      path: "table-source-navigation.md",
+      text: `${table}\n\nOutside`,
+      revision: 1,
+      lineEnding: "LF",
+    });
+
+    parent.querySelector<HTMLElement>(".rich-table-cell")?.focus();
+    editor.receive({ protocol: 1, type: "table/show-picker" });
+    expect(document.querySelector(".phi-table-picker")).toBeNull();
+
+    parent.querySelector<HTMLButtonElement>(".rich-table-source-button")?.click();
+    expect(parent.querySelector(".rich-table-widget")).toBeNull();
+    expect(parent.querySelectorAll(".cm-live-table-source")).toHaveLength(3);
+    const lineBefore = editor.view.state.doc.lineAt(
+      editor.view.state.selection.main.head,
+    ).number;
+    const nextLine = editor.view.state.doc.line(lineBefore + 1);
+    vi.spyOn(editor.view, "moveVertically").mockReturnValue(
+      EditorSelection.cursor(Math.min(nextLine.to, nextLine.from + 1)),
+    );
+    expect(key(editor.view, "ArrowDown")).toBe(true);
+    const lineAfter = editor.view.state.doc.lineAt(
+      editor.view.state.selection.main.head,
+    ).number;
+    expect(lineAfter).toBeGreaterThan(lineBefore);
+  });
+
+  it("moves vertically through empty rich table cells", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "empty-table-navigation",
+      path: "empty-table-navigation.md",
+      text: "|   |\n| --- |\n|   |",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const cells = [...parent.querySelectorAll<HTMLElement>(".rich-table-cell")];
+    cells[0].focus();
+    const cellEditor = EditorView.findFromDOM(
+      cells[0].querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    expect(key(cellEditor, "ArrowDown")).toBe(true);
+    await settle();
+    expect(cells[1].contains(document.activeElement)).toBe(true);
   });
 
   it("inserts a selected table size without destroying surrounding text", () => {
@@ -1574,23 +1695,26 @@ $$`;
     )];
     cells()[0].focus();
     for (let index = 1; index < 4; index++) {
-      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
-        key: "Tab", bubbles: true, cancelable: true,
-      }));
+      const cellEditor = EditorView.findFromDOM(
+        cells()[index - 1].querySelector<HTMLElement>(".cm-editor")!,
+      )!;
+      expect(key(cellEditor, "Tab")).toBe(true);
       await settle();
-      expect(document.activeElement).toBe(cells()[index]);
+      expect(cells()[index].contains(document.activeElement)).toBe(true);
     }
-    document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
-      key: "Tab", bubbles: true, cancelable: true,
-    }));
+    const lastCellEditor = EditorView.findFromDOM(
+      cells()[3].querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    expect(key(lastCellEditor, "Tab")).toBe(true);
     await settle();
     expect(editor.view.state.selection.main.head).toBe(text.indexOf("After"));
     expect(parent.querySelector(".cm-hard-selected")).toBeNull();
 
     cells()[0].focus();
-    cells()[0].dispatchEvent(new KeyboardEvent("keydown", {
-      key: "a", ctrlKey: true, bubbles: true, cancelable: true,
-    }));
+    const firstCellEditor = EditorView.findFromDOM(
+      cells()[0].querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    expect(key(firstCellEditor, "a", false, true)).toBe(true);
     expect(editor.view.state.selection.main).toMatchObject({
       from: 0,
       to: text.length,
@@ -1640,6 +1764,10 @@ $$`;
     columns[1].dispatchEvent(new Event("dragover", {
       bubbles: true, cancelable: true,
     }));
+    expect(parent.querySelector(".rich-table-drop-indicator")).not.toBeNull();
+    expect(parent.querySelectorAll(".rich-table-drag-selected").length)
+      .toBeGreaterThan(0);
+    expect(columns[0].style.transform).toContain("translateX");
     columns[1].dispatchEvent(new Event("drop", {
       bubbles: true, cancelable: true,
     }));
@@ -1647,6 +1775,11 @@ $$`;
     expect(parsed().alignments).toEqual(["right", "left"]);
     expect(undo(editor.view)).toBe(true);
     expect(editor.view.state.doc.toString()).toBe(table);
+    const root = parent.querySelector<HTMLElement>(".rich-table-widget")!;
+    expect(root.querySelector(".rich-table-scroll .rich-table-source-button"))
+      .toBeNull();
+    expect(root.querySelector(":scope > .rich-table-source-button"))
+      .not.toBeNull();
   });
 
   it("syntax-highlights an HTML span while its source is active", () => {

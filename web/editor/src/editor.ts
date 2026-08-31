@@ -27,6 +27,7 @@ import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
+import { markdownAnalysis } from "./markdown/analysis";
 import { smartPairs } from "./markdown/pairs";
 import {
   canonicalMarkdownTable,
@@ -110,6 +111,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private fontScale = 1;
   private tablePicker: HTMLElement | null = null;
   private tablePickerOutside: ((event: PointerEvent) => void) | null = null;
+  private tableContextInside = false;
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -117,6 +119,10 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       parent,
       state: this.createState(""),
     });
+    this.view.dom.addEventListener("contextmenu", (event) => {
+      this.tableContextInside = event.target instanceof Element &&
+        Boolean(event.target.closest(".rich-table-widget"));
+    }, true);
     this.view.scrollDOM.addEventListener("scroll", () => {
       window.clearTimeout(this.scrollTimer);
       if (!this.documentId) return;
@@ -143,6 +149,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       this.view.state.doc.length,
       this.view.state.selection.main.head,
     ));
+    const tableContextInside = this.tableContextInside;
+    this.tableContextInside = false;
+    if (tableContextInside || this.tableInsertionIsInsideTable(position)) return;
 
     const picker = document.createElement("div");
     picker.className = "phi-table-picker";
@@ -242,6 +251,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
 
   private insertTable(rows: number, columns: number, at: number): void {
     at = Math.max(0, Math.min(this.view.state.doc.length, at));
+    if (this.tableInsertionIsInsideTable(at)) return;
     const source = canonicalMarkdownTable(newMarkdownTable(rows, columns));
     const prefix = at > 0 && this.view.state.sliceDoc(at - 1, at) !== "\n"
       ? "\n" : "";
@@ -260,6 +270,14 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       this.view.focus();
     } else queueMicrotask(() =>
       focusRichTableCell(this.view, tableFrom, 0, 0, "start"));
+  }
+
+  private tableInsertionIsInsideTable(position: number): boolean {
+    const focused = document.activeElement;
+    if (focused instanceof Element && focused.closest(".rich-table-widget"))
+      return true;
+    return markdownAnalysis(this.view.state).nodes.some((node) =>
+      node.kind === "table" && position >= node.from && position < node.to);
   }
 
   private createState(text: string): EditorState {

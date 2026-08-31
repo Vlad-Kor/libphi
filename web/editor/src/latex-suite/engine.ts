@@ -379,6 +379,14 @@ const expandManualSnippet: Command = (view) => {
   return match ? applyMatch(view, match, range.head) : false;
 };
 
+/** Run only the LaTeX-aware part of Tab handling. Embedded editors such as
+ * rich table cells use this before applying their own navigation semantics. */
+export function handleLatexTab(view: EditorView, backwards = false): boolean {
+  if (backwards) return previousTabstop(view);
+  return expandManualSnippet(view) || nextTabstop(view) || matrixTab(view) ||
+    tabOut(view) || exitMath(view);
+}
+
 /** Expand automatic opener snippets before CodeMirror's generic bracket
  * handler. Doing this as one transaction avoids a WebKit input cycle in which
  * both closeBrackets and the asynchronous snippet pass can retain a `)` from
