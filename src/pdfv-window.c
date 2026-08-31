@@ -2725,6 +2725,17 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   return stack;
 }
 
+static void tab_stack_show_loading(GtkStack *stack) {
+  GtkStackTransitionType transition = gtk_stack_get_transition_type(stack);
+
+  /* Loading must replace the empty state immediately. Otherwise the stack's
+   * crossfade keeps "No Document Open" visible briefly after an open request
+   * has already started. Loading-to-document transitions can still animate. */
+  gtk_stack_set_transition_type(stack, GTK_STACK_TRANSITION_TYPE_NONE);
+  gtk_stack_set_visible_child_name(stack, "loading");
+  gtk_stack_set_transition_type(stack, transition);
+}
+
 static gboolean prepare_tab_for_open(PdfvWindow *self, AdwTabPage *page) {
   GtkWidget *stack = adw_tab_page_get_child(page);
   PdfvMarkdownEditor *editor =
@@ -2746,7 +2757,7 @@ static gboolean prepare_tab_for_open(PdfvWindow *self, AdwTabPage *page) {
     if (self->current_editor == editor)
       self->current_editor = NULL;
     g_object_set_data(G_OBJECT(stack), "markdown-editor", NULL);
-    gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
+    tab_stack_show_loading(GTK_STACK(stack));
     gtk_stack_remove(GTK_STACK(stack), GTK_WIDGET(editor));
   }
   adw_tab_page_set_indicator_icon(page, NULL);
@@ -2931,7 +2942,7 @@ static void open_file_in_tab_async(PdfvWindow *self, GFile *file,
                          g_object_ref(file), g_object_unref);
   if (adw_tab_view_get_selected_page(self->tab_view) == page)
     workspace_sync_selection_to_active(self);
-  gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
+  tab_stack_show_loading(GTK_STACK(stack));
   tab_set_document_icon(page, FALSE);
   gchar *basename = g_file_get_basename(file);
   adw_tab_page_set_title(page, basename);
@@ -3095,7 +3106,7 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
   if (adw_tab_view_get_selected_page(self->tab_view) == page)
     workspace_sync_selection_to_active(self);
   if (!reuse)
-    gtk_stack_set_visible_child_name(GTK_STACK(stack), "loading");
+    tab_stack_show_loading(GTK_STACK(stack));
   tab_set_document_icon(page, TRUE);
   gchar *basename = g_file_get_basename(file);
   adw_tab_page_set_title(page, basename);
