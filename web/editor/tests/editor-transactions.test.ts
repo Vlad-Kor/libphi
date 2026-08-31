@@ -2099,7 +2099,7 @@ $$`;
     document.dispatchEvent(new MouseEvent("pointercancel", { bubbles: true }));
   });
 
-  it("clears a row handle dragged to the header edge", async () => {
+  it("moves a row away from the header edge and releases there cleanly", async () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
@@ -2130,14 +2130,21 @@ $$`;
     vi.spyOn(handles[0], "getBoundingClientRect")
       .mockReturnValue(bounds(20, 60));
     vi.spyOn(handles[1], "getBoundingClientRect")
-      .mockReturnValue(bounds(60, 100));
+      .mockImplementation(() => {
+        const translated = /translateY\((-?[\d.]+)px\)/
+          .exec(handles[1].style.transform)?.[1];
+        const offset = Number(translated ?? 0);
+        return bounds(60 + offset, 100 + offset);
+      });
     vi.spyOn(rows[0], "getBoundingClientRect")
       .mockReturnValue(bounds(20, 60));
     vi.spyOn(rows[1], "getBoundingClientRect")
       .mockReturnValue(bounds(60, 100));
 
     const setPointerCapture = vi.fn();
-    const releasePointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn(() => {
+      handles[1].dispatchEvent(new Event("lostpointercapture"));
+    });
     Object.assign(handles[1], {
       setPointerCapture,
       hasPointerCapture: () => true,
@@ -2160,6 +2167,19 @@ $$`;
     expect(root.classList.contains("rich-table-is-dragging")).toBe(true);
     expect(handles[1].style.transform).toBe("translateY(-40px)");
 
+    document.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 10,
+      clientY: 80,
+    }));
+    expect(handles[1].style.transform).toBe("translateY(0px)");
+    document.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 10,
+      clientY: 25,
+    }));
+    expect(handles[1].style.transform).toBe("translateY(-40px)");
+
     document.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
     await settle();
     expect(root.classList.contains("rich-table-is-dragging")).toBe(false);
@@ -2168,6 +2188,8 @@ $$`;
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
     expect([...root.querySelectorAll<HTMLElement>(".rich-table-handle")]
       .every((handle) => handle.style.transform === "")).toBe(true);
+    expect(parseMarkdownTable(editor.getDocument())?.cells)
+      .toEqual([["value"], ["Header"]]);
   });
 
   it("keeps non-active handles hidden during drag and lowers the source button", () => {

@@ -814,14 +814,15 @@ class RichTableController {
       const cleanup = () => {
         if (cleaned) return;
         cleaned = true;
-        document.removeEventListener("pointermove", move);
-        document.removeEventListener("pointerup", up);
-        document.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", up, true);
+        window.removeEventListener("pointercancel", cancel, true);
         window.removeEventListener("blur", cancel);
-        if (typeof handle.hasPointerCapture === "function" &&
-            handle.hasPointerCapture(pointerId)) {
+        handle.removeEventListener("lostpointercapture", cancel);
+        if (typeof handle.hasPointerCapture === "function") {
           try {
-            handle.releasePointerCapture(pointerId);
+            if (handle.hasPointerCapture(pointerId))
+              handle.releasePointerCapture(pointerId);
           } catch {
             /* Pointer capture was already released by the platform. */
           }
@@ -839,17 +840,26 @@ class RichTableController {
         this.clearDragVisual();
       };
       this.pointerDragCleanup = cleanup;
-      document.addEventListener("pointermove", move);
-      document.addEventListener("pointerup", up);
-      document.addEventListener("pointercancel", cancel);
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", cancel, true);
       window.addEventListener("blur", cancel);
+      handle.addEventListener("lostpointercapture", cancel);
     });
   }
 
+  private dragSlotElements(kind: HandleKind): HTMLElement[] {
+    return kind === "column"
+      ? [...this.root.querySelectorAll<HTMLElement>(
+        ".rich-table-column-handle-cell",
+      )]
+      : [...this.root.querySelectorAll<HTMLElement>(
+        ".rich-table-grid tr[data-row]",
+      )];
+  }
+
   private slotAtPoint(kind: HandleKind, x: number, y: number): number {
-    const candidates = kind === "column"
-      ? [...this.root.querySelectorAll<HTMLElement>(".rich-table-column-handle-cell")]
-      : [...this.root.querySelectorAll<HTMLElement>(".rich-table-grid tr[data-row]")];
+    const candidates = this.dragSlotElements(kind);
     const coordinate = kind === "column" ? x : y;
     for (let index = 0; index < candidates.length; index++) {
       const bounds = candidates[index].getBoundingClientRect();
@@ -886,9 +896,10 @@ class RichTableController {
     if (!drag) return;
     this.positionDragSelection(drag);
 
-    const candidates = [...this.root.querySelectorAll<HTMLElement>(
-      `.rich-table-${drag.kind}-handle`,
-    )];
+    /* Handles are transformed during the drag, so using their client rects as
+     * bounds makes an edge handle move its own min/max and become clamped
+     * there. Row/column slot elements never move and provide stable bounds. */
+    const candidates = this.dragSlotElements(drag.kind);
     let distance: number | null = null;
     if (drag.pointerCoordinate != null && drag.grabOffset != null &&
         candidates.length) {
@@ -968,9 +979,7 @@ class RichTableController {
     const grid = this.root.querySelector<HTMLElement>(".rich-table-grid");
     if (!grid) return;
     const gridBounds = grid.getBoundingClientRect();
-    const candidates = drag.kind === "column"
-      ? [...this.root.querySelectorAll<HTMLElement>(".rich-table-column-handle-cell")]
-      : [...this.root.querySelectorAll<HTMLElement>(".rich-table-grid tr[data-row]")];
+    const candidates = this.dragSlotElements(drag.kind);
     const before = candidates[drag.slot];
     const after = candidates[drag.slot - 1];
     const boundary = before
