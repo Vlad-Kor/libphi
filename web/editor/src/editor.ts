@@ -2,8 +2,8 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
-import { findNext, findPrevious, openSearchPanel, searchKeymap } from "@codemirror/search";
+import { Compartment, EditorSelection, EditorState, type Text } from "@codemirror/state";
+import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchKeymap, type SearchQuery } from "@codemirror/search";
 import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap, rectangularSelection } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { parseDocument } from "yaml";
@@ -116,6 +116,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private tablePicker: HTMLElement | null = null;
   private tablePickerOutside: ((event: PointerEvent) => void) | null = null;
   private tableContextInside = false;
+  private searchMatchDocument: Text | null = null;
+  private searchMatchQuery: SearchQuery | null = null;
+  private searchMatches: { from: number; to: number }[] = [];
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -360,6 +363,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         inputPerformanceExtension,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) this.documentChanged();
+          if (update.docChanged || update.selectionSet ||
+              !getSearchQuery(update.startState).eq(getSearchQuery(update.state)))
+            this.updateSearchMatchStatus();
         }),
         EditorView.domEventHandlers({
           copy: (event, view) => this.handleCopy(event, view),
@@ -395,6 +401,13 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     };
     const searchEntry = entry(search, "search", "Search");
     searchEntry.classList.add("phi-search-field");
+    const searchCount = document.createElement("span");
+    searchCount.className = "phi-search-count";
+    searchCount.setAttribute("role", "status");
+    searchCount.setAttribute("aria-live", "polite");
+    searchCount.setAttribute("aria-atomic", "true");
+    searchCount.hidden = true;
+    searchEntry.append(searchCount);
     const replaceEntry = entry(replace, "replace", "Replace");
     replaceEntry.classList.add("phi-replace-field", "phi-replace-row-item");
 
@@ -490,6 +503,49 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     /* Moving CodeMirror's focused input into our custom grid makes WebKit
      * drop focus. Restore it explicitly so Ctrl+F is immediately typable. */
     search.focus({ preventScroll: true });
+    this.updateSearchMatchStatus();
+  }
+
+  private updateSearchMatchStatus(): void {
+    const status = this.view.dom.querySelector<HTMLElement>(".phi-search-count");
+    if (!status) return;
+
+    const state = this.view.state;
+    const query = getSearchQuery(state);
+    const previous = this.searchMatchQuery;
+    const queryChanged = !previous || previous.search !== query.search ||
+      previous.caseSensitive !== query.caseSensitive ||
+      previous.literal !== query.literal || previous.regexp !== query.regexp ||
+      previous.wholeWord !== query.wholeWord || previous.test !== query.test;
+    if (this.searchMatchDocument !== state.doc || queryChanged) {
+      this.searchMatchDocument = state.doc;
+      this.searchMatchQuery = query;
+      this.searchMatches = [];
+      if (query.valid) {
+        const cursor = query.getCursor(state);
+        for (let result = cursor.next(); !result.done; result = cursor.next())
+          this.searchMatches.push(result.value);
+      }
+    }
+
+    if (!query.search) {
+      status.textContent = "";
+      status.hidden = true;
+      return;
+    }
+
+    const total = this.searchMatches.length;
+    let current = -1;
+    if (total) {
+      const selection = state.selection.main;
+      current = this.searchMatches.findIndex((match) =>
+        match.from === selection.from && match.to === selection.to);
+      if (current < 0)
+        current = this.searchMatches.findIndex((match) => match.from >= selection.to);
+      if (current < 0) current = 0;
+    }
+    status.textContent = total ? `${current + 1} of ${total}` : "0 of 0";
+    status.hidden = false;
   }
 
   private documentChanged(): void {

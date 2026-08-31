@@ -2395,7 +2395,7 @@ $$`;
     expect(document.body.classList.contains("full-width-editor")).toBe(false);
   });
 
-  it("restructures search as a centered GNOME-style grid without changing its behavior", async () => {
+  it("restructures search as a centered grid and reports the active match", async () => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
@@ -2413,10 +2413,13 @@ $$`;
     const panel = parent.querySelector<HTMLElement>(".cm-panel.cm-search");
     const grid = panel?.querySelector<HTMLElement>(".phi-search-grid");
     const search = grid?.querySelector<HTMLInputElement>('input[name="search"]');
+    const count = grid?.querySelector<HTMLElement>(".phi-search-count");
     const replace = grid?.querySelector<HTMLInputElement>('input[name="replace"]');
     const navigation = grid?.querySelector<HTMLElement>(".phi-search-navigation");
     expect(grid).not.toBeNull();
     expect(search?.parentElement?.classList.contains("phi-search-field")).toBe(true);
+    expect(count?.parentElement).toBe(search?.parentElement);
+    expect(count?.hidden).toBe(true);
     expect(replace?.parentElement?.classList.contains("phi-replace-field")).toBe(true);
     expect([...navigation!.querySelectorAll("button")].map((button) => button.name))
       .toEqual(["prev", "next"]);
@@ -2434,8 +2437,17 @@ $$`;
     search!.value = "alpha";
     search!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
     expect(getSearchQuery(editor.view.state).search).toBe("alpha");
+    expect(count?.textContent).toBe("1 of 2");
+    expect(count?.hidden).toBe(false);
     grid?.querySelector<HTMLButtonElement>('button[name="next"]')?.click();
     expect(editor.view.state.selection.main).toMatchObject({ from: 0, to: 5 });
+    expect(count?.textContent).toBe("1 of 2");
+    grid?.querySelector<HTMLButtonElement>('button[name="next"]')?.click();
+    expect(editor.view.state.selection.main).toMatchObject({ from: 11, to: 16 });
+    expect(count?.textContent).toBe("2 of 2");
+    grid?.querySelector<HTMLButtonElement>('button[name="prev"]')?.click();
+    expect(editor.view.state.selection.main).toMatchObject({ from: 0, to: 5 });
+    expect(count?.textContent).toBe("1 of 2");
 
     const toggle = grid?.querySelector<HTMLButtonElement>(".phi-replace-toggle");
     toggle?.click();
@@ -2445,6 +2457,14 @@ $$`;
     replace!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
     grid?.querySelector<HTMLButtonElement>('button[name="replace"]')?.click();
     expect(editor.view.state.doc.toString()).toBe("omega beta alpha");
+    expect(count?.textContent).toBe("1 of 1");
+
+    search!.value = "missing";
+    search!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "g" }));
+    expect(count?.textContent).toBe("0 of 0");
+    search!.value = "";
+    search!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Backspace" }));
+    expect(count?.hidden).toBe(true);
   });
 
   it("marks CodeMirror dark so floating previews use its dark tooltip theme", () => {

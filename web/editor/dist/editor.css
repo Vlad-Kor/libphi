@@ -211,6 +211,20 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   color: var(--editor-secondary-fg);
   opacity: 1;
 }
+.cm-panel.cm-search .phi-search-field:has(.phi-search-count:not([hidden])) input.cm-textfield {
+  padding-right: 8px;
+}
+.phi-search-count {
+  flex: 0 0 auto;
+  margin-right: 13px;
+  color: var(--editor-secondary-fg);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.phi-search-count[hidden] { display: none; }
 .phi-symbolic-icon {
   display: block;
   width: 18px;
