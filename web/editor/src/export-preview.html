@@ -12,7 +12,9 @@
 </head>
 <body class="export-preview-mode">
   <main id="export-preview" aria-label="PDF document preview">
-    <div id="pdf-stage" class="pdf-stage">
+    <section id="pdf-page-preview" class="pdf-page-preview" hidden
+             aria-label="Rendered PDF pages" aria-busy="true"></section>
+    <div id="pdf-stage" class="pdf-stage" aria-hidden="true">
       <article id="pdf-document" class="pdf-document">
         <div id="pdf-scaled-content" class="pdf-scaled-content">
           <header id="pdf-cover" class="pdf-cover" hidden>

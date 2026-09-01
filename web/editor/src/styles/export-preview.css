@@ -61,11 +61,37 @@ body.export-preview-mode {
   }
 }
 
-.pdf-stage {
-  position: relative;
-  min-width: 1px;
-  min-height: 1px;
+.pdf-page-preview {
+  display: grid;
+  width: min(100%, 210mm);
   margin: 0 auto;
+  gap: 24px;
+}
+
+.pdf-preview-page {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  background: #fff;
+  color-scheme: light;
+  box-shadow: 0 2px 16px rgb(0 0 0 / 24%);
+  user-select: none;
+}
+
+/* This is the shared Live Preview render tree that WebKit prints. Opacity
+ * keeps it non-visible without moving its geometry outside WebKit's viewport,
+ * which would stop CodeMirror widgets from settling. The visible pages above
+ * are rasterized from the finalized PDF. */
+.pdf-stage {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  width: 210mm;
+  min-height: 297mm;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .pdf-document {
@@ -242,6 +268,10 @@ body.export-preview-mode {
     box-shadow: none;
   }
 
+  .pdf-page-preview {
+    display: none !important;
+  }
+
   .pdf-stage,
   .pdf-document {
     position: static;
@@ -255,6 +285,12 @@ body.export-preview-mode {
     background: #fff;
     box-shadow: none;
     transform: none !important;
+  }
+
+  .pdf-stage {
+    z-index: auto;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .pdf-scaled-content {

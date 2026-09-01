@@ -27,9 +27,7 @@ const pdfCover = byId("pdf-cover");
 const pdfTitle = byId("pdf-title");
 const pdfAuthor = byId("pdf-author");
 const pdfSections = byId("pdf-sections");
-const pdfPreview = byId("export-preview");
-const pdfStage = byId("pdf-stage");
-const pdfDocument = byId("pdf-document");
+const pdfPagePreview = byId("pdf-page-preview");
 const pdfScaledContent = byId("pdf-scaled-content");
 
 let state: ExportPreviewState = {
@@ -43,19 +41,32 @@ let state: ExportPreviewState = {
 };
 let editors: PhiMarkdownEditor[] = [];
 let generation = 0;
-let previewFrame = 0;
 
-function updatePreviewFit(): void {
-  window.cancelAnimationFrame(previewFrame);
-  previewFrame = window.requestAnimationFrame(() => {
-    const naturalWidth = pdfDocument.offsetWidth;
-    if (!naturalWidth) return;
-    const availableWidth = Math.max(1, pdfPreview.clientWidth - 48);
-    const previewScale = Math.min(1, availableWidth / naturalWidth);
-    pdfDocument.style.transform = `scale(${previewScale})`;
-    pdfStage.style.width = `${Math.ceil(naturalWidth * previewScale)}px`;
-    pdfStage.style.height = `${Math.ceil(pdfDocument.scrollHeight * previewScale)}px`;
-  });
+function invalidatePdfPreview(): void {
+  pdfPagePreview.hidden = true;
+  pdfPagePreview.setAttribute("aria-busy", "true");
+  pdfPagePreview.replaceChildren();
+}
+
+async function showPdfPreview(revision: number, pages: string[]): Promise<void> {
+  try {
+    const images = pages.map((source, index) => {
+      const page = document.createElement("img");
+      page.className = "pdf-preview-page";
+      page.src = source;
+      page.alt = `Page ${index + 1} of ${pages.length}`;
+      page.draggable = false;
+      return page;
+    });
+    await Promise.all(images.map((page) => page.decode()));
+    if (revision !== (state.revision ?? 0)) return;
+    pdfPagePreview.replaceChildren(...images);
+    pdfPagePreview.hidden = false;
+    pdfPagePreview.setAttribute("aria-busy", "false");
+    sendNative("export/pdf-preview-ready", { revision });
+  } catch (error) {
+    reportError(error, "export-preview/pdf-pages");
+  }
 }
 
 function applyMetadata(): void {
@@ -88,15 +99,27 @@ function applyMetadata(): void {
   for (const editor of editors) {
     editor.updateTheme({ dark: false, fontScale: configuredFontSize / 16 });
   }
-  updatePreviewFit();
 }
 
 function imagesSettled(): boolean {
-  return [...document.images].every((image) => image.complete);
+  return [...pdfSections.querySelectorAll("img")]
+    .every((image) => image.complete);
 }
 
 async function waitUntilSettled(expectedGeneration: number): Promise<void> {
-  await document.fonts?.ready;
+  if (document.fonts) {
+    let fontDeadline = 0;
+    try {
+      await Promise.race([
+        document.fonts.ready,
+        new Promise<void>((resolve) => {
+          fontDeadline = window.setTimeout(resolve, 10000);
+        }),
+      ]);
+    } finally {
+      window.clearTimeout(fontDeadline);
+    }
+  }
   const started = performance.now();
   let lastMutation = performance.now();
   const observer = new MutationObserver(() => { lastMutation = performance.now(); });
@@ -115,7 +138,6 @@ async function waitUntilSettled(expectedGeneration: number): Promise<void> {
   observer.disconnect();
   await new Promise<void>((resolve) => requestAnimationFrame(() =>
     requestAnimationFrame(() => resolve())));
-  updatePreviewFit();
 }
 
 async function rebuild(): Promise<void> {
@@ -173,13 +195,29 @@ function receive(input: NativeMessage | string): void {
       throw new Error(`Unsupported preview protocol: ${String(message.protocol)}`);
     if (acceptNativeResponse(message)) return;
     if (message.type === "export/initialize" || message.type === "export/documents") {
+      invalidatePdfPreview();
       state = { ...state, ...(message.payload as unknown as Partial<ExportPreviewState>) };
       void rebuild();
     } else if (message.type === "export/metadata") {
+      invalidatePdfPreview();
       state = { ...state, ...(message.payload as unknown as Partial<ExportPreviewState>) };
+      const currentGeneration = ++generation;
       applyMetadata();
-      void waitUntilSettled(generation).then(() =>
-        sendNative("export/preview-ready", { revision: state.revision ?? 0 }));
+      void waitUntilSettled(currentGeneration).then(() => {
+        if (currentGeneration === generation)
+          sendNative("export/preview-ready", { revision: state.revision ?? 0 });
+      });
+    } else if (message.type === "export/pdf-preview") {
+      const payload = message.payload as unknown as {
+        revision?: unknown;
+        pages?: unknown;
+      };
+      const revision = Number(payload.revision);
+      if (!Number.isSafeInteger(revision) || !Array.isArray(payload.pages) ||
+          !payload.pages.every((page) => typeof page === "string"))
+        throw new Error("Native PDF preview payload is invalid");
+      if (revision === (state.revision ?? 0))
+        void showPdfPreview(revision, payload.pages as string[]);
     }
   } catch (error) {
     reportError(error, "export-preview/receive");
@@ -191,10 +229,12 @@ window.addEventListener("error", (event) =>
   reportError(event.error ?? event.message, "export-preview/window"));
 window.addEventListener("unhandledrejection", (event) =>
   reportError(event.reason, "export-preview/promise"));
-const previewObserver = new ResizeObserver(updatePreviewFit);
-previewObserver.observe(pdfPreview);
-previewObserver.observe(pdfDocument);
-updatePreviewFit();
 sendNative("export/ready", {
-  capabilities: ["live-preview", "mathjax", "mermaid", "note-embeds"],
+  capabilities: [
+    "live-preview",
+    "exact-pdf-preview",
+    "mathjax",
+    "mermaid",
+    "note-embeds",
+  ],
 });
