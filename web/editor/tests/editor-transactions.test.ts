@@ -1319,9 +1319,9 @@ $$`;
       lineEnding: "LF",
     });
     const image = parent.querySelector<HTMLElement>(".image-widget")!;
-    expect(image.draggable).toBe(true);
+    expect(image.draggable).toBe(false);
     const renderedImage = image.querySelector<HTMLImageElement>("img")!;
-    expect(renderedImage.draggable).toBe(false);
+    expect(renderedImage.draggable).toBe(true);
     vi.spyOn(renderedImage, "getBoundingClientRect").mockReturnValue({
       width: 1200,
       height: 800,
@@ -1333,16 +1333,20 @@ $$`;
       left: 0,
       toJSON: () => ({}),
     });
-    image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    renderedImage.dispatchEvent(new MouseEvent("pointerdown", {
+      bubbles: true,
+    }));
 
     const transferred = new Map<string, string>();
     const setDragImage = vi.fn();
+    const clearData = vi.fn(() => transferred.clear());
     const dataTransfer = {
       dropEffect: "none",
       effectAllowed: "none",
       files: [],
       items: [],
       types: [],
+      clearData,
       setData: (type: string, value: string) => transferred.set(type, value),
       getData: (type: string) => transferred.get(type) ?? "",
       setDragImage,
@@ -1354,7 +1358,8 @@ $$`;
     Object.defineProperty(dragstart, "dataTransfer", {
       value: dataTransfer,
     });
-    image.dispatchEvent(dragstart);
+    renderedImage.dispatchEvent(dragstart);
+    expect(clearData).toHaveBeenCalledOnce();
     expect(transferred.get("text/plain")).toBe(imageSource);
     expect(dataTransfer.effectAllowed).toBe("move");
     const preview = setDragImage.mock.calls[0][0] as HTMLElement;
@@ -1382,6 +1387,53 @@ $$`;
     });
     expect(undo(editor.view)).toBe(true);
     expect(editor.getDocument()).toBe(text);
+  });
+
+  it("keeps the resize handle outside the draggable image body", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "hard-image-resize-after-drag",
+      path: "hard-image-resize-after-drag.md",
+      text: "![[diagram.png]]",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const widget = parent.querySelector<HTMLElement>(".image-widget")!;
+    const image = widget.querySelector<HTMLImageElement>("img")!;
+    const handle = widget.querySelector<HTMLElement>(".image-resize-handle")!;
+    expect(widget.draggable).toBe(false);
+    expect(image.draggable).toBe(true);
+    expect(handle.draggable).toBe(false);
+    vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
+      width: 300,
+      height: 200,
+      x: 0,
+      y: 0,
+      top: 0,
+      right: 300,
+      bottom: 200,
+      left: 0,
+      toJSON: () => ({}),
+    });
+
+    handle.dispatchEvent(new MouseEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 100,
+    }));
+    handle.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 150,
+    }));
+    expect(image.style.width).toBe("350px");
+    handle.dispatchEvent(new MouseEvent("pointerup", {
+      bubbles: true,
+      clientX: 150,
+    }));
+    expect(editor.getDocument()).toBe("![[diagram.png|350]]");
   });
 
   it("selects an image body without revealing its source", () => {
@@ -1456,6 +1508,30 @@ $$`;
     expect(parent.querySelector(".image-widget")).toBeNull();
 
     editor.view.dispatch({ selection: { anchor: text.length } });
+    expect(parent.querySelector(".image-widget")).not.toBeNull();
+  });
+
+  it("renders a last-line image after Enter leaves its source", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const source = "![[diagram.png]]";
+    editor.openDocument({
+      documentId: "last-line-image-source",
+      path: "last-line-image-source.md",
+      text: source,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    parent.querySelector<HTMLButtonElement>(".image-source-button")?.click();
+    editor.view.dispatch({ selection: { anchor: source.length } });
+    expect(parent.querySelector(".image-widget")).toBeNull();
+
+    expect(key(editor.view, "Enter")).toBe(true);
+
+    expect(editor.getDocument()).toBe(`${source}\n`);
+    expect(editor.view.state.selection.main.head).toBe(source.length + 1);
     expect(parent.querySelector(".image-widget")).not.toBeNull();
   });
 

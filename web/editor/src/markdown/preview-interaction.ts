@@ -526,12 +526,10 @@ interface DraggedImageSource {
 const draggedImageSources = new WeakMap<EditorView, DraggedImageSource>();
 
 function smallImageDragPreview(
-  element: HTMLElement,
+  image: HTMLImageElement,
   dataTransfer: DataTransfer,
 ): HTMLElement | null {
   if (typeof dataTransfer.setDragImage !== "function") return null;
-  const image = element.querySelector<HTMLImageElement>("img");
-  if (!image) return null;
   const bounds = image.getBoundingClientRect();
   const sourceWidth = bounds.width || image.width || image.naturalWidth || 128;
   const sourceHeight = bounds.height || image.height ||
@@ -567,12 +565,15 @@ export function makeHardPreviewImageDraggable(
   from: number,
   to: number,
 ): void {
-  element.draggable = true;
-  /* The wrapper represents the Markdown source. Prevent the browser from
-   * offering the image bytes or an anchor URL as a competing native drag. */
+  const image = element.querySelector<HTMLImageElement>("img");
+  if (!image) return;
+  /* Only the image body starts a move. Keeping the wrapper non-draggable is
+   * important because the source button and resize handle are its siblings. */
+  element.draggable = false;
   for (const child of element.querySelectorAll<HTMLElement>("img, a"))
     child.draggable = false;
-  element.addEventListener("dragstart", (event) => {
+  image.draggable = true;
+  image.addEventListener("dragstart", (event) => {
     const source = view.state.sliceDoc(from, to);
     if (!event.dataTransfer || !source) {
       event.preventDefault();
@@ -580,13 +581,14 @@ export function makeHardPreviewImageDraggable(
     }
     event.stopPropagation();
     clearImageDrag(view);
+    event.dataTransfer.clearData();
     event.dataTransfer.setData("text/plain", source);
     event.dataTransfer.effectAllowed = "move";
     draggedImageSources.set(view, {
       from,
       to,
       source,
-      preview: smallImageDragPreview(element, event.dataTransfer),
+      preview: smallImageDragPreview(image, event.dataTransfer),
     });
   });
 }
