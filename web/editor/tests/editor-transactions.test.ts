@@ -985,6 +985,14 @@ $$`;
     expect(widget?.tagName).toBe("SPAN");
     widget?.querySelector("img")?.dispatchEvent(new Event("load"));
     expect(measure).toHaveBeenCalled();
+
+    /* CodeMirror puts invisible inline buffers beside replacement widgets to
+     * measure the before/after caret. A block-level wrapper splits those
+     * buffers into a separate anonymous row above/below the image. */
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    const rule = /\.image-widget-block\s*\{([^}]*)\}/s.exec(css)?.[1] ?? "";
+    expect(rule).toMatch(/display:\s*inline-block/);
+    expect(rule).not.toMatch(/display:\s*block/);
   });
 
   it("reveals hard source for text selections and Select All", () => {

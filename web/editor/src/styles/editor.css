@@ -812,7 +812,13 @@ pre code { padding: 0; background: transparent; }
 .cm-line:has(.image-widget-block) + .cm-line:has(> br:only-child) {
   line-height: 1;
 }
-.image-widget-block { display: block; width: fit-content; }
+/* Standalone images are inline CodeMirror replacements, with invisible widget
+ * buffers on both sides for caret placement. Keep the wrapper inline-level so
+ * those buffers and the image share one line box; display:block creates an
+ * empty anonymous line above the image and paints the before-image caret
+ * there. The source-line check above still gives standalone images block-like
+ * layout without changing their editor interaction model. */
+.image-widget-block { display: inline-block; width: fit-content; }
 .image-widget-inline { display: inline-block; }
 .image-embed { display: block; max-width: 100%; height: auto; border-radius: 6px; }
 .image-source-button {
