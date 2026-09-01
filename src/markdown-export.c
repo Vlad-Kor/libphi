@@ -62,6 +62,7 @@ struct _PdfvMarkdownExport {
   GtkButton *export_button;
   GtkLabel *status_label;
   GtkWidget *status_spinner;
+  GtkWidget *preview_spinner;
   GtkWidget *busy_overlay;
   GtkLabel *busy_label;
   gboolean multiple;
@@ -437,6 +438,8 @@ static void report_preview_generation_error(PdfvMarkdownExport *self,
     return;
   if (self->export_requested_revision == self->preview_revision)
     cancel_pending_export(self);
+  if (self->preview_spinner)
+    gtk_widget_set_visible(self->preview_spinner, FALSE);
   set_status(self, message, TRUE);
 }
 
@@ -1687,6 +1690,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
         revision == (gint64)self->cached_preview_revision &&
         self->temporary_filename) {
       self->preview_ready = TRUE;
+      if (self->preview_spinner)
+        gtk_widget_set_visible(self->preview_spinner, FALSE);
       if (!self->busy) {
         set_status(self, NULL, FALSE);
         if (self->status_spinner)
@@ -1715,6 +1720,8 @@ static void on_bridge_error(PdfvMarkdownEditorBridge *bridge,
   (void)bridge;
   g_warning("PDF export bridge: %s", message);
   cancel_pending_export(self);
+  if (self->preview_spinner)
+    gtk_widget_set_visible(self->preview_spinner, FALSE);
   set_status(self, message, TRUE);
 }
 
@@ -2021,7 +2028,20 @@ void pdfv_markdown_export_present(
   gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
   GtkWidget *controls = create_controls(self);
   gtk_paned_set_start_child(GTK_PANED(paned), controls);
-  gtk_paned_set_end_child(GTK_PANED(paned), GTK_WIDGET(self->web_view));
+  GtkWidget *preview_overlay = gtk_overlay_new();
+  gtk_overlay_set_child(GTK_OVERLAY(preview_overlay),
+                        GTK_WIDGET(self->web_view));
+  self->preview_spinner = adw_spinner_new();
+  gtk_widget_set_size_request(self->preview_spinner, 36, 36);
+  gtk_widget_set_halign(self->preview_spinner, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(self->preview_spinner, GTK_ALIGN_CENTER);
+  gtk_widget_set_can_target(self->preview_spinner, FALSE);
+  gtk_accessible_update_property(
+      GTK_ACCESSIBLE(self->preview_spinner), GTK_ACCESSIBLE_PROPERTY_LABEL,
+      "Loading PDF preview", -1);
+  gtk_overlay_add_overlay(GTK_OVERLAY(preview_overlay),
+                          self->preview_spinner);
+  gtk_paned_set_end_child(GTK_PANED(paned), preview_overlay);
   GtkWidget *overlay = gtk_overlay_new();
   gtk_overlay_set_child(GTK_OVERLAY(overlay), paned);
   gtk_overlay_add_overlay(GTK_OVERLAY(overlay), create_busy_overlay(self));
