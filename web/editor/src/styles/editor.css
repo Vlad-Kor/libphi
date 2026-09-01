@@ -394,7 +394,7 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .cm-concealed { display: none; }
 .cm-height-estimate { display: none; }
 .cm-live-heading, .cm-live-heading * { font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; font-weight: 780; line-height: 1.25; text-decoration: none !important; }
-.cm-live-heading { padding-top: .28em; }
+.cm-live-heading { padding-top: .4em; }
 .cm-live-heading-1 { font-size: 2.25em; font-weight: 820; }
 .cm-live-heading-2 { font-size: 1.75em; }
 .cm-live-heading-3 { font-size: 1.42em; }
@@ -423,7 +423,7 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.math-display { display: block; width: 100%; padding: .55em 0; text-align: center; }
+.math-display { display: block; width: 100%; padding: .625em 0; text-align: center; }
 .math-widget.math-overflow { overflow-x: auto; }
 .cm-latex-delimiter { color: color-mix(in srgb, #2ec27e 82%, var(--editor-fg)); font-weight: 650; }
 .cm-latex-command { color: color-mix(in srgb, #c061cb 78%, var(--editor-fg)); }

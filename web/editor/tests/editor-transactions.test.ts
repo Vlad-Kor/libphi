@@ -258,17 +258,26 @@ describe("CodeMirror document transactions", () => {
       .estimatedHeight).toBe(-1);
     expect(new LinkWidget("Long note", "Long note", 0, 10, true, true)
       .estimatedHeight).toBe(360);
-    expect(new MathWidget("x", true, 0).estimatedHeight).toBe(64);
+    expect(new MathWidget("x", true, 0).estimatedHeight).toBeCloseTo(66.4);
   });
 
   it("gives cold headings and wrapped list lines realistic height-map hints", () => {
     setPreviewGeometryContext("Geometry.md", 320, 1);
-    expect(estimatedHeadingHeight(1, "A heading")).toBeGreaterThan(50);
+    expect(estimatedHeadingHeight(1, "A heading")).toBeCloseTo(59.4);
     expect(estimatedListLineHeight("word ".repeat(30), 2))
       .toBeGreaterThan(50);
     const marker = new LineHeightEstimateWidget(72);
     expect(marker.estimatedHeight).toBe(72);
     expect(marker.toDOM().className).toBe("cm-height-estimate");
+  });
+
+  it("adds only top space to headings and a little vertical display-math space", () => {
+    const css = readFileSync("src/styles/editor.css", "utf8");
+    const heading = /\.cm-live-heading\s*\{([^}]*)\}/s.exec(css)?.[1] ?? "";
+    const displayMath = /\.math-display\s*\{([^}]*)\}/s.exec(css)?.[1] ?? "";
+    expect(heading).toMatch(/padding-top:\s*\.4em/);
+    expect(heading).not.toMatch(/padding-bottom|padding:\s/);
+    expect(displayMath).toMatch(/padding:\s*\.625em 0/);
   });
 
   it("estimates rich-table height and reuses the measured height on remount", () => {

@@ -278,7 +278,7 @@ export function estimatedHeadingHeight(level: number, text: string): number {
     fontSize,
     fontSize * 1.25,
     previewGeometryContext.textWidth,
-    fontSize * 0.28,
+    fontSize * 0.4,
   );
 }
 
@@ -575,8 +575,11 @@ export class MathWidget extends WidgetType {
       1,
       this.latex.split(/(?:\\\\|\n|\\begin\{(?:align\*?|gather\*?|matrix|pmatrix|bmatrix)\})/).length,
     );
-    return Math.max(64, Math.min(720,
-      (42 + (rows - 1) * 24) * this.geometryContext.fontScale));
+    /* Keep the cold height map in sync with the extra .075em of vertical
+     * padding added on each side of display math in editor.css. */
+    const paddingDelta = 2 * 0.075 * 16 * this.geometryContext.fontScale;
+    return Math.min(720, Math.max(64,
+      (42 + (rows - 1) * 24) * this.geometryContext.fontScale) + paddingDelta);
   }
 
   toDOM(view: EditorView): HTMLElement {
