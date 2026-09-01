@@ -1683,6 +1683,11 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
       update_export_enabled(self);
       request_exact_preview(self, (guint64)revision);
     }
+  } else if (g_str_equal(type, "export/pdf-preview-hidden")) {
+    gint64 revision = payload
+        ? json_object_get_int_member_with_default(payload, "revision", -1) : -1;
+    if (revision == (gint64)self->preview_revision && self->preview_spinner)
+      gtk_widget_set_visible(self->preview_spinner, TRUE);
   } else if (g_str_equal(type, "export/pdf-preview-ready")) {
     gint64 revision = payload
         ? json_object_get_int_member_with_default(payload, "revision", -1) : -1;

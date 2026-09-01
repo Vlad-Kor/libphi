@@ -42,10 +42,11 @@ let state: ExportPreviewState = {
 let editors: PhiMarkdownEditor[] = [];
 let generation = 0;
 
-function invalidatePdfPreview(): void {
+function invalidatePdfPreview(revision: number): void {
   pdfPagePreview.hidden = true;
   pdfPagePreview.setAttribute("aria-busy", "true");
   pdfPagePreview.replaceChildren();
+  sendNative("export/pdf-preview-hidden", { revision });
 }
 
 async function showPdfPreview(revision: number, pages: string[]): Promise<void> {
@@ -195,12 +196,12 @@ function receive(input: NativeMessage | string): void {
       throw new Error(`Unsupported preview protocol: ${String(message.protocol)}`);
     if (acceptNativeResponse(message)) return;
     if (message.type === "export/initialize" || message.type === "export/documents") {
-      invalidatePdfPreview();
       state = { ...state, ...(message.payload as unknown as Partial<ExportPreviewState>) };
+      invalidatePdfPreview(state.revision ?? 0);
       void rebuild();
     } else if (message.type === "export/metadata") {
-      invalidatePdfPreview();
       state = { ...state, ...(message.payload as unknown as Partial<ExportPreviewState>) };
+      invalidatePdfPreview(state.revision ?? 0);
       const currentGeneration = ++generation;
       applyMetadata();
       void waitUntilSettled(currentGeneration).then(() => {
