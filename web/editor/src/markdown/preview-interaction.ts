@@ -520,9 +520,46 @@ interface DraggedImageSource {
   from: number;
   to: number;
   source: string;
+  preview: HTMLElement | null;
 }
 
 const draggedImageSources = new WeakMap<EditorView, DraggedImageSource>();
+
+function smallImageDragPreview(
+  element: HTMLElement,
+  dataTransfer: DataTransfer,
+): HTMLElement | null {
+  if (typeof dataTransfer.setDragImage !== "function") return null;
+  const image = element.querySelector<HTMLImageElement>("img");
+  if (!image) return null;
+  const bounds = image.getBoundingClientRect();
+  const sourceWidth = bounds.width || image.width || image.naturalWidth || 128;
+  const sourceHeight = bounds.height || image.height ||
+    image.naturalHeight || 96;
+  const scale = Math.min(1, 128 / sourceWidth, 96 / sourceHeight);
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const preview = image.cloneNode(false) as HTMLImageElement;
+  preview.className = "image-drag-preview";
+  preview.draggable = false;
+  preview.removeAttribute("width");
+  preview.removeAttribute("height");
+  preview.style.width = `${width}px`;
+  preview.style.height = `${height}px`;
+  document.body.append(preview);
+  try {
+    dataTransfer.setDragImage(preview, Math.min(12, width), Math.min(12, height));
+  } catch {
+    preview.remove();
+    return null;
+  }
+  return preview;
+}
+
+function clearImageDrag(view: EditorView): void {
+  draggedImageSources.get(view)?.preview?.remove();
+  draggedImageSources.delete(view);
+}
 
 export function makeHardPreviewImageDraggable(
   view: EditorView,
@@ -542,9 +579,15 @@ export function makeHardPreviewImageDraggable(
       return;
     }
     event.stopPropagation();
-    draggedImageSources.set(view, { from, to, source });
+    clearImageDrag(view);
     event.dataTransfer.setData("text/plain", source);
     event.dataTransfer.effectAllowed = "move";
+    draggedImageSources.set(view, {
+      from,
+      to,
+      source,
+      preview: smallImageDragPreview(element, event.dataTransfer),
+    });
   });
 }
 
@@ -561,7 +604,7 @@ const hardPreviewImageDrag = Prec.highest(EditorView.domEventHandlers({
     const dragged = draggedImageSources.get(view);
     if (!dragged) return false;
     event.preventDefault();
-    draggedImageSources.delete(view);
+    clearImageDrag(view);
     const drop = view.posAtCoords(
       { x: event.clientX, y: event.clientY }, false,
     );
@@ -594,7 +637,7 @@ const hardPreviewImageDrag = Prec.highest(EditorView.domEventHandlers({
     return true;
   },
   dragend(_event, view) {
-    draggedImageSources.delete(view);
+    clearImageDrag(view);
     return false;
   },
 }));

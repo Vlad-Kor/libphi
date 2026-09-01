@@ -1320,10 +1320,23 @@ $$`;
     });
     const image = parent.querySelector<HTMLElement>(".image-widget")!;
     expect(image.draggable).toBe(true);
-    expect(image.querySelector<HTMLImageElement>("img")?.draggable).toBe(false);
+    const renderedImage = image.querySelector<HTMLImageElement>("img")!;
+    expect(renderedImage.draggable).toBe(false);
+    vi.spyOn(renderedImage, "getBoundingClientRect").mockReturnValue({
+      width: 1200,
+      height: 800,
+      x: 0,
+      y: 0,
+      top: 0,
+      right: 1200,
+      bottom: 800,
+      left: 0,
+      toJSON: () => ({}),
+    });
     image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
 
     const transferred = new Map<string, string>();
+    const setDragImage = vi.fn();
     const dataTransfer = {
       dropEffect: "none",
       effectAllowed: "none",
@@ -1332,6 +1345,7 @@ $$`;
       types: [],
       setData: (type: string, value: string) => transferred.set(type, value),
       getData: (type: string) => transferred.get(type) ?? "",
+      setDragImage,
     } as unknown as DataTransfer;
     const dragstart = new Event("dragstart", {
       bubbles: true,
@@ -1343,6 +1357,10 @@ $$`;
     image.dispatchEvent(dragstart);
     expect(transferred.get("text/plain")).toBe(imageSource);
     expect(dataTransfer.effectAllowed).toBe("move");
+    const preview = setDragImage.mock.calls[0][0] as HTMLElement;
+    expect(preview.style.width).toBe("128px");
+    expect(preview.style.height).toBe("85px");
+    expect(setDragImage).toHaveBeenCalledWith(preview, 12, 12);
 
     vi.spyOn(editor.view, "posAtCoords").mockReturnValue(text.length);
     const drop = new MouseEvent("drop", {
@@ -1355,6 +1373,7 @@ $$`;
     editor.view.contentDOM.dispatchEvent(drop);
 
     const movedPrefix = "Before  after";
+    expect(preview.isConnected).toBe(false);
     expect(drop.defaultPrevented).toBe(true);
     expect(editor.getDocument()).toBe(`${movedPrefix}${imageSource}`);
     expect(selectedHardPreview(editor.view.state)).toEqual({

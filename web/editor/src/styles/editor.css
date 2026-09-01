@@ -801,6 +801,14 @@ pre code { padding: 0; background: transparent; }
 .image-widget { position: relative; max-width: 100%; margin: 0; line-height: 0; vertical-align: top; }
 .image-widget[draggable="true"] { cursor: grab; }
 .image-widget[draggable="true"]:active { cursor: grabbing; }
+.image-drag-preview {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  max-width: none;
+  object-fit: contain;
+  pointer-events: none;
+}
 .cm-hard-rendered-item {
   border-radius: 7px;
   outline: 2px solid transparent;
