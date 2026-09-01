@@ -82,6 +82,9 @@ function applyMetadata(): void {
   document.documentElement.style.setProperty(
     "--pdf-max-item-height", `${245 / scale}mm`,
   );
+  document.documentElement.style.setProperty(
+    "--pdf-print-page-height", `${259 / scale}mm`,
+  );
   for (const editor of editors) {
     editor.updateTheme({ dark: false, fontScale: configuredFontSize / 16 });
   }

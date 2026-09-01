@@ -67,6 +67,7 @@ struct _PdfvMarkdownExport {
   gboolean multiple;
   gboolean allow_remote_images;
   gdouble font_size;
+  gdouble export_scale;
   gboolean web_ready;
   gboolean preview_ready;
   gboolean busy;
@@ -501,6 +502,7 @@ typedef struct {
   gchar *output;
   gchar *title;
   gchar *author;
+  gdouble scale;
 } PdfFinalizeData;
 
 static void pdf_finalize_data_free(PdfFinalizeData *data) {
@@ -552,6 +554,108 @@ static gboolean pdf_page_is_blank(fz_context *context, pdf_document *document,
   return blank;
 }
 
+static pdf_obj *pdf_new_content_stream(fz_context *context,
+                                       pdf_document *document,
+                                       const gchar *contents) {
+  fz_buffer *buffer = NULL;
+  pdf_obj *stream = NULL;
+  fz_var(buffer);
+  fz_try(context) {
+    buffer = fz_new_buffer_from_copied_data(
+        context, (const unsigned char *)contents, strlen(contents));
+    stream = pdf_add_stream(context, document, buffer, NULL, 0);
+  }
+  fz_always(context) {
+    fz_drop_buffer(context, buffer);
+  }
+  fz_catch(context) {
+    fz_rethrow(context);
+  }
+  return stream;
+}
+
+static void pdf_scale_annotation_rectangles(fz_context *context,
+                                            pdf_obj *page,
+                                            gdouble scale) {
+  const gdouble left = 48.18898;
+  const gdouble bottom = 56.69291;
+  pdf_obj *annotations = pdf_dict_get(context, page, PDF_NAME(Annots));
+  if (!pdf_is_array(context, annotations))
+    return;
+  gint count = pdf_array_len(context, annotations);
+  for (gint index = 0; index < count; index++) {
+    pdf_obj *annotation = pdf_array_get(context, annotations, index);
+    pdf_obj *rectangle = pdf_dict_get(context, annotation, PDF_NAME(Rect));
+    if (!pdf_is_array(context, rectangle) ||
+        pdf_array_len(context, rectangle) != 4)
+      continue;
+    fz_rect value = pdf_to_rect(context, rectangle);
+    value.x0 = value.x0 * scale + left;
+    value.y0 = value.y0 * scale + bottom;
+    value.x1 = value.x1 * scale + left;
+    value.y1 = value.y1 * scale + bottom;
+    pdf_dict_put_rect(context, annotation, PDF_NAME(Rect), value);
+  }
+}
+
+static void pdf_scale_page_to_a4(fz_context *context,
+                                 pdf_document *document, gint page_number,
+                                 gdouble scale) {
+  pdf_obj *prefix = NULL;
+  pdf_obj *suffix = NULL;
+  pdf_obj *wrapped = NULL;
+  fz_var(prefix);
+  fz_var(suffix);
+  fz_var(wrapped);
+  fz_try(context) {
+    gchar prefix_commands[G_ASCII_DTOSTR_BUF_SIZE * 2 + 48];
+    gchar horizontal[G_ASCII_DTOSTR_BUF_SIZE];
+    gchar vertical[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_dtostr(horizontal, sizeof(horizontal), scale);
+    g_ascii_dtostr(vertical, sizeof(vertical), scale);
+    g_snprintf(prefix_commands, sizeof(prefix_commands),
+               "q\n%s 0 0 %s 48.18898 56.69291 cm\n",
+               horizontal, vertical);
+    prefix = pdf_new_content_stream(context, document, prefix_commands);
+    suffix = pdf_new_content_stream(context, document, "Q\n");
+
+    pdf_obj *page = pdf_lookup_page_obj(context, document, page_number);
+    pdf_obj *contents = pdf_dict_get(context, page, PDF_NAME(Contents));
+    gint original_count = pdf_is_array(context, contents)
+        ? pdf_array_len(context, contents) : (contents ? 1 : 0);
+    wrapped = pdf_new_array(context, document, original_count + 2);
+    pdf_array_push(context, wrapped, prefix);
+    if (pdf_is_array(context, contents)) {
+      for (gint index = 0; index < original_count; index++)
+        pdf_array_push(context, wrapped,
+                       pdf_array_get(context, contents, index));
+    } else if (contents) {
+      pdf_array_push(context, wrapped, contents);
+    }
+    pdf_array_push(context, wrapped, suffix);
+    pdf_dict_put(context, page, PDF_NAME(Contents), wrapped);
+
+    const fz_rect a4 = fz_make_rect(0, 0, 595.2756f, 841.8898f);
+    pdf_dict_put_rect(context, page, PDF_NAME(MediaBox), a4);
+    pdf_dict_put_rect(context, page, PDF_NAME(CropBox), a4);
+    if (pdf_dict_get(context, page, PDF_NAME(BleedBox)))
+      pdf_dict_put_rect(context, page, PDF_NAME(BleedBox), a4);
+    if (pdf_dict_get(context, page, PDF_NAME(TrimBox)))
+      pdf_dict_put_rect(context, page, PDF_NAME(TrimBox), a4);
+    if (pdf_dict_get(context, page, PDF_NAME(ArtBox)))
+      pdf_dict_put_rect(context, page, PDF_NAME(ArtBox), a4);
+    pdf_scale_annotation_rectangles(context, page, scale);
+  }
+  fz_always(context) {
+    pdf_drop_obj(context, wrapped);
+    pdf_drop_obj(context, suffix);
+    pdf_drop_obj(context, prefix);
+  }
+  fz_catch(context) {
+    fz_rethrow(context);
+  }
+}
+
 static gboolean finalize_pdf(const PdfFinalizeData *data, GError **error) {
   fz_context *context = fz_new_context(NULL, NULL, FZ_STORE_UNLIMITED);
   if (!context) {
@@ -579,6 +683,8 @@ static gboolean finalize_pdf(const PdfFinalizeData *data, GError **error) {
                              "Phi Document Viewer");
 
     gint page_count = pdf_count_pages(context, document);
+    for (gint page = 0; page < page_count; page++)
+      pdf_scale_page_to_a4(context, document, page, data->scale);
     for (gint page = page_count - 1; page >= 0 && page_count > 1; page--) {
       if (pdf_page_is_blank(context, document, page)) {
         pdf_delete_page(context, document, page);
@@ -660,6 +766,8 @@ static void begin_pdf_finalization(PdfvMarkdownExport *self) {
   data->output = output;
   data->title = g_strdup(self->metadata_title ? self->metadata_title : "");
   data->author = g_strdup(self->metadata_author ? self->metadata_author : "");
+  data->scale = CLAMP(self->export_scale, MIN_EXPORT_SCALE,
+                      MAX_EXPORT_SCALE) / 100.0;
   GTask *task = g_task_new(self, NULL, on_pdf_finalized, NULL);
   g_task_set_task_data(task, data, (GDestroyNotify)pdf_finalize_data_free);
   set_busy(self, TRUE, "Finalizing PDF…");
@@ -740,13 +848,17 @@ static void start_print(PdfvMarkdownExport *self, const gchar *suggested) {
   webkit_print_operation_set_print_settings(self->print_operation, settings);
   g_object_unref(settings);
 
+  gdouble scale = CLAMP(self->export_scale, MIN_EXPORT_SCALE,
+                        MAX_EXPORT_SCALE) / 100.0;
   GtkPageSetup *setup = gtk_page_setup_new();
-  GtkPaperSize *paper = gtk_paper_size_new(GTK_PAPER_NAME_A4);
+  GtkPaperSize *paper = gtk_paper_size_new_custom(
+      "phi-export-page", "Phi export page", 176.0 / scale, 259.0 / scale,
+      GTK_UNIT_MM);
   gtk_page_setup_set_paper_size_and_default_margins(setup, paper);
-  gtk_page_setup_set_top_margin(setup, 18, GTK_UNIT_MM);
-  gtk_page_setup_set_bottom_margin(setup, 20, GTK_UNIT_MM);
-  gtk_page_setup_set_left_margin(setup, 17, GTK_UNIT_MM);
-  gtk_page_setup_set_right_margin(setup, 17, GTK_UNIT_MM);
+  gtk_page_setup_set_top_margin(setup, 0, GTK_UNIT_MM);
+  gtk_page_setup_set_bottom_margin(setup, 0, GTK_UNIT_MM);
+  gtk_page_setup_set_left_margin(setup, 0, GTK_UNIT_MM);
+  gtk_page_setup_set_right_margin(setup, 0, GTK_UNIT_MM);
   gtk_page_setup_set_orientation(setup, GTK_PAGE_ORIENTATION_PORTRAIT);
   webkit_print_operation_set_page_setup(self->print_operation, setup);
   gtk_paper_size_free(paper);
@@ -807,6 +919,8 @@ static void on_export_clicked(GtkButton *button,
   g_free(self->metadata_author);
   self->metadata_author = g_strdup(entry_text(self->author_row));
   g_strstrip(self->metadata_author);
+  self->export_scale = CLAMP(adw_spin_row_get_value(self->scale_row),
+                             MIN_EXPORT_SCALE, MAX_EXPORT_SCALE);
   gchar *suggested = g_strconcat(base, ".pdf", NULL);
   g_free(fallback);
   if (self->dialog)
@@ -1704,6 +1818,7 @@ void pdfv_markdown_export_present(
   AdwHeaderBar *header = ADW_HEADER_BAR(adw_header_bar_new());
   adw_toolbar_view_add_top_bar(toolbar, GTK_WIDGET(header));
   GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+  gtk_widget_add_css_class(paned, "pdf-export-paned");
   gtk_paned_set_position(GTK_PANED(paned), 370);
   gtk_paned_set_resize_start_child(GTK_PANED(paned), FALSE);
   gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);

@@ -2,7 +2,8 @@
   --pdf-font-size: 16px;
   --pdf-page-content-height: 250mm;
   --pdf-max-item-height: 245mm;
-  color-scheme: light;
+  --pdf-print-page-height: 259mm;
+  color-scheme: light dark;
 }
 
 html,
@@ -26,7 +27,38 @@ body.export-preview-mode {
   padding: 24px;
   overflow: auto;
   background: transparent;
-  scrollbar-gutter: stable;
+  color-scheme: light;
+  --preview-scrollbar-thumb: rgb(0 0 0 / 30%);
+  --preview-scrollbar-thumb-hover: rgb(0 0 0 / 45%);
+}
+
+#export-preview::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+#export-preview::-webkit-scrollbar-track,
+#export-preview::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+#export-preview::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--preview-scrollbar-thumb) content-box;
+}
+
+#export-preview::-webkit-scrollbar-thumb:hover {
+  background-color: var(--preview-scrollbar-thumb-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+  #export-preview {
+    color-scheme: dark;
+    --preview-scrollbar-thumb: rgb(255 255 255 / 28%);
+    --preview-scrollbar-thumb-hover: rgb(255 255 255 / 42%);
+  }
 }
 
 .pdf-stage {
@@ -45,9 +77,10 @@ body.export-preview-mode {
   min-height: 297mm;
   margin: 0;
   padding: 18mm 17mm 20mm;
-  overflow: visible;
+  overflow: hidden;
   background: #fff;
   color: #202020;
+  color-scheme: light;
   box-shadow: 0 2px 16px rgb(0 0 0 / 24%);
 }
 
@@ -111,6 +144,7 @@ body.export-preview-mode {
 }
 
 .export-note-editor .cm-editor {
+  display: block !important;
   font-size: var(--pdf-font-size);
   background: transparent;
 }
@@ -162,9 +196,27 @@ body.export-preview-mode {
 .export-note-editor img,
 .export-note-editor video,
 .export-note-editor svg {
+  box-sizing: border-box;
   max-width: 100%;
   max-height: var(--pdf-max-item-height);
   object-fit: contain;
+}
+
+.export-note-editor .image-widget-block,
+.export-note-editor .image-widget-inline,
+.export-note-editor .image-embed,
+.export-note-editor .media-embed,
+.export-note-editor .math-display,
+.export-note-editor mjx-container[display="true"] {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.export-note-editor .math-display,
+.export-note-editor mjx-container[display="true"] {
+  width: 100%;
+  margin-inline: auto;
+  text-align: center;
 }
 
 .export-note-editor .image-widget:has(.image-error),
@@ -173,7 +225,6 @@ body.export-preview-mode {
 }
 
 @page {
-  size: A4;
   margin: 0;
 }
 
@@ -204,5 +255,11 @@ body.export-preview-mode {
     background: #fff;
     box-shadow: none;
     transform: none !important;
+  }
+
+  .pdf-scaled-content {
+    zoom: 1 !important;
+    width: 100% !important;
+    padding-bottom: var(--pdf-print-page-height);
   }
 }
