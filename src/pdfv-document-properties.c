@@ -53,7 +53,7 @@ gchar *pdfv_document_properties_format_page_size(gfloat width_points,
                                        : "landscape";
   if (name)
     return g_strdup_printf(
-        "%s, %s — %.1f × %.1f mm (%.1f × %.1f pt)", name, orientation,
+        "%s, %s %.1f × %.1f mm (%.1f × %.1f pt)", name, orientation,
         width_mm, height_mm, width_points, height_points);
   return g_strdup_printf("%.1f × %.1f mm (%.1f × %.1f pt), %s",
                          width_mm, height_mm, width_points, height_points,
