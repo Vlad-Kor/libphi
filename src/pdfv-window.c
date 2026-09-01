@@ -715,7 +715,7 @@ static void rebuild_main_menu(PdfvWindow *self) {
     GFile *root = self->workspace
         ? pdfv_workspace_get_folder(self->workspace) : NULL;
     if (file && root && pdfv_workspace_file_is_within(root, file))
-      g_menu_append(self->export_menu_section, "Export multiple files",
+      g_menu_append(self->export_menu_section, "Export multiple files to PDF",
                     "win.export-notes-pdf");
   }
 

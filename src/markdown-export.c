@@ -2007,7 +2007,7 @@ void pdfv_markdown_export_present(
 
   self->dialog = adw_dialog_new();
   adw_dialog_set_title(self->dialog,
-      multiple ? "Export multiple files" : "Export to PDF");
+      multiple ? "Export multiple files to PDF" : "Export to PDF");
   adw_dialog_set_content_width(self->dialog, 1180);
   adw_dialog_set_content_height(self->dialog, 780);
   adw_dialog_set_presentation_mode(self->dialog, ADW_DIALOG_FLOATING);
