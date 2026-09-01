@@ -69,13 +69,17 @@ struct _PdfvMarkdownExport {
   gdouble font_size;
   gdouble export_scale;
   gboolean web_ready;
+  gboolean source_ready;
   gboolean preview_ready;
   gboolean preview_generation_active;
   gboolean preview_generation_pending;
+  gboolean export_requested;
   gboolean busy;
   guint64 preview_revision;
+  guint64 source_ready_revision;
   guint64 preview_generation_revision;
   guint64 cached_preview_revision;
+  guint64 export_requested_revision;
   WebKitPrintOperation *print_operation;
   guint print_idle_id;
   gchar *print_error;
@@ -219,9 +223,7 @@ static void update_export_enabled(PdfvMarkdownExport *self) {
   if (!self->export_button)
     return;
   gboolean valid_title = !self->multiple || entry_has_text(self->title_row);
-  gboolean exact_preview = self->preview_ready && self->temporary_filename &&
-      self->cached_preview_revision == self->preview_revision;
-  gboolean enabled = !self->busy && exact_preview && self->notes &&
+  gboolean enabled = !self->busy && self->notes &&
       self->notes->len > 0 && valid_title;
   gtk_widget_set_sensitive(GTK_WIDGET(self->export_button), enabled);
   if (self->multiple && self->title_row) {
@@ -235,9 +237,6 @@ static void update_export_enabled(PdfvMarkdownExport *self) {
   if (self->multiple && !valid_title)
     gtk_widget_set_tooltip_text(GTK_WIDGET(self->export_button),
                                 "Enter a document title first");
-  else if (!exact_preview)
-    gtk_widget_set_tooltip_text(GTK_WIDGET(self->export_button),
-                                "Waiting for the preview to finish");
   else
     gtk_widget_set_tooltip_text(GTK_WIDGET(self->export_button), NULL);
 }
@@ -246,7 +245,10 @@ static void send_preview_state(PdfvMarkdownExport *self, const gchar *type) {
   if (!self->bridge || !self->web_ready)
     return;
   self->preview_ready = FALSE;
+  self->source_ready = FALSE;
   self->preview_revision++;
+  if (self->export_requested)
+    self->export_requested_revision = self->preview_revision;
   if (!self->busy)
     set_preview_loading(self, "Updating preview…");
   update_export_enabled(self);
@@ -418,6 +420,24 @@ static void finish_preview_generation(PdfvMarkdownExport *self) {
   self->preview_generation_pending = FALSE;
   if (refresh && self->dialog)
     request_exact_preview(self, self->preview_revision);
+}
+
+static void cancel_pending_export(PdfvMarkdownExport *self) {
+  if (!self->export_requested)
+    return;
+  self->export_requested = FALSE;
+  if (self->dialog)
+    adw_dialog_set_can_close(self->dialog, TRUE);
+  set_busy(self, FALSE, NULL);
+}
+
+static void report_preview_generation_error(PdfvMarkdownExport *self,
+                                            const gchar *message) {
+  if (self->preview_generation_revision != self->preview_revision)
+    return;
+  if (self->export_requested_revision == self->preview_revision)
+    cancel_pending_export(self);
+  set_status(self, message, TRUE);
 }
 
 static void on_pdf_copied(GObject *source, GAsyncResult *result,
@@ -840,28 +860,36 @@ static void on_pdf_finalized(GObject *source, GAsyncResult *result,
                                                           &error);
   print_source_file_remove(self);
   if (!finalized) {
-    if (self->preview_generation_revision == self->preview_revision)
-      set_status(self, error ? error->message : "Could not finalize PDF",
-                 TRUE);
+    report_preview_generation_error(
+        self, error ? error->message : "Could not finalize PDF");
   } else if (self->preview_generation_revision == self->preview_revision &&
-             self->dialog && self->bridge) {
+             self->dialog) {
     temporary_file_remove(self);
     self->temporary_filename = g_steal_pointer(&finalized->filename);
     self->cached_preview_revision = self->preview_generation_revision;
 
-    JsonObject *payload = json_object_new();
-    json_object_set_int_member(payload, "revision",
-                               (gint64)self->cached_preview_revision);
-    JsonArray *pages = json_array_new();
-    for (guint index = 0; index < finalized->page_images->len; index++)
-      json_array_add_string_element(
-          pages, g_ptr_array_index(finalized->page_images, index));
-    json_object_set_array_member(payload, "pages", pages);
-    pdfv_markdown_editor_bridge_send(self->bridge, "export/pdf-preview",
-                                     NULL, payload);
-    json_object_unref(payload);
+    if (self->bridge) {
+      JsonObject *payload = json_object_new();
+      json_object_set_int_member(payload, "revision",
+                                 (gint64)self->cached_preview_revision);
+      JsonArray *pages = json_array_new();
+      for (guint index = 0; index < finalized->page_images->len; index++)
+        json_array_add_string_element(
+            pages, g_ptr_array_index(finalized->page_images, index));
+      json_object_set_array_member(payload, "pages", pages);
+      pdfv_markdown_editor_bridge_send(self->bridge, "export/pdf-preview",
+                                       NULL, payload);
+      json_object_unref(payload);
+    }
 
-    set_preview_loading(self, "Displaying preview…");
+    gboolean begin_save = self->export_requested &&
+        self->export_requested_revision == self->cached_preview_revision;
+    if (begin_save) {
+      self->export_requested = FALSE;
+      choose_export_destination(self);
+    } else if (!self->busy && self->bridge) {
+      set_preview_loading(self, "Displaying preview…");
+    }
     update_export_enabled(self);
   }
   pdf_finalize_result_free(finalized);
@@ -875,9 +903,8 @@ static void begin_pdf_finalization(PdfvMarkdownExport *self) {
   gint descriptor = g_file_open_tmp("phi-export-final-XXXXXX.pdf", &output,
                                     &error);
   if (descriptor < 0) {
-    if (self->preview_generation_revision == self->preview_revision)
-      set_status(self, error ? error->message
-                             : "Could not prepare PDF metadata", TRUE);
+    report_preview_generation_error(
+        self, error ? error->message : "Could not prepare PDF metadata");
     g_clear_error(&error);
     g_free(output);
     print_source_file_remove(self);
@@ -907,8 +934,7 @@ static void on_print_finished(WebKitPrintOperation *operation,
   (void)operation;
   g_clear_object(&self->print_operation);
   if (self->print_error) {
-    if (self->preview_generation_revision == self->preview_revision)
-      set_status(self, self->print_error, TRUE);
+    report_preview_generation_error(self, self->print_error);
     print_source_file_remove(self);
     g_clear_pointer(&self->print_error, g_free);
     finish_preview_generation(self);
@@ -917,8 +943,8 @@ static void on_print_finished(WebKitPrintOperation *operation,
   GStatBuf info;
   if (!self->print_source_filename ||
       g_stat(self->print_source_filename, &info) != 0 || info.st_size <= 0) {
-    if (self->preview_generation_revision == self->preview_revision)
-      set_status(self, "WebKit did not produce a PDF file", TRUE);
+    report_preview_generation_error(self,
+                                    "WebKit did not produce a PDF file");
     print_source_file_remove(self);
     finish_preview_generation(self);
     return;
@@ -936,9 +962,8 @@ static void start_preview_print(PdfvMarkdownExport *self) {
   gint descriptor = g_file_open_tmp("phi-export-XXXXXX.pdf",
                                     &self->print_source_filename, &error);
   if (descriptor < 0) {
-    if (self->preview_generation_revision == self->preview_revision)
-      set_status(self, error ? error->message
-                             : "Could not create a temporary PDF", TRUE);
+    report_preview_generation_error(
+        self, error ? error->message : "Could not create a temporary PDF");
     g_clear_error(&error);
     finish_preview_generation(self);
     return;
@@ -948,8 +973,7 @@ static void start_preview_print(PdfvMarkdownExport *self) {
 
   gchar *uri = g_filename_to_uri(self->print_source_filename, NULL, &error);
   if (!uri) {
-    if (self->preview_generation_revision == self->preview_revision)
-      set_status(self, error->message, TRUE);
+    report_preview_generation_error(self, error->message);
     g_clear_error(&error);
     print_source_file_remove(self);
     finish_preview_generation(self);
@@ -1044,7 +1068,9 @@ static void request_exact_preview(PdfvMarkdownExport *self, guint64 revision) {
     return;
   if (self->preview_generation_active || self->print_operation ||
       self->print_idle_id) {
-    self->preview_generation_pending = TRUE;
+    if (!self->preview_generation_active ||
+        self->preview_generation_revision != revision)
+      self->preview_generation_pending = TRUE;
     return;
   }
   capture_preview_metadata(self);
@@ -1057,9 +1083,7 @@ static void request_exact_preview(PdfvMarkdownExport *self, guint64 revision) {
 static void on_export_clicked(GtkButton *button,
                               PdfvMarkdownExport *self) {
   (void)button;
-  if (!self->preview_ready || self->busy || !self->notes->len ||
-      self->cached_preview_revision != self->preview_revision ||
-      !self->temporary_filename ||
+  if (self->busy || !self->notes->len ||
       (self->multiple && !entry_has_text(self->title_row)))
     return;
   gchar *entered = g_strdup(entry_text(self->title_row));
@@ -1073,8 +1097,18 @@ static void on_export_clicked(GtkButton *button,
   self->suggested_filename = safe_suggested_filename(suggested);
   if (self->dialog)
     adw_dialog_set_can_close(self->dialog, FALSE);
-  set_busy(self, TRUE, "Preparing PDF…");
-  choose_export_destination(self);
+  if (self->temporary_filename &&
+      self->cached_preview_revision == self->preview_revision) {
+    set_busy(self, TRUE, "Preparing PDF…");
+    choose_export_destination(self);
+  } else {
+    self->export_requested = TRUE;
+    self->export_requested_revision = self->preview_revision;
+    set_busy(self, TRUE, "Generating PDF…");
+    if (self->source_ready &&
+        self->source_ready_revision == self->preview_revision)
+      request_exact_preview(self, self->preview_revision);
+  }
   g_free(suggested);
   g_free(entered);
 }
@@ -1640,6 +1674,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     gint64 revision = payload
         ? json_object_get_int_member_with_default(payload, "revision", -1) : -1;
     if (revision == (gint64)self->preview_revision) {
+      self->source_ready = TRUE;
+      self->source_ready_revision = (guint64)revision;
       self->preview_ready = FALSE;
       update_export_enabled(self);
       request_exact_preview(self, (guint64)revision);
@@ -1678,6 +1714,7 @@ static void on_bridge_error(PdfvMarkdownEditorBridge *bridge,
                             PdfvMarkdownExport *self) {
   (void)bridge;
   g_warning("PDF export bridge: %s", message);
+  cancel_pending_export(self);
   set_status(self, message, TRUE);
 }
 
@@ -1723,6 +1760,7 @@ static gboolean on_context_menu(WebKitWebView *web_view,
 static void on_dialog_closed(AdwDialog *dialog,
                              PdfvMarkdownExport *self) {
   self->dialog = NULL;
+  self->export_requested = FALSE;
   if (self->picker_dialog)
     adw_dialog_close(self->picker_dialog);
   g_object_set_data(G_OBJECT(dialog), "phi-markdown-export", NULL);
