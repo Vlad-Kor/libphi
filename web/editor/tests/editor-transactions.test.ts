@@ -1266,6 +1266,105 @@ $$`;
     expect(editor.getDocument()).toBe(`${first}\nAfter`);
   });
 
+  it("cuts a selected image as its exact Markdown source", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const image = "![[diagram.png|240]]";
+    const text = `Before ${image} after`;
+    editor.openDocument({
+      documentId: "hard-image-cut",
+      path: "hard-image-cut.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const from = text.indexOf(image);
+    chooseHardPreview(editor.view, { from, to: from + image.length });
+    const clipboard = new Map<string, string>();
+    const cut = new Event("cut", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(cut, "clipboardData", { value: {
+      setData: (type: string, value: string) => clipboard.set(type, value),
+      types: [],
+      items: [],
+      files: [],
+    } });
+
+    editor.view.contentDOM.dispatchEvent(cut);
+
+    expect(cut.defaultPrevented).toBe(true);
+    expect(clipboard.get(PHI_MARKDOWN_CLIPBOARD_TYPE)).toBe(image);
+    expect(clipboard.get("text/plain")).toBe(image);
+    expect(editor.getDocument()).toBe("Before  after");
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getDocument()).toBe(text);
+  });
+
+  it("drags an image by moving its Markdown source in one transaction", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const imageSource = "![[diagram.png]]";
+    const text = `Before ${imageSource} after`;
+    editor.openDocument({
+      documentId: "hard-image-drag",
+      path: "hard-image-drag.md",
+      text,
+      revision: 1,
+      lineEnding: "LF",
+    });
+    const image = parent.querySelector<HTMLElement>(".image-widget")!;
+    expect(image.draggable).toBe(true);
+    expect(image.querySelector<HTMLImageElement>("img")?.draggable).toBe(false);
+    image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+
+    const transferred = new Map<string, string>();
+    const dataTransfer = {
+      dropEffect: "none",
+      effectAllowed: "none",
+      files: [],
+      items: [],
+      types: [],
+      setData: (type: string, value: string) => transferred.set(type, value),
+      getData: (type: string) => transferred.get(type) ?? "",
+    } as unknown as DataTransfer;
+    const dragstart = new Event("dragstart", {
+      bubbles: true,
+      cancelable: true,
+    }) as DragEvent;
+    Object.defineProperty(dragstart, "dataTransfer", {
+      value: dataTransfer,
+    });
+    image.dispatchEvent(dragstart);
+    expect(transferred.get("text/plain")).toBe(imageSource);
+    expect(dataTransfer.effectAllowed).toBe("move");
+
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue(text.length);
+    const drop = new MouseEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 10,
+      clientY: 10,
+    }) as DragEvent;
+    Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
+    editor.view.contentDOM.dispatchEvent(drop);
+
+    const movedPrefix = "Before  after";
+    expect(drop.defaultPrevented).toBe(true);
+    expect(editor.getDocument()).toBe(`${movedPrefix}${imageSource}`);
+    expect(selectedHardPreview(editor.view.state)).toEqual({
+      from: movedPrefix.length,
+      to: movedPrefix.length + imageSource.length,
+    });
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getDocument()).toBe(text);
+  });
+
   it("selects an image body without revealing its source", () => {
     const parent = document.createElement("div");
     document.body.append(parent);

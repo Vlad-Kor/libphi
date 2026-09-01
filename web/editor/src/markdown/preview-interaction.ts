@@ -148,6 +148,18 @@ export function selectedHardPreview(
   return state.field(hardPreviewSelection, false) ?? null;
 }
 
+export function selectedHardImagePreview(
+  state: EditorState,
+): HardPreviewSelection | null {
+  const selected = selectedHardPreview(state);
+  if (!selected) return null;
+  return hardNodes(state).some((node) =>
+    node.from === selected.from && node.to === selected.to &&
+    isRenderedImageNode(node))
+    ? selected
+    : null;
+}
+
 function buildHardAtomicRanges(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = hardNodes(state).map((node) =>
     Decoration.mark({}).range(node.from, node.to));
@@ -504,6 +516,89 @@ function clearHardPreview(view: EditorView): boolean {
   return true;
 }
 
+interface DraggedImageSource {
+  from: number;
+  to: number;
+  source: string;
+}
+
+const draggedImageSources = new WeakMap<EditorView, DraggedImageSource>();
+
+export function makeHardPreviewImageDraggable(
+  view: EditorView,
+  element: HTMLElement,
+  from: number,
+  to: number,
+): void {
+  element.draggable = true;
+  /* The wrapper represents the Markdown source. Prevent the browser from
+   * offering the image bytes or an anchor URL as a competing native drag. */
+  for (const child of element.querySelectorAll<HTMLElement>("img, a"))
+    child.draggable = false;
+  element.addEventListener("dragstart", (event) => {
+    const source = view.state.sliceDoc(from, to);
+    if (!event.dataTransfer || !source) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+    draggedImageSources.set(view, { from, to, source });
+    event.dataTransfer.setData("text/plain", source);
+    event.dataTransfer.effectAllowed = "move";
+  });
+}
+
+const hardPreviewImageDrag = Prec.highest(EditorView.domEventHandlers({
+  dragover(event, view) {
+    if (!draggedImageSources.has(view)) return false;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    /* Returning false leaves CodeMirror's drop cursor active. The drop
+     * handler below returns true before its default text-drop behavior. */
+    return false;
+  },
+  drop(event, view) {
+    const dragged = draggedImageSources.get(view);
+    if (!dragged) return false;
+    event.preventDefault();
+    draggedImageSources.delete(view);
+    const drop = view.posAtCoords(
+      { x: event.clientX, y: event.clientY }, false,
+    );
+    if (drop >= dragged.from && drop <= dragged.to) return true;
+    if (view.state.sliceDoc(dragged.from, dragged.to) !== dragged.source)
+      return true;
+
+    const length = dragged.to - dragged.from;
+    const movedFrom = drop < dragged.from ? drop : drop - length;
+    const changes = drop < dragged.from
+      ? [
+        { from: drop, insert: dragged.source },
+        { from: dragged.from, to: dragged.to },
+      ]
+      : [
+        { from: dragged.from, to: dragged.to },
+        { from: drop, insert: dragged.source },
+      ];
+    view.dispatch({
+      changes,
+      selection: EditorSelection.cursor(movedFrom),
+      effects: selectHardPreview.of({
+        from: movedFrom,
+        to: movedFrom + length,
+      }),
+      scrollIntoView: true,
+      userEvent: "move.drop",
+    });
+    view.focus();
+    return true;
+  },
+  dragend(_event, view) {
+    draggedImageSources.delete(view);
+    return false;
+  },
+}));
+
 const hardPreviewKeymap: readonly KeyBinding[] = [
   { key: "ArrowLeft", run: (view) => moveHorizontally(view, false) },
   { key: "ArrowRight", run: (view) => moveHorizontally(view, true) },
@@ -519,5 +614,6 @@ export const previewInteraction = [
   hardPreviewSelection,
   hardPreviewAtomicRanges,
   hardPreviewDOM,
+  hardPreviewImageDrag,
   Prec.highest(keymap.of(hardPreviewKeymap)),
 ];

@@ -28,6 +28,10 @@ import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { markdownAnalysis } from "./markdown/analysis";
+import {
+  selectHardPreview,
+  selectedHardImagePreview,
+} from "./markdown/preview-interaction";
 import { smartPairs } from "./markdown/pairs";
 import {
   canonicalMarkdownTable,
@@ -369,6 +373,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         }),
         EditorView.domEventHandlers({
           copy: (event, view) => this.handleCopy(event, view),
+          cut: (event, view) => this.handleCut(event, view),
           paste: (event, view) => this.handlePaste(event, view),
         }),
       ],
@@ -672,6 +677,24 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     event.clipboardData.setData("text/plain", markdown);
     event.clipboardData.setData("text/html", markdownClipboardHtml(markdown));
     event.preventDefault();
+    return true;
+  }
+
+  private handleCut(event: ClipboardEvent, view: EditorView): boolean {
+    const selected = selectedHardImagePreview(view.state);
+    if (!event.clipboardData || !selected) return false;
+    const markdown = view.state.sliceDoc(selected.from, selected.to);
+    event.clipboardData.setData(PHI_MARKDOWN_CLIPBOARD_TYPE, markdown);
+    event.clipboardData.setData("text/plain", markdown);
+    event.clipboardData.setData("text/html", markdownClipboardHtml(markdown));
+    event.preventDefault();
+    view.dispatch({
+      changes: { from: selected.from, to: selected.to },
+      selection: EditorSelection.cursor(selected.from),
+      effects: selectHardPreview.of(null),
+      scrollIntoView: true,
+      userEvent: "delete.cut",
+    });
     return true;
   }
 

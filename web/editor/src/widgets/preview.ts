@@ -15,6 +15,7 @@ import { calloutIcon } from "../markdown/callout-icons";
 import { pinPreviewSource } from "../markdown/source-edit";
 import {
   chooseHardPreview,
+  makeHardPreviewImageDraggable,
   selectHardPreview,
   selectedHardPreview,
 } from "../markdown/preview-interaction";
@@ -133,6 +134,7 @@ function markHardRenderedItem(
   from: number,
   to: number,
   clickSelects: boolean,
+  draggableImage = false,
 ): HTMLElement {
   element.classList.add("cm-hard-rendered-item");
   element.dataset.hardPreviewFrom = String(from);
@@ -140,16 +142,24 @@ function markHardRenderedItem(
   element.setAttribute("aria-selected", "false");
   if (clickSelects) {
     element.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
+      if (!draggableImage) event.preventDefault();
       event.stopPropagation();
       chooseHardPreview(view, { from, to });
     });
+    if (draggableImage) {
+      /* Allow the browser's native drag gesture, but keep the compatibility
+       * mouse event from starting CodeMirror's text-selection gesture. */
+      element.addEventListener("mousedown", (event) =>
+        event.stopPropagation());
+    }
   } else {
     element.addEventListener("pointerdown", () => {
       if (selectedHardPreview(view.state))
         view.dispatch({ effects: selectHardPreview.of(null) });
     });
   }
+  if (draggableImage)
+    makeHardPreviewImageDraggable(view, element, from, to);
   return element;
 }
 
@@ -754,7 +764,7 @@ function interactiveImage(
     commit(current + (event.key === "ArrowRight" ? 10 : -10));
   });
   container.append(image, source, handle);
-  return markHardRenderedItem(view, container, from, to, true);
+  return markHardRenderedItem(view, container, from, to, true, true);
 }
 
 export class LinkWidget extends WidgetType {
@@ -1029,7 +1039,7 @@ export class MarkdownLinkWidget extends WidgetType {
         sourceEditButton(view, this.from, this.to, "Edit linked image source"),
       );
       return markHardRenderedItem(
-        view, container, this.from, this.to, true,
+        view, container, this.from, this.to, true, true,
       );
     }
     return link;
