@@ -14,6 +14,8 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
+#include <mupdf/fitz.h>
+#include <mupdf/pdf.h>
 #include <webkit/webkit.h>
 
 #include <string.h>
@@ -21,6 +23,8 @@
 #define MAX_EXPORT_NOTES 256
 #define MAX_EXPORT_NOTE_BYTES (20 * 1024 * 1024)
 #define MAX_EXPORT_EMBED_DEPTH 4
+#define MIN_EXPORT_SCALE 50.0
+#define MAX_EXPORT_SCALE 200.0
 
 typedef struct {
   gchar *path;
@@ -51,13 +55,18 @@ struct _PdfvMarkdownExport {
   GtkLabel *picker_count_label;
   AdwEntryRow *title_row;
   AdwEntryRow *author_row;
-  AdwSpinRow *font_row;
+  AdwSpinRow *scale_row;
+  AdwSwitchRow *cover_row;
+  GtkWidget *title_required_icon;
   GtkListBox *order_list;
   GtkButton *export_button;
   GtkLabel *status_label;
   GtkWidget *status_spinner;
+  GtkWidget *busy_overlay;
+  GtkLabel *busy_label;
   gboolean multiple;
   gboolean allow_remote_images;
+  gdouble font_size;
   gboolean web_ready;
   gboolean preview_ready;
   gboolean busy;
@@ -67,6 +76,10 @@ struct _PdfvMarkdownExport {
   gchar *print_error;
   gchar *temporary_filename;
   gchar *suggested_filename;
+  gchar *metadata_title;
+  gchar *metadata_author;
+  PdfvMarkdownExportSavedFunc saved_callback;
+  gpointer saved_data;
 };
 
 struct _PdfvMarkdownExportClass {
@@ -168,15 +181,30 @@ static void set_status(PdfvMarkdownExport *self, const gchar *message,
   gtk_widget_remove_css_class(GTK_WIDGET(self->status_label), "error");
   if (error)
     gtk_widget_add_css_class(GTK_WIDGET(self->status_label), "error");
+  if ((!message || !*message || error) && self->status_spinner)
+    gtk_widget_set_visible(self->status_spinner, FALSE);
+}
+
+static void set_preview_loading(PdfvMarkdownExport *self,
+                                const gchar *message) {
+  set_status(self, message, FALSE);
+  if (self->status_spinner)
+    gtk_widget_set_visible(self->status_spinner, TRUE);
 }
 
 static void set_busy(PdfvMarkdownExport *self, gboolean busy,
                      const gchar *message) {
   self->busy = busy;
-  if (self->status_spinner)
-    gtk_widget_set_visible(self->status_spinner, busy);
-  if (message)
-    set_status(self, message, FALSE);
+  if (self->busy_overlay)
+    gtk_widget_set_visible(self->busy_overlay, busy);
+  if (self->busy_label && message)
+    gtk_label_set_text(self->busy_label, message);
+  if (busy) {
+    if (self->status_spinner)
+      gtk_widget_set_visible(self->status_spinner, FALSE);
+    if (self->status_label)
+      gtk_widget_set_visible(GTK_WIDGET(self->status_label), FALSE);
+  }
   update_export_enabled(self);
 }
 
@@ -187,6 +215,14 @@ static void update_export_enabled(PdfvMarkdownExport *self) {
   gboolean enabled = !self->busy && self->preview_ready && self->notes &&
       self->notes->len > 0 && valid_title;
   gtk_widget_set_sensitive(GTK_WIDGET(self->export_button), enabled);
+  if (self->multiple && self->title_row) {
+    if (valid_title)
+      gtk_widget_remove_css_class(GTK_WIDGET(self->title_row), "error");
+    else
+      gtk_widget_add_css_class(GTK_WIDGET(self->title_row), "error");
+    if (self->title_required_icon)
+      gtk_widget_set_visible(self->title_required_icon, !valid_title);
+  }
   if (self->multiple && !valid_title)
     gtk_widget_set_tooltip_text(GTK_WIDGET(self->export_button),
                                 "Enter a document title first");
@@ -203,15 +239,18 @@ static void send_preview_state(PdfvMarkdownExport *self, const gchar *type) {
   self->preview_ready = FALSE;
   self->preview_revision++;
   if (!self->busy)
-    set_status(self, "Updating preview…", FALSE);
+    set_preview_loading(self, "Updating preview…");
   update_export_enabled(self);
 
   JsonObject *payload = json_object_new();
   json_object_set_boolean_member(payload, "multiple", self->multiple);
   json_object_set_string_member(payload, "title", entry_text(self->title_row));
   json_object_set_string_member(payload, "author", entry_text(self->author_row));
-  json_object_set_double_member(payload, "fontSize",
-      self->font_row ? adw_spin_row_get_value(self->font_row) : 16.0);
+  json_object_set_double_member(payload, "fontSize", self->font_size);
+  json_object_set_double_member(payload, "scale",
+      self->scale_row ? adw_spin_row_get_value(self->scale_row) : 100.0);
+  json_object_set_boolean_member(payload, "coverPage",
+      self->cover_row ? adw_switch_row_get_active(self->cover_row) : TRUE);
   json_object_set_int_member(payload, "revision",
                              (gint64)self->preview_revision);
 
@@ -243,8 +282,15 @@ static void on_metadata_changed(GtkEditable *editable,
   update_export_enabled(self);
 }
 
-static void on_font_changed(AdwSpinRow *row, GParamSpec *pspec,
-                            PdfvMarkdownExport *self) {
+static void on_scale_changed(AdwSpinRow *row, GParamSpec *pspec,
+                             PdfvMarkdownExport *self) {
+  (void)row;
+  (void)pspec;
+  send_preview_state(self, "export/metadata");
+}
+
+static void on_cover_changed(AdwSwitchRow *row, GParamSpec *pspec,
+                             PdfvMarkdownExport *self) {
   (void)row;
   (void)pspec;
   send_preview_state(self, "export/metadata");
@@ -359,10 +405,17 @@ static void on_pdf_copied(GObject *source, GAsyncResult *result,
   temporary_file_remove(self);
   if (self->dialog)
     adw_dialog_set_can_close(self->dialog, TRUE);
-  set_busy(self, FALSE, copied ? "PDF saved successfully."
-                              : "Could not save the PDF.");
-  if (!copied)
+  set_busy(self, FALSE, NULL);
+  if (!copied) {
     set_status(self, error ? error->message : "Could not save PDF", TRUE);
+  } else {
+    GObject *parent_object = g_weak_ref_get(&self->parent);
+    if (self->dialog)
+      adw_dialog_close(self->dialog);
+    if (parent_object && GTK_IS_WIDGET(parent_object) && self->saved_callback)
+      self->saved_callback(GTK_WIDGET(parent_object), self->saved_data);
+    g_clear_object(&parent_object);
+  }
   g_clear_error(&error);
   g_object_unref(self);
 }
@@ -382,7 +435,7 @@ static void on_save_file_selected(GObject *source, GAsyncResult *result,
                                    GTK_DIALOG_ERROR_DISMISSED))
       set_status(self, error->message, TRUE);
     else
-      set_status(self, "Export cancelled.", FALSE);
+      set_status(self, NULL, FALSE);
     g_clear_error(&error);
     g_object_unref(self);
     return;
@@ -443,6 +496,177 @@ static void on_print_failed(WebKitPrintOperation *operation, GError *error,
                                      : "Could not generate PDF");
 }
 
+typedef struct {
+  gchar *source;
+  gchar *output;
+  gchar *title;
+  gchar *author;
+} PdfFinalizeData;
+
+static void pdf_finalize_data_free(PdfFinalizeData *data) {
+  if (!data)
+    return;
+  if (data->output)
+    g_unlink(data->output);
+  g_free(data->source);
+  g_free(data->output);
+  g_free(data->title);
+  g_free(data->author);
+  g_free(data);
+}
+
+static gboolean pdf_page_is_blank(fz_context *context, pdf_document *document,
+                                  gint page_number) {
+  fz_pixmap *pixmap = NULL;
+  gboolean blank = TRUE;
+  fz_var(pixmap);
+  fz_try(context) {
+    pixmap = fz_new_pixmap_from_page_number(
+        context, (fz_document *)document, page_number,
+        fz_scale(0.2f, 0.2f), fz_device_rgb(context), 0);
+    gint width = fz_pixmap_width(context, pixmap);
+    gint height = fz_pixmap_height(context, pixmap);
+    gint components = fz_pixmap_components(context, pixmap);
+    gint stride = fz_pixmap_stride(context, pixmap);
+    guchar *samples = fz_pixmap_samples(context, pixmap);
+    for (gint y = 0; blank && y < height; y++) {
+      guchar *row = samples + y * stride;
+      for (gint x = 0; blank && x < width; x++) {
+        guchar *pixel = row + x * components;
+        for (gint component = 0; component < MIN(components, 3);
+             component++) {
+          if (pixel[component] < 250) {
+            blank = FALSE;
+            break;
+          }
+        }
+      }
+    }
+  }
+  fz_always(context) {
+    fz_drop_pixmap(context, pixmap);
+  }
+  fz_catch(context) {
+    fz_rethrow(context);
+  }
+  return blank;
+}
+
+static gboolean finalize_pdf(const PdfFinalizeData *data, GError **error) {
+  fz_context *context = fz_new_context(NULL, NULL, FZ_STORE_UNLIMITED);
+  if (!context) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "Could not initialize PDF metadata support");
+    return FALSE;
+  }
+
+  pdf_document *document = NULL;
+  gchar *failure = NULL;
+  fz_var(document);
+  fz_try(context) {
+    fz_register_document_handlers(context);
+    document = pdf_open_document(context, data->source);
+    pdf_obj *trailer = pdf_trailer(context, document);
+    pdf_obj *info = pdf_dict_get(context, trailer, PDF_NAME(Info));
+    if (!pdf_is_dict(context, info)) {
+      pdf_obj *reference = pdf_add_new_dict(context, document, 4);
+      pdf_dict_put_drop(context, trailer, PDF_NAME(Info), reference);
+      info = pdf_dict_get(context, trailer, PDF_NAME(Info));
+    }
+    pdf_dict_put_text_string(context, info, PDF_NAME(Title), data->title);
+    pdf_dict_put_text_string(context, info, PDF_NAME(Author), data->author);
+    pdf_dict_put_text_string(context, info, PDF_NAME(Creator),
+                             "Phi Document Viewer");
+
+    gint page_count = pdf_count_pages(context, document);
+    for (gint page = page_count - 1; page >= 0 && page_count > 1; page--) {
+      if (pdf_page_is_blank(context, document, page)) {
+        pdf_delete_page(context, document, page);
+        page_count--;
+      }
+    }
+    pdf_write_options options = pdf_default_write_options;
+    pdf_save_document(context, document, data->output, &options);
+  }
+  fz_catch(context) {
+    failure = g_strdup(fz_caught_message(context));
+  }
+  pdf_drop_document(context, document);
+  fz_drop_context(context);
+
+  if (failure) {
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                "Could not finalize the PDF: %s", failure);
+    g_free(failure);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+static void finalize_pdf_thread(GTask *task, gpointer source_object,
+                                gpointer task_data,
+                                GCancellable *cancellable) {
+  (void)source_object;
+  (void)cancellable;
+  PdfFinalizeData *data = task_data;
+  GError *error = NULL;
+  if (!finalize_pdf(data, &error)) {
+    g_task_return_error(task, error);
+    return;
+  }
+  g_task_return_pointer(task, g_steal_pointer(&data->output), g_free);
+}
+
+static void on_pdf_finalized(GObject *source, GAsyncResult *result,
+                             gpointer user_data) {
+  (void)user_data;
+  PdfvMarkdownExport *self = (PdfvMarkdownExport *)source;
+  GError *error = NULL;
+  gchar *finalized = g_task_propagate_pointer(G_TASK(result), &error);
+  if (!finalized) {
+    if (self->dialog)
+      adw_dialog_set_can_close(self->dialog, TRUE);
+    set_busy(self, FALSE, NULL);
+    set_status(self, error ? error->message : "Could not finalize PDF", TRUE);
+    temporary_file_remove(self);
+    g_clear_error(&error);
+    return;
+  }
+  temporary_file_remove(self);
+  self->temporary_filename = finalized;
+  choose_export_destination(self);
+}
+
+static void begin_pdf_finalization(PdfvMarkdownExport *self) {
+  GError *error = NULL;
+  gchar *output = NULL;
+  gint descriptor = g_file_open_tmp("phi-export-final-XXXXXX.pdf", &output,
+                                    &error);
+  if (descriptor < 0) {
+    if (self->dialog)
+      adw_dialog_set_can_close(self->dialog, TRUE);
+    set_busy(self, FALSE, NULL);
+    set_status(self, error ? error->message
+                           : "Could not prepare PDF metadata", TRUE);
+    g_clear_error(&error);
+    g_free(output);
+    return;
+  }
+  g_close(descriptor, NULL);
+  g_unlink(output);
+
+  PdfFinalizeData *data = g_new0(PdfFinalizeData, 1);
+  data->source = g_strdup(self->temporary_filename);
+  data->output = output;
+  data->title = g_strdup(self->metadata_title ? self->metadata_title : "");
+  data->author = g_strdup(self->metadata_author ? self->metadata_author : "");
+  GTask *task = g_task_new(self, NULL, on_pdf_finalized, NULL);
+  g_task_set_task_data(task, data, (GDestroyNotify)pdf_finalize_data_free);
+  set_busy(self, TRUE, "Finalizing PDF…");
+  g_task_run_in_thread(task, finalize_pdf_thread);
+  g_object_unref(task);
+}
+
 static void on_print_finished(WebKitPrintOperation *operation,
                               PdfvMarkdownExport *self) {
   (void)operation;
@@ -466,7 +690,7 @@ static void on_print_finished(WebKitPrintOperation *operation,
     temporary_file_remove(self);
     return;
   }
-  choose_export_destination(self);
+  begin_pdf_finalization(self);
 }
 
 static void start_print(PdfvMarkdownExport *self, const gchar *suggested) {
@@ -481,6 +705,8 @@ static void start_print(PdfvMarkdownExport *self, const gchar *suggested) {
   gint descriptor = g_file_open_tmp("phi-export-XXXXXX.pdf",
                                     &self->temporary_filename, &error);
   if (descriptor < 0) {
+    if (self->dialog)
+      adw_dialog_set_can_close(self->dialog, TRUE);
     set_busy(self, FALSE, NULL);
     set_status(self, error ? error->message
                            : "Could not create a temporary PDF", TRUE);
@@ -492,6 +718,8 @@ static void start_print(PdfvMarkdownExport *self, const gchar *suggested) {
 
   gchar *uri = g_filename_to_uri(self->temporary_filename, NULL, &error);
   if (!uri) {
+    if (self->dialog)
+      adw_dialog_set_can_close(self->dialog, TRUE);
     set_busy(self, FALSE, NULL);
     set_status(self, error->message, TRUE);
     g_clear_error(&error);
@@ -574,8 +802,15 @@ static void on_export_clicked(GtkButton *button,
   ExportNote *first = g_ptr_array_index(self->notes, 0);
   gchar *fallback = note_title(first->name);
   const gchar *base = *entered ? entered : fallback;
+  g_free(self->metadata_title);
+  self->metadata_title = g_strdup(base);
+  g_free(self->metadata_author);
+  self->metadata_author = g_strdup(entry_text(self->author_row));
+  g_strstrip(self->metadata_author);
   gchar *suggested = g_strconcat(base, ".pdf", NULL);
   g_free(fallback);
+  if (self->dialog)
+    adw_dialog_set_can_close(self->dialog, FALSE);
   set_busy(self, TRUE, "Preparing PDF…");
   schedule_print(self, suggested);
   g_free(suggested);
@@ -1144,8 +1379,11 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
         ? json_object_get_int_member_with_default(payload, "revision", -1) : -1;
     if (revision == (gint64)self->preview_revision) {
       self->preview_ready = TRUE;
-      if (!self->busy)
-        set_status(self, "Preview ready.", FALSE);
+      if (!self->busy) {
+        set_status(self, NULL, FALSE);
+        if (self->status_spinner)
+          gtk_widget_set_visible(self->status_spinner, FALSE);
+      }
       update_export_enabled(self);
     }
   } else if (g_str_equal(type, "embed/read")) {
@@ -1233,17 +1471,38 @@ static GtkWidget *create_controls(PdfvMarkdownExport *self) {
   adw_preferences_group_set_title(metadata, "Document");
   self->title_row = ADW_ENTRY_ROW(adw_entry_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(self->title_row),
-                                "Title");
+                                self->multiple ? "Title (required)" : "Title");
+  if (self->multiple) {
+    self->title_required_icon = gtk_image_new_from_icon_name(
+        "dialog-warning-symbolic");
+    gtk_widget_add_css_class(self->title_required_icon, "error");
+    gtk_widget_set_tooltip_text(self->title_required_icon,
+                                "A title is required");
+    gtk_accessible_update_property(
+        GTK_ACCESSIBLE(self->title_required_icon),
+        GTK_ACCESSIBLE_PROPERTY_LABEL, "A title is required", -1);
+    adw_entry_row_add_suffix(self->title_row, self->title_required_icon);
+  }
   self->author_row = ADW_ENTRY_ROW(adw_entry_row_new());
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(self->author_row),
                                 "Author");
-  self->font_row = ADW_SPIN_ROW(adw_spin_row_new_with_range(12, 24, 1));
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(self->font_row),
-                                "Font size");
-  adw_action_row_set_subtitle(ADW_ACTION_ROW(self->font_row), "Pixels");
+  self->scale_row = ADW_SPIN_ROW(adw_spin_row_new_with_range(
+      MIN_EXPORT_SCALE, MAX_EXPORT_SCALE, 5));
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(self->scale_row),
+                                "Scale");
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(self->scale_row), "Percent");
   adw_preferences_group_add(metadata, GTK_WIDGET(self->title_row));
   adw_preferences_group_add(metadata, GTK_WIDGET(self->author_row));
-  adw_preferences_group_add(metadata, GTK_WIDGET(self->font_row));
+  adw_preferences_group_add(metadata, GTK_WIDGET(self->scale_row));
+  if (self->multiple) {
+    self->cover_row = ADW_SWITCH_ROW(adw_switch_row_new());
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(self->cover_row),
+                                  "Title page");
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(self->cover_row),
+                                "Add a separate title and author page");
+    adw_switch_row_set_active(self->cover_row, TRUE);
+    adw_preferences_group_add(metadata, GTK_WIDGET(self->cover_row));
+  }
   gtk_box_append(GTK_BOX(box), GTK_WIDGET(metadata));
 
   if (self->multiple) {
@@ -1270,7 +1529,7 @@ static GtkWidget *create_controls(PdfvMarkdownExport *self) {
   GtkWidget *status = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
   self->status_spinner = adw_spinner_new();
   gtk_widget_set_size_request(self->status_spinner, 20, 20);
-  gtk_widget_set_visible(self->status_spinner, FALSE);
+  gtk_widget_set_visible(self->status_spinner, TRUE);
   self->status_label = GTK_LABEL(gtk_label_new("Loading preview…"));
   gtk_label_set_xalign(self->status_label, 0.0f);
   gtk_label_set_wrap(self->status_label, TRUE);
@@ -1288,6 +1547,38 @@ static GtkWidget *create_controls(PdfvMarkdownExport *self) {
   gtk_box_append(GTK_BOX(box), GTK_WIDGET(self->export_button));
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), box);
   return scroll;
+}
+
+static GtkWidget *create_busy_overlay(PdfvMarkdownExport *self) {
+  GtkWidget *backdrop = gtk_center_box_new();
+  gtk_widget_set_halign(backdrop, GTK_ALIGN_FILL);
+  gtk_widget_set_valign(backdrop, GTK_ALIGN_FILL);
+  gtk_widget_set_hexpand(backdrop, TRUE);
+  gtk_widget_set_vexpand(backdrop, TRUE);
+  gtk_widget_add_css_class(backdrop, "view");
+
+  GtkWidget *card = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_halign(card, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(card, GTK_ALIGN_CENTER);
+  gtk_widget_set_margin_top(card, 24);
+  gtk_widget_set_margin_bottom(card, 24);
+  gtk_widget_set_margin_start(card, 24);
+  gtk_widget_set_margin_end(card, 24);
+  gtk_widget_add_css_class(card, "card");
+  GtkWidget *spinner = adw_spinner_new();
+  gtk_widget_set_size_request(spinner, 28, 28);
+  gtk_widget_set_margin_top(spinner, 20);
+  gtk_widget_set_margin_bottom(spinner, 20);
+  gtk_widget_set_margin_start(spinner, 20);
+  self->busy_label = GTK_LABEL(gtk_label_new("Generating PDF…"));
+  gtk_widget_add_css_class(GTK_WIDGET(self->busy_label), "heading");
+  gtk_widget_set_margin_end(GTK_WIDGET(self->busy_label), 20);
+  gtk_box_append(GTK_BOX(card), spinner);
+  gtk_box_append(GTK_BOX(card), GTK_WIDGET(self->busy_label));
+  gtk_center_box_set_center_widget(GTK_CENTER_BOX(backdrop), card);
+  gtk_widget_set_visible(backdrop, FALSE);
+  self->busy_overlay = backdrop;
+  return backdrop;
 }
 
 static void pdfv_markdown_export_dispose(GObject *object) {
@@ -1326,6 +1617,8 @@ static void pdfv_markdown_export_finalize(GObject *object) {
   g_free(self->preamble);
   g_free(self->print_error);
   g_free(self->suggested_filename);
+  g_free(self->metadata_title);
+  g_free(self->metadata_author);
   G_OBJECT_CLASS(pdfv_markdown_export_parent_class)->finalize(object);
 }
 
@@ -1343,7 +1636,8 @@ static void pdfv_markdown_export_init(PdfvMarkdownExport *self) {
 
 void pdfv_markdown_export_present(
     GtkWidget *parent, PdfvMarkdownEditor *editor, PdfvWorkspace *workspace,
-    gboolean multiple, gboolean allow_remote_images, gdouble font_size) {
+    gboolean multiple, gboolean allow_remote_images, gdouble font_size,
+    PdfvMarkdownExportSavedFunc saved_callback, gpointer saved_data) {
   g_return_if_fail(GTK_IS_WIDGET(parent));
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(editor));
   g_return_if_fail(!multiple || PDFV_IS_WORKSPACE(workspace));
@@ -1364,6 +1658,9 @@ void pdfv_markdown_export_present(
   self->preamble = pdfv_markdown_editor_dup_preamble(editor);
   self->multiple = multiple;
   self->allow_remote_images = allow_remote_images;
+  self->font_size = font_size > 0.0 ? font_size : 16.0;
+  self->saved_callback = saved_callback;
+  self->saved_data = saved_data;
   gchar *current_text = pdfv_markdown_editor_dup_text(editor);
   g_ptr_array_add(self->notes, export_note_new(relative, current_text));
   g_free(current_text);
@@ -1374,6 +1671,8 @@ void pdfv_markdown_export_present(
       WEBKIT_TYPE_WEB_VIEW,
       "web-context", pdfv_markdown_resource_scheme_get_context(self->resources),
       "user-content-manager", self->content_manager, NULL));
+  const GdkRGBA transparent = {0, 0, 0, 0};
+  webkit_web_view_set_background_color(self->web_view, &transparent);
   pdfv_markdown_resource_scheme_bind_web_view(self->resources,
                                                self->web_view);
   WebKitSettings *settings = webkit_web_view_get_settings(self->web_view);
@@ -1397,7 +1696,7 @@ void pdfv_markdown_export_present(
 
   self->dialog = adw_dialog_new();
   adw_dialog_set_title(self->dialog,
-      multiple ? "Export Notes as One PDF" : "Export to PDF");
+      multiple ? "Export multiple files" : "Export to PDF");
   adw_dialog_set_content_width(self->dialog, 1180);
   adw_dialog_set_content_height(self->dialog, 780);
   adw_dialog_set_presentation_mode(self->dialog, ADW_DIALOG_FLOATING);
@@ -1411,19 +1710,25 @@ void pdfv_markdown_export_present(
   GtkWidget *controls = create_controls(self);
   gtk_paned_set_start_child(GTK_PANED(paned), controls);
   gtk_paned_set_end_child(GTK_PANED(paned), GTK_WIDGET(self->web_view));
-  adw_toolbar_view_set_content(toolbar, paned);
+  GtkWidget *overlay = gtk_overlay_new();
+  gtk_overlay_set_child(GTK_OVERLAY(overlay), paned);
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), create_busy_overlay(self));
+  adw_toolbar_view_set_content(toolbar, overlay);
   adw_dialog_set_child(self->dialog, GTK_WIDGET(toolbar));
 
   gchar *title = note_title(relative);
   gtk_editable_set_text(GTK_EDITABLE(self->title_row), multiple ? "" : title);
   g_free(title);
-  adw_spin_row_set_value(self->font_row, CLAMP(font_size, 12.0, 24.0));
+  adw_spin_row_set_value(self->scale_row, 100.0);
   g_signal_connect(self->title_row, "changed",
                    G_CALLBACK(on_metadata_changed), self);
   g_signal_connect(self->author_row, "changed",
                    G_CALLBACK(on_metadata_changed), self);
-  g_signal_connect(self->font_row, "notify::value",
-                   G_CALLBACK(on_font_changed), self);
+  g_signal_connect(self->scale_row, "notify::value",
+                   G_CALLBACK(on_scale_changed), self);
+  if (self->cover_row)
+    g_signal_connect(self->cover_row, "notify::active",
+                     G_CALLBACK(on_cover_changed), self);
   refresh_order_list(self);
   update_export_enabled(self);
   g_signal_connect(self->dialog, "closed", G_CALLBACK(on_dialog_closed), self);

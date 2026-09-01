@@ -11,9 +11,13 @@
 
 G_BEGIN_DECLS
 
+typedef void (*PdfvMarkdownExportSavedFunc)(GtkWidget *parent,
+                                            gpointer user_data);
+
 void pdfv_markdown_export_present(
     GtkWidget *parent, PdfvMarkdownEditor *editor, PdfvWorkspace *workspace,
-    gboolean multiple, gboolean allow_remote_images, gdouble font_size);
+    gboolean multiple, gboolean allow_remote_images, gdouble font_size,
+    PdfvMarkdownExportSavedFunc saved_callback, gpointer saved_data);
 
 G_END_DECLS
 

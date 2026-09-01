@@ -1,6 +1,6 @@
 import { acceptNativeResponse, reportError, sendNative } from "./bridge";
 import { PhiMarkdownEditor } from "./editor";
-import { noteTitle, type ExportDocument } from "./export-utils";
+import { exportScale, noteTitle, type ExportDocument } from "./export-utils";
 import { defaultSettings } from "./settings";
 import type { EditorSettings, NativeMessage } from "./types";
 
@@ -9,6 +9,8 @@ interface ExportPreviewState {
   title: string;
   author: string;
   fontSize: number;
+  scale: number;
+  coverPage: boolean;
   documents: ExportDocument[];
   settings?: EditorSettings;
   preamble?: string;
@@ -25,16 +27,36 @@ const pdfCover = byId("pdf-cover");
 const pdfTitle = byId("pdf-title");
 const pdfAuthor = byId("pdf-author");
 const pdfSections = byId("pdf-sections");
+const pdfPreview = byId("export-preview");
+const pdfStage = byId("pdf-stage");
+const pdfDocument = byId("pdf-document");
+const pdfScaledContent = byId("pdf-scaled-content");
 
 let state: ExportPreviewState = {
   multiple: false,
   title: "",
   author: "",
   fontSize: 16,
+  scale: 100,
+  coverPage: true,
   documents: [],
 };
 let editors: PhiMarkdownEditor[] = [];
 let generation = 0;
+let previewFrame = 0;
+
+function updatePreviewFit(): void {
+  window.cancelAnimationFrame(previewFrame);
+  previewFrame = window.requestAnimationFrame(() => {
+    const naturalWidth = pdfDocument.offsetWidth;
+    if (!naturalWidth) return;
+    const availableWidth = Math.max(1, pdfPreview.clientWidth - 48);
+    const previewScale = Math.min(1, availableWidth / naturalWidth);
+    pdfDocument.style.transform = `scale(${previewScale})`;
+    pdfStage.style.width = `${Math.ceil(naturalWidth * previewScale)}px`;
+    pdfStage.style.height = `${Math.ceil(pdfDocument.scrollHeight * previewScale)}px`;
+  });
+}
 
 function applyMetadata(): void {
   const title = state.title.trim();
@@ -42,15 +64,28 @@ function applyMetadata(): void {
   pdfTitle.textContent = title;
   pdfAuthor.textContent = author;
   pdfAuthor.toggleAttribute("hidden", !author);
-  pdfCover.toggleAttribute("hidden", !state.multiple);
+  pdfCover.toggleAttribute("hidden", !state.multiple || !state.coverPage);
   document.title = title || "Phi PDF Preview";
   document.querySelector<HTMLMetaElement>('meta[name="author"]')!.content = author;
+  const configuredFontSize = Number.isFinite(state.fontSize) && state.fontSize > 0
+    ? state.fontSize
+    : 16;
   document.documentElement.style.setProperty(
-    "--pdf-font-size", `${Math.max(12, Math.min(24, state.fontSize))}px`,
+    "--pdf-font-size", `${configuredFontSize}px`,
+  );
+  const scale = exportScale(state.scale);
+  pdfScaledContent.style.setProperty("zoom", String(scale));
+  pdfScaledContent.style.width = `${100 / scale}%`;
+  document.documentElement.style.setProperty(
+    "--pdf-page-content-height", `${250 / scale}mm`,
+  );
+  document.documentElement.style.setProperty(
+    "--pdf-max-item-height", `${245 / scale}mm`,
   );
   for (const editor of editors) {
-    editor.updateTheme({ dark: false, fontScale: state.fontSize / 16 });
+    editor.updateTheme({ dark: false, fontScale: configuredFontSize / 16 });
   }
+  updatePreviewFit();
 }
 
 function imagesSettled(): boolean {
@@ -77,6 +112,7 @@ async function waitUntilSettled(expectedGeneration: number): Promise<void> {
   observer.disconnect();
   await new Promise<void>((resolve) => requestAnimationFrame(() =>
     requestAnimationFrame(() => resolve())));
+  updatePreviewFit();
 }
 
 async function rebuild(): Promise<void> {
@@ -152,6 +188,10 @@ window.addEventListener("error", (event) =>
   reportError(event.error ?? event.message, "export-preview/window"));
 window.addEventListener("unhandledrejection", (event) =>
   reportError(event.reason, "export-preview/promise"));
+const previewObserver = new ResizeObserver(updatePreviewFit);
+previewObserver.observe(pdfPreview);
+previewObserver.observe(pdfDocument);
+updatePreviewFit();
 sendNative("export/ready", {
   capabilities: ["live-preview", "mathjax", "mermaid", "note-embeds"],
 });

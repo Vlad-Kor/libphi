@@ -63,6 +63,7 @@ struct _PdfvWindow {
   GtkMenuButton *menu_button;
   GtkButton *presentation_exit_button;
   GMenu *file_menu_section;
+  GMenu *export_menu_section;
   GMenu *workspace_menu_section;
   GMenu *zoom_menu_section;
   GMenu *view_menu_section;
@@ -685,7 +686,8 @@ static void rebuild_open_workspace_menu(PdfvWindow *self) {
 }
 
 static void rebuild_main_menu(PdfvWindow *self) {
-  if (!self->file_menu_section || !self->zoom_menu_section ||
+  if (!self->file_menu_section || !self->export_menu_section ||
+      !self->zoom_menu_section ||
       !self->view_menu_section)
     return;
 
@@ -704,14 +706,16 @@ static void rebuild_main_menu(PdfvWindow *self) {
   if (has_pdf)
     g_menu_append(self->file_menu_section, "Document Properties…",
                   "win.document-properties");
+
+  g_menu_remove_all(self->export_menu_section);
   if (self->current_editor) {
-    g_menu_append(self->file_menu_section, "Export to PDF…",
+    g_menu_append(self->export_menu_section, "Export to PDF",
                   "win.export-pdf");
     GFile *file = pdfv_markdown_editor_get_file(self->current_editor);
     GFile *root = self->workspace
         ? pdfv_workspace_get_folder(self->workspace) : NULL;
     if (file && root && pdfv_workspace_file_is_within(root, file))
-      g_menu_append(self->file_menu_section, "Export Notes as One PDF…",
+      g_menu_append(self->export_menu_section, "Export multiple files",
                     "win.export-notes-pdf");
   }
 
@@ -5173,6 +5177,8 @@ typedef struct {
   gboolean multiple;
 } MarkdownExportRequest;
 
+static void on_markdown_export_saved(GtkWidget *parent, gpointer user_data);
+
 static void markdown_export_request_free(MarkdownExportRequest *request) {
   g_clear_object(&request->window);
   g_clear_object(&request->editor);
@@ -5197,10 +5203,20 @@ static void on_markdown_export_flushed(GObject *source,
         request->multiple,
         pdfv_settings_get_allow_remote_images(request->window->settings),
         pdfv_settings_get_markdown_font_scale(request->window->settings) *
-            16.0);
+            16.0,
+        on_markdown_export_saved, NULL);
   }
   g_clear_error(&error);
   markdown_export_request_free(request);
+}
+
+static void on_markdown_export_saved(GtkWidget *parent, gpointer user_data) {
+  (void)user_data;
+  if (!PDFV_IS_WINDOW(parent))
+    return;
+  PdfvWindow *self = PDFV_WINDOW(parent);
+  adw_toast_overlay_add_toast(
+      self->toast_overlay, adw_toast_new("PDF saved successfully"));
 }
 
 static void begin_markdown_export(PdfvWindow *self, gboolean multiple) {
@@ -6818,6 +6834,7 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_pointer(&self->workspace_document_cache, g_hash_table_unref);
   g_clear_pointer(&self->workspace_expanded_paths, g_hash_table_unref);
   g_clear_object(&self->file_menu_section);
+  g_clear_object(&self->export_menu_section);
   g_clear_object(&self->workspace_menu_section);
   g_clear_object(&self->zoom_menu_section);
   g_clear_object(&self->view_menu_section);
@@ -7010,6 +7027,9 @@ static void pdfv_window_init(PdfvWindow *self) {
   GMenu *menu = g_menu_new();
   self->file_menu_section = g_menu_new();
   g_menu_append_section(menu, NULL, G_MENU_MODEL(self->file_menu_section));
+
+  self->export_menu_section = g_menu_new();
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(self->export_menu_section));
 
   self->workspace_menu_section = g_menu_new();
   g_menu_append_section(menu, NULL,
