@@ -394,13 +394,18 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .cm-concealed { display: none; }
 .cm-height-estimate { display: none; }
 .cm-live-heading, .cm-live-heading * { font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; font-weight: 780; line-height: 1.25; text-decoration: none !important; }
-.cm-live-heading { padding-top: .4em; }
-.cm-live-heading-1 { font-size: 2.25em; font-weight: 820; }
-.cm-live-heading-2 { font-size: 1.75em; }
-.cm-live-heading-3 { font-size: 1.42em; }
-.cm-live-heading-4 { font-size: 1.18em; }
-.cm-live-heading-5 { font-size: 1.08em; }
-.cm-live-heading-6 { font-size: 1em; color: var(--editor-muted); }
+/* CodeMirror's generated theme scopes .cm-line with an extra class. Match
+ * that specificity so the editor's shorthand line padding cannot erase the
+ * heading's visual separation. */
+.cm-editor .cm-line.cm-live-heading {
+  padding-top: calc(var(--phi-heading-top-space) * var(--editor-font-scale));
+}
+.cm-live-heading-1 { --phi-heading-top-space: 17.5px; font-size: 2.25em; font-weight: 820; }
+.cm-live-heading-2 { --phi-heading-top-space: 16px; font-size: 1.75em; }
+.cm-live-heading-3 { --phi-heading-top-space: 14.5px; font-size: 1.42em; }
+.cm-live-heading-4 { --phi-heading-top-space: 13px; font-size: 1.18em; }
+.cm-live-heading-5 { --phi-heading-top-space: 11.5px; font-size: 1.08em; }
+.cm-live-heading-6 { --phi-heading-top-space: 10.5px; font-size: 1em; color: var(--editor-muted); }
 .cm-live-emphasis { font-style: italic; }
 .cm-live-strong, .cm-live-strong * { font-weight: 750; text-decoration: none !important; }
 .cm-live-strike { text-decoration: line-through; }

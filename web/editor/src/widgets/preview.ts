@@ -271,14 +271,16 @@ function estimateWrappedLineHeight(
 
 export function estimatedHeadingHeight(level: number, text: string): number {
   const factors = [2.25, 1.75, 1.42, 1.18, 1.08, 1];
-  const factor = factors[Math.max(0, Math.min(5, level - 1))];
+  const padding = [17.5, 16, 14.5, 13, 11.5, 10.5];
+  const index = Math.max(0, Math.min(5, level - 1));
+  const factor = factors[index];
   const fontSize = 16 * previewGeometryContext.fontScale * factor;
   return estimateWrappedLineHeight(
     text,
     fontSize,
     fontSize * 1.25,
     previewGeometryContext.textWidth,
-    fontSize * 0.4,
+    padding[index] * previewGeometryContext.fontScale,
   );
 }
 

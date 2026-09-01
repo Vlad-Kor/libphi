@@ -263,7 +263,7 @@ describe("CodeMirror document transactions", () => {
 
   it("gives cold headings and wrapped list lines realistic height-map hints", () => {
     setPreviewGeometryContext("Geometry.md", 320, 1);
-    expect(estimatedHeadingHeight(1, "A heading")).toBeCloseTo(59.4);
+    expect(estimatedHeadingHeight(1, "A heading")).toBeCloseTo(62.5);
     expect(estimatedListLineHeight("word ".repeat(30), 2))
       .toBeGreaterThan(50);
     const marker = new LineHeightEstimateWidget(72);
@@ -273,10 +273,19 @@ describe("CodeMirror document transactions", () => {
 
   it("adds only top space to headings and a little vertical display-math space", () => {
     const css = readFileSync("src/styles/editor.css", "utf8");
-    const heading = /\.cm-live-heading\s*\{([^}]*)\}/s.exec(css)?.[1] ?? "";
+    const heading = /\.cm-editor\s+\.cm-line\.cm-live-heading\s*\{([^}]*)\}/s
+      .exec(css)?.[1] ?? "";
     const displayMath = /\.math-display\s*\{([^}]*)\}/s.exec(css)?.[1] ?? "";
-    expect(heading).toMatch(/padding-top:\s*\.4em/);
+    expect(heading).toMatch(
+      /padding-top:\s*calc\(var\(--phi-heading-top-space\)\s*\*\s*var\(--editor-font-scale\)\)/,
+    );
     expect(heading).not.toMatch(/padding-bottom|padding:\s/);
+    expect(css).toMatch(
+      /\.cm-live-heading-1\s*\{[^}]*--phi-heading-top-space:\s*17\.5px/,
+    );
+    expect(css).toMatch(
+      /\.cm-live-heading-6\s*\{[^}]*--phi-heading-top-space:\s*10\.5px/,
+    );
     expect(displayMath).toMatch(/padding:\s*\.625em 0/);
   });
 
