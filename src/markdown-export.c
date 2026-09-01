@@ -61,7 +61,6 @@ struct _PdfvMarkdownExport {
   GtkListBox *order_list;
   GtkButton *export_button;
   GtkLabel *status_label;
-  GtkWidget *status_spinner;
   GtkWidget *preview_spinner;
   GtkWidget *busy_overlay;
   GtkLabel *busy_label;
@@ -193,15 +192,11 @@ static void set_status(PdfvMarkdownExport *self, const gchar *message,
   gtk_widget_remove_css_class(GTK_WIDGET(self->status_label), "error");
   if (error)
     gtk_widget_add_css_class(GTK_WIDGET(self->status_label), "error");
-  if ((!message || !*message || error) && self->status_spinner)
-    gtk_widget_set_visible(self->status_spinner, FALSE);
 }
 
 static void set_preview_loading(PdfvMarkdownExport *self,
                                 const gchar *message) {
   set_status(self, message, FALSE);
-  if (self->status_spinner)
-    gtk_widget_set_visible(self->status_spinner, TRUE);
 }
 
 static void set_busy(PdfvMarkdownExport *self, gboolean busy,
@@ -212,8 +207,6 @@ static void set_busy(PdfvMarkdownExport *self, gboolean busy,
   if (self->busy_label && message)
     gtk_label_set_text(self->busy_label, message);
   if (busy) {
-    if (self->status_spinner)
-      gtk_widget_set_visible(self->status_spinner, FALSE);
     if (self->status_label)
       gtk_widget_set_visible(GTK_WIDGET(self->status_label), FALSE);
   }
@@ -1697,11 +1690,8 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
       self->preview_ready = TRUE;
       if (self->preview_spinner)
         gtk_widget_set_visible(self->preview_spinner, FALSE);
-      if (!self->busy) {
+      if (!self->busy)
         set_status(self, NULL, FALSE);
-        if (self->status_spinner)
-          gtk_widget_set_visible(self->status_spinner, FALSE);
-      }
       update_export_enabled(self);
     }
   } else if (g_str_equal(type, "embed/read")) {
@@ -1848,18 +1838,6 @@ static GtkWidget *create_controls(PdfvMarkdownExport *self) {
   GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_vexpand(spacer, TRUE);
   gtk_box_append(GTK_BOX(box), spacer);
-  GtkWidget *status = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-  self->status_spinner = adw_spinner_new();
-  gtk_widget_set_size_request(self->status_spinner, 20, 20);
-  gtk_widget_set_visible(self->status_spinner, TRUE);
-  self->status_label = GTK_LABEL(gtk_label_new("Loading preview…"));
-  gtk_label_set_xalign(self->status_label, 0.0f);
-  gtk_label_set_wrap(self->status_label, TRUE);
-  gtk_widget_set_hexpand(GTK_WIDGET(self->status_label), TRUE);
-  gtk_widget_add_css_class(GTK_WIDGET(self->status_label), "dim-label");
-  gtk_box_append(GTK_BOX(status), self->status_spinner);
-  gtk_box_append(GTK_BOX(status), GTK_WIDGET(self->status_label));
-  gtk_box_append(GTK_BOX(box), status);
   self->export_button = GTK_BUTTON(gtk_button_new_with_label("Export PDF"));
   gtk_widget_add_css_class(GTK_WIDGET(self->export_button),
                            "suggested-action");
@@ -2036,16 +2014,27 @@ void pdfv_markdown_export_present(
   GtkWidget *preview_overlay = gtk_overlay_new();
   gtk_overlay_set_child(GTK_OVERLAY(preview_overlay),
                         GTK_WIDGET(self->web_view));
+  GtkWidget *preview_status = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+  gtk_widget_set_halign(preview_status, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(preview_status, GTK_ALIGN_CENTER);
+  gtk_widget_set_can_target(preview_status, FALSE);
   self->preview_spinner = adw_spinner_new();
   gtk_widget_set_size_request(self->preview_spinner, 36, 36);
   gtk_widget_set_halign(self->preview_spinner, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign(self->preview_spinner, GTK_ALIGN_CENTER);
   gtk_widget_set_can_target(self->preview_spinner, FALSE);
   gtk_accessible_update_property(
       GTK_ACCESSIBLE(self->preview_spinner), GTK_ACCESSIBLE_PROPERTY_LABEL,
       "Loading PDF preview", -1);
+  self->status_label = GTK_LABEL(gtk_label_new("Loading preview…"));
+  gtk_label_set_justify(self->status_label, GTK_JUSTIFY_CENTER);
+  gtk_label_set_wrap(self->status_label, TRUE);
+  gtk_label_set_max_width_chars(self->status_label, 42);
+  gtk_widget_set_halign(GTK_WIDGET(self->status_label), GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class(GTK_WIDGET(self->status_label), "dim-label");
+  gtk_box_append(GTK_BOX(preview_status), self->preview_spinner);
+  gtk_box_append(GTK_BOX(preview_status), GTK_WIDGET(self->status_label));
   gtk_overlay_add_overlay(GTK_OVERLAY(preview_overlay),
-                          self->preview_spinner);
+                          preview_status);
   gtk_paned_set_end_child(GTK_PANED(paned), preview_overlay);
   GtkWidget *overlay = gtk_overlay_new();
   gtk_overlay_set_child(GTK_OVERLAY(overlay), paned);
