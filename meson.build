@@ -23,7 +23,7 @@ cc = meson.get_compiler('c')
 
 gtk_dep = dependency('gtk4', version: '>= 4.19.4')
 gio_dep = dependency('gio-2.0')
-mupdf_dep = dependency('mupdf')
+mupdf_dep = dependency('mupdf', version: '>= 1.27.0')
 webkit_dep = dependency('webkitgtk-6.0', version: '>= 2.40')
 json_glib_dep = dependency('json-glib-1.0')
 gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0')
