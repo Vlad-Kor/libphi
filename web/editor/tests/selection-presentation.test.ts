@@ -3,7 +3,7 @@ import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { PhiMarkdownEditor } from "../src/editor";
-import { holdSelectionPresentation, heldPresentationSelection } from "../src/markdown/selection-presentation";
+
 
 if (!Range.prototype.getClientRects)
   Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
@@ -22,8 +22,8 @@ function open(text: string) {
   return editor;
 }
 
-describe("stable pointer selection presentation", () => {
-  it("holds concealed scripts while selecting their exact source, then reveals on release", () => {
+describe("immediate pointer selection presentation", () => {
+  it("reveals scripts immediately and permits selecting their individual source characters", () => {
     const text = String.raw`Looking at the rectangle boundaries gives a <span style=color:#ed4564>drawing of the planar dual</span> \(G^*\):`;
     const editor = open(text);
     const { view } = editor;
@@ -31,46 +31,11 @@ describe("stable pointer selection presentation", () => {
     const from = text.indexOf("G^");
     view.dispatch({ selection: { anchor: from } });
     expect(view.dom.querySelector(".cm-latex-conceal-script")).not.toBeNull();
-    view.dispatch({ effects: holdSelectionPresentation.of(true) });
-    view.dispatch({ selection: EditorSelection.range(from, from + 3), userEvent: "select.pointer" });
-    expect(view.dom.querySelector(".cm-latex-conceal-script")).not.toBeNull();
-    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe("G^*");
-    window.dispatchEvent(new MouseEvent("mouseup"));
+    view.dispatch({ selection: EditorSelection.range(from, from + 2), userEvent: "select.pointer" });
     expect(view.dom.querySelector(".cm-latex-conceal-script")).toBeNull();
-    expect(view.state.selection.main.from).toBe(from);
-    expect(view.state.selection.main.to).toBe(from + 3);
-  });
-
-  it("holds rendered math across a forward or backward drag and releases on blur", () => {
-    const text = "Before $a^2$ after";
-    const { view } = open(text);
-    for (const [anchor, head] of [[0, text.length], [text.length, 0]]) {
-      view.dispatch({ selection: { anchor } });
-      expect(view.dom.querySelector(".cm-content .math-inline")).not.toBeNull();
-      view.dispatch({ effects: holdSelectionPresentation.of(true) });
-      view.dispatch({ selection: EditorSelection.range(anchor, head), userEvent: "select.pointer" });
-      expect(view.dom.querySelector(".cm-content .math-inline")).not.toBeNull();
-      window.dispatchEvent(new Event("blur"));
-      expect(view.dom.querySelector(".cm-content .math-inline")).toBeNull();
-      expect(view.state.selection.main.anchor).toBe(anchor);
-      expect(view.state.selection.main.head).toBe(head);
-    }
-  });
-
-  it("releases the held selection when editing starts", () => {
-    const { view } = open("$x^2$");
-    view.dispatch({ effects: holdSelectionPresentation.of(true) });
-    view.dispatch({ changes: { from: 2, insert: "y" } });
-    expect(view.state.field(heldPresentationSelection)).toBeNull();
-  });
-
-  it("installs a mouse selection hook without replacing CodeMirror hit testing", () => {
-    const { view } = open("text $x^2$");
-    const hooks = view.state.facet(EditorView.mouseSelectionStyle);
-    for (const hook of hooks) expect(hook(view, new MouseEvent("mousedown", { button: 0 }))).toBeNull();
-    expect(view.state.field(heldPresentationSelection)).not.toBeNull();
-    window.dispatchEvent(new MouseEvent("mouseup"));
-    expect(view.state.field(heldPresentationSelection)).toBeNull();
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe("G^");
+    view.dispatch({ selection: EditorSelection.range(from + 1, from + 2), userEvent: "select.pointer" });
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe("^");
   });
 });
 

@@ -1,4 +1,5 @@
 // Real-layout regression harness, bundled by tests/run-geometry-webkit.py.
+import { verifyPointerConceal } from "./pointer-conceal-webkit";
 import { parseMarkdownNodes, type MarkdownNodeKind } from "../src/markdown/parser";
 import { acceptNativeResponse } from "../src/bridge";
 import { PhiMarkdownEditor } from "../src/editor";
@@ -20,6 +21,7 @@ for (const Widget of [...Object.values(widgets), RichTableWidget]) {
 }
 
 async function run() {
+  await verifyPointerConceal();
   window.addEventListener("phi-native-message", ((event: CustomEvent) => {
     const message = event.detail;
     if (!message.id) return;

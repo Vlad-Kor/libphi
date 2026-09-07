@@ -24,7 +24,7 @@ import {
   mathNodeAt,
   type MarkdownAnalysis,
 } from "../markdown/analysis";
-import { holdSelectionPresentation, presentationSelection, stableSelectionPresentation } from "../markdown/selection-presentation";
+import { ConcealPointerGuard, refreshPointerConceal } from "./pointer-conceal";
 import { measurePerformance } from "../performance";
 import {
   brackets,
@@ -646,7 +646,7 @@ class LatexConcealWidget extends WidgetType {
 }
 
 function selectionTouchesSpec(view: EditorView, spec: LatexConcealSpec): boolean {
-  return presentationSelection(view.state).ranges.some((selection) => spec.some((replacement) => {
+  return view.state.selection.ranges.some((selection) => spec.some((replacement) => {
     if (selection.empty)
       return selection.from >= replacement.from && selection.from <= replacement.to;
     return selection.from <= replacement.to && selection.to >= replacement.from;
@@ -672,7 +672,7 @@ function concealedFragment(source: string, offset: number): LatexConcealSpec[] {
 class AtomicRange extends RangeValue {}
 const atomicRange = new AtomicRange();
 
-function concealPresentation(view: EditorView): {
+function concealPresentation(view: EditorView, guard: ConcealPointerGuard): {
   decorations: DecorationSet;
   atomicRanges: RangeSet<RangeValue>;
 } {
@@ -685,7 +685,7 @@ function concealPresentation(view: EditorView): {
           node.contentFrom,
         ));
     const enabled = specs.filter((spec) =>
-      !selectionTouchesSpec(view, spec)).flat();
+      !guard.reveal(spec, selectionTouchesSpec(view, spec))).flat();
     const decorations = Decoration.set(enabled.map((replacement) =>
       replacement.from === replacement.to
         ? Decoration.widget({
@@ -742,8 +742,7 @@ const latexSyntaxPlugin = ViewPlugin.fromClass(class {
         !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
         !selectionInMath(markdownAnalysis(update.state), update.state)) {
       this.decorations = this.decorations.map(update.changes);
-    } else if (update.transactions.some((tr) => tr.effects.some((effect) =>
-        effect.is(holdSelectionPresentation))) || update.docChanged || (update.selectionSet &&
+    } else if (update.docChanged || (update.selectionSet &&
         (selectionInMath(markdownAnalysis(update.startState), update.startState) ||
          selectionInMath(markdownAnalysis(update.state), update.state)))) {
       this.decorations = Decoration.set(syntaxRanges(update.view), true);
@@ -754,24 +753,29 @@ const latexSyntaxPlugin = ViewPlugin.fromClass(class {
 const latexConcealPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
   atomicRanges: RangeSet<RangeValue>;
+  readonly guard: ConcealPointerGuard;
 
   constructor(view: EditorView) {
+    this.guard = new ConcealPointerGuard(view);
     ({ decorations: this.decorations, atomicRanges: this.atomicRanges } =
-      concealPresentation(view));
+      concealPresentation(view, this.guard));
   }
 
+  destroy(): void { this.guard.destroy(); }
+
   update(update: ViewUpdate): void {
+    if (update.docChanged) this.guard.clear();
     if (update.docChanged && !changedMath(update) &&
         !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
         !selectionInMath(markdownAnalysis(update.state), update.state)) {
       this.decorations = this.decorations.map(update.changes);
       this.atomicRanges = this.atomicRanges.map(update.changes);
     } else if (update.transactions.some((tr) => tr.effects.some((effect) =>
-        effect.is(holdSelectionPresentation))) || update.docChanged || (update.selectionSet &&
+        effect.is(refreshPointerConceal))) || update.docChanged || (update.selectionSet &&
         (selectionInMath(markdownAnalysis(update.startState), update.startState) ||
          selectionInMath(markdownAnalysis(update.state), update.state)))) {
       ({ decorations: this.decorations, atomicRanges: this.atomicRanges } =
-        concealPresentation(update.view));
+        concealPresentation(update.view, this.guard));
     }
   }
 }, {
@@ -783,7 +787,6 @@ const latexConcealPlugin = ViewPlugin.fromClass(class {
 export function latexEnhancements(conceal: boolean): Extension {
   return [
     markdownAnalysisField,
-    ...stableSelectionPresentation,
     latexSyntaxPlugin,
     conceal ? latexConcealPlugin : [],
   ];

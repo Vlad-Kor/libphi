@@ -1283,21 +1283,49 @@ export class CalloutWidget extends WidgetType {
     details.open = this.fold !== "-";
     const title = document.createElement("summary");
     title.className = "callout-title";
+    title.tabIndex = -1;
     const label = this.title || this.type.replace(/(^|-)(\p{L})/gu,
       (_m, prefix, letter) => `${prefix ? " " : ""}${letter.toUpperCase()}`);
     title.append(calloutIcon(this.type), document.createTextNode(label));
     wireRenderedContent(title);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "callout-toggle";
+    const updateToggle = () => {
+      toggle.textContent = details.open ? "⌄" : "›";
+      toggle.setAttribute("aria-expanded", String(details.open));
+      toggle.setAttribute("aria-label", `${details.open ? "Collapse" : "Expand"} callout`);
+    };
+    updateToggle();
+    toggle.addEventListener("pointerdown", event => event.stopPropagation());
+    toggle.addEventListener("click", event => {
+      // Cancel summary's native activation: only this button owns disclosure.
+      event.preventDefault();
+      event.stopPropagation();
+      details.open = !details.open;
+      updateToggle();
+    });
+    title.append(toggle);
     const body = document.createElement("div");
     body.className = "callout-content";
     body.innerHTML = renderMarkdown(this.body);
     wireRenderedContent(body);
     details.append(title, body);
-    details.addEventListener("toggle", () => view.requestMeasure());
+    details.addEventListener("toggle", () => {
+      updateToggle();
+      view.requestMeasure();
+    });
     const revealClick = (event: MouseEvent) => {
-      // Let the browser's summary control own disclosure, including its marker.
-      if (event.target instanceof Node && title.contains(event.target)) return;
+      if (event.target instanceof Node && toggle.contains(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
+      if (!this.body || event.target instanceof Node && title.contains(event.target)) {
+        const header = view.state.doc.lineAt(this.from);
+        const prefix = /^ {0,3}>[ \t]*\[![^\]]+\][+-]?[ \t]*/.exec(header.text)?.[0].length ?? 0;
+        const selected = clickedSourceOffset(title, this.title, event) ?? 0;
+        revealAt(view, Math.min(header.to, header.from + prefix + selected));
+        return;
+      }
       const selected = clickedSourceOffset(body, this.body, event) ?? 0;
       revealAt(view, calloutBodyPosition(view, this.from, this.body, selected));
     };

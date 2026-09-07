@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
-import { foldEffect, foldedRanges } from "@codemirror/language";
+import { codeFolding, foldEffect, foldedRanges } from "@codemirror/language";
+import { StateEffect } from "@codemirror/state";
 import { runScopeHandlers } from "@codemirror/view";
 import { afterEach, expect, it } from "vitest";
 import { PhiMarkdownEditor } from "../src/editor";
+
+if (!Range.prototype.getClientRects)
+  Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 
 const editors: PhiMarkdownEditor[] = [];
 afterEach(() => {
@@ -38,9 +42,10 @@ it("selects the existing query through both native find and the search-panel key
 });
 it("reveals and selects a native result inside a folded section", () => {
   const editor = editorFor("# Heading\ninside match\n# Next\nend");
+  editor.view.dispatch({ effects: StateEffect.appendConfig.of(codeFolding()) });
   editor.view.dispatch({ effects: foldEffect.of({ from: 9, to: 22 }) });
   expect(foldedRanges(editor.view.state).size).toBe(1);
-  editor.receive({ version: 1, type: "navigation/reveal-range", payload: { from: 17, to: 22 } });
+  editor.receive({ protocol: 1, type: "navigation/reveal-range", payload: { from: 17, to: 22 } });
   expect(editor.view.state.sliceDoc(editor.view.state.selection.main.from,
     editor.view.state.selection.main.to)).toBe("match");
   expect(foldedRanges(editor.view.state).size).toBe(0);

@@ -1564,7 +1564,7 @@ $$`;
     document.body.append(parent);
     const editor = new PhiMarkdownEditor(parent);
     views.push(editor.view);
-    const text = "$$\nx = 0\n$$";
+    const text = "$$\nx = 0\n$$\n\nAfter";
     editor.openDocument({ documentId: "math", path: "math.md", text, revision: 1, lineEnding: "LF" });
 
     editor.view.dispatch({ selection: { anchor: 5 } });
