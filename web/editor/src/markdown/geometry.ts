@@ -3,6 +3,9 @@ import {
   Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType,
 } from "@codemirror/view";
 
+import { PreviewIdleGate } from "./preview-idle";
+import { measurePerformance } from "../performance";
+
 export const previewGeometryEnvironment = Facet.define<() => void>();
 
 /** Heights belong to a document revision and its exact browser layout. */
@@ -100,12 +103,14 @@ export function previewGeometryPreflight(decorations: StateField<DecorationSet>)
     private host: HTMLElement | null = null;
     private width = 0;
     private resize: ResizeObserver | undefined;
-    private lastInput = 0;
-    private onInput = () => { this.lastInput = performance.now(); };
+    private activity = new PreviewIdleGate();
+    private onInput = () => { this.activity.noteActivity(); };
     private onFonts = () => this.invalidate();
 
     constructor(private view: EditorView) {
       view.dom.addEventListener("keydown", this.onInput, true);
+      view.scrollDOM.addEventListener("wheel", this.onInput, { passive: true });
+      view.scrollDOM.addEventListener("touchmove", this.onInput, { passive: true });
       view.scrollDOM.addEventListener("scroll", this.onInput, { passive: true });
       document.fonts?.addEventListener("loadingdone", this.onFonts);
       if (typeof ResizeObserver !== "undefined") {
@@ -145,7 +150,6 @@ export function previewGeometryPreflight(decorations: StateField<DecorationSet>)
         this.timer = window.setTimeout(() => {
           // Start after the first paint; give active input priority even on
           // WebKit versions without requestIdleCallback.
-          if (performance.now() - this.lastInput < 150) return this.schedule();
           const signal = this.generation.signal;
           void this.run(signal).catch(error => {
             if (!signal.aborted) {
@@ -184,18 +188,18 @@ export function previewGeometryPreflight(decorations: StateField<DecorationSet>)
         if (!heights.has(key)) jobs.set(key, { block: false, from: line.from, line: line.number });
       }
       const results = new Map<string, number>();
-      const flush = () => {
-        if (!results.size || signal.aborted) return;
-        view.dispatch({ effects: [view.scrollSnapshot(), measuredPreviewGeometry.of(new Map(results))] });
+      const flush = async () => {
+        if (!results.size || !await this.activity.wait(signal)) return;
+        // CodeMirror already preserves its layout anchor. A scrollSnapshot
+        // forces an additional absolute scrollTop write, even with no change.
+        measurePerformance("markdown/geometry-publish", () => view.dispatch({
+          effects: measuredPreviewGeometry.of(new Map(results)),
+        }));
         results.clear();
       };
       for (const [key, job] of [...jobs].sort((a, b) =>
         Math.abs(a[1].from - view.viewport.from) - Math.abs(b[1].from - view.viewport.from))) {
-        if (signal.aborted) return;
-        while (performance.now() - this.lastInput < 150) {
-          await new Promise(resolve => window.setTimeout(resolve, 50));
-          if (signal.aborted) return;
-        }
+        if (!await this.activity.wait(signal)) return;
         const host = view.dom.cloneNode(false) as HTMLElement;
         host.removeAttribute("id");
         host.setAttribute("aria-hidden", "true");
@@ -260,7 +264,7 @@ export function previewGeometryPreflight(decorations: StateField<DecorationSet>)
           host.remove();
           if (this.host === host) this.host = null;
         }
-        if (results.size >= 8 && performance.now() - this.lastInput >= 150) flush();
+        if (results.size >= 8) await flush();
         // Explicit idle yield even when the renderer was already cached.
         await new Promise<void>(resolve => {
           if (typeof window.requestIdleCallback === "function")
@@ -268,7 +272,7 @@ export function previewGeometryPreflight(decorations: StateField<DecorationSet>)
           else window.setTimeout(resolve, 16);
         });
       }
-      flush();
+      await flush();
       if (!signal.aborted) status.pending = false;
     }
 
@@ -288,6 +292,8 @@ export function previewGeometryPreflight(decorations: StateField<DecorationSet>)
       this.resize?.disconnect();
       document.fonts?.removeEventListener("loadingdone", this.onFonts);
       this.view.dom.removeEventListener("keydown", this.onInput, true);
+      this.view.scrollDOM.removeEventListener("wheel", this.onInput);
+      this.view.scrollDOM.removeEventListener("touchmove", this.onInput);
       this.view.scrollDOM.removeEventListener("scroll", this.onInput);
     }
   });

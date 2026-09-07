@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureMathJaxReady, renderMath, wireMathScroll } from "../src/math/mathjax";
-import { MermaidWidget } from "../src/widgets/preview";
+import { MathWidget, MermaidWidget } from "../src/widgets/preview";
 
 afterEach(() => {
   document.head.querySelectorAll("script[data-phi-renderer]").forEach((script) => script.remove());
@@ -12,6 +12,46 @@ afterEach(() => {
 });
 
 describe("lazy preview renderers", () => {
+  it("does not typeset equations scrolled out of the viewport while the runtime was loading", async () => {
+    let ready!: () => void;
+    const startup = new Promise<void>(resolve => { ready = resolve; });
+    const convert = vi.fn(() => document.createElement("mjx-container"));
+    (window as unknown as { MathJax: unknown }).MathJax = {
+      startup: { promise: startup }, tex2svg: convert,
+    };
+    const measure = vi.fn();
+    const view = { requestMeasure: measure } as unknown as EditorView;
+    for (let i = 0; i < 20; i++) {
+      const widget = new MathWidget(`rapid_scroll_${i}`, true, i);
+      const dom = widget.toDOM(view);
+      widget.destroy(dom);
+    }
+    ready();
+    await startup;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(convert).not.toHaveBeenCalled();
+    expect(measure).not.toHaveBeenCalled();
+  });
+
+  it("abandons a font retry when its equation has been unmounted", async () => {
+    let ready!: () => void;
+    const font = new Promise<void>(resolve => { ready = resolve; });
+    const convert = vi.fn(() => {
+      if (convert.mock.calls.length === 1) throw { retry: font };
+      return document.createElement("mjx-container");
+    });
+    (window as unknown as { MathJax: unknown }).MathJax = { tex2svg: convert };
+    const measure = vi.fn();
+    const widget = new MathWidget("cancel_font_retry", true, 0);
+    const dom = widget.toDOM({ requestMeasure: measure } as unknown as EditorView);
+    await vi.waitFor(() => expect(convert).toHaveBeenCalledOnce());
+    widget.destroy(dom);
+    ready();
+    await font;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(convert).toHaveBeenCalledOnce();
+    expect(measure).not.toHaveBeenCalled();
+  });
   it("keeps horizontal touchpad panning inside an overflowing equation", () => {
     const parent = document.createElement("div");
     const equation = document.createElement("div");

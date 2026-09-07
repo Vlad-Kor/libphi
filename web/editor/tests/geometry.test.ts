@@ -2,7 +2,8 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView, WidgetType } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
-import { MermaidWidget } from "../src/widgets/preview";
+import { PreviewIdleGate } from "../src/markdown/preview-idle";
+import { MermaidWidget, LinkWidget, MarkdownLinkWidget, setPreviewGeometryContext, seedPreviewImageGeometry, resetPreviewGeometryCaches } from "../src/widgets/preview";
 import { clearPreviewGeometry, measuredPreviewGeometry, previewGeometry, settlePreview, withMeasuredGeometry } from "../src/markdown/geometry";
 
 class Preview extends WidgetType {
@@ -12,6 +13,50 @@ class Preview extends WidgetType {
 }
 
 describe('background preview geometry', () => {
+  it('does not replace intrinsic header dimensions with a resized SVG instance', () => {
+    setPreviewGeometryContext('/geometry-image.md', 780, 1);
+    seedPreviewImageGeometry([{ target: 'image.svg', path: 'image.svg', width: 300, height: 150 }]);
+    try {
+      const small = new LinkWidget('image.svg|230', '230', 0, 18, true, true);
+      const dom = small.toDOM({ requestMeasure() {} } as unknown as EditorView);
+      const image = dom.querySelector('img')!;
+      Object.defineProperties(image, { naturalWidth: { value: 230 }, naturalHeight: { value: 115 } });
+      image.dispatchEvent(new Event('load'));
+      const full = new MarkdownLinkWidget('image.svg', 'local', 20, true, 40, true);
+      expect(full.estimatedHeight).toBe(150);
+      expect(full.toDOM({ requestMeasure() {} } as unknown as EditorView).querySelector('img')!.width).toBe(300);
+    } finally {
+      resetPreviewGeometryCaches();
+      setPreviewGeometryContext('', 780, 1);
+    }
+  });
+  it('defers a completed batch until scrolling has actually been quiet, and cancels on document replacement', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = new PreviewIdleGate();
+      const publish = vi.fn();
+      const signal = new AbortController();
+      gate.noteActivity();
+      const pending = gate.wait(signal.signal).then(ready => { if (ready) publish(); });
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+        gate.noteActivity();
+      }
+      expect(publish).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(149);
+      expect(publish).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(publish).toHaveBeenCalledOnce();
+      gate.noteActivity();
+      const cancelled = gate.wait(signal.signal);
+      signal.abort();
+      expect(await cancelled).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('reuses Mermaid output with distinct SVG and accessibility references per mount', async () => {
     const render = vi.fn(async () => ({ svg: '<svg id="diagram" aria-labelledby="label"><title id="label">Diagram</title><defs><marker id="arrow"/></defs><path marker-end="url(#arrow)"/></svg>' }));
     const runtime = window as unknown as { phiMermaid?: unknown };

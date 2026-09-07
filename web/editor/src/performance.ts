@@ -88,6 +88,49 @@ const inputLatencyPlugin = ViewPlugin.fromClass(class {
   }
 });
 
+const scrollLatencyPlugin = ViewPlugin.fromClass(class {
+  private frame = 0;
+  private lastScroll = 0;
+  private lastFrame = 0;
+  private height: number | null = null;
+  private onWheel = (event: WheelEvent) => {
+    if (!controller.enabled) return;
+    const delay = performance.now() - event.timeStamp;
+    if (delay >= 0 && delay < 60_000)
+      recordPerformance("scroll/wheel-handler-delay", delay);
+  };
+  private onScroll = () => {
+    if (!controller.enabled) return;
+    this.lastScroll = performance.now();
+    const height = this.view.contentHeight;
+    if (this.height != null && height !== this.height)
+      recordPerformance("scroll/content-height-change", Math.abs(height - this.height));
+    this.height = height;
+    if (!this.frame) {
+      this.lastFrame = this.lastScroll;
+      this.frame = window.requestAnimationFrame(this.sampleFrame);
+    }
+  };
+  private sampleFrame = () => {
+    this.frame = 0;
+    if (!controller.enabled) return;
+    const now = performance.now();
+    recordPerformance("scroll/frame-gap", now - this.lastFrame);
+    this.lastFrame = now;
+    if (now - this.lastScroll < 250)
+      this.frame = window.requestAnimationFrame(this.sampleFrame);
+  };
+  constructor(private view: EditorView) {
+    view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
+    view.scrollDOM.addEventListener("wheel", this.onWheel, { passive: true });
+  }
+  destroy() {
+    window.cancelAnimationFrame(this.frame);
+    this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
+    this.view.scrollDOM.removeEventListener("wheel", this.onWheel);
+  }
+});
+
 /** Opt-in diagnostics. Enable with `?phi-perf=1` or from the inspector with
  * `window.phiEditorPerformance.enabled = true`, then call `.snapshot()`. */
 export const inputPerformanceExtension: Extension = [
@@ -98,6 +141,7 @@ export const inputPerformanceExtension: Extension = [
     },
   }),
   inputLatencyPlugin,
+  scrollLatencyPlugin,
   EditorView.updateListener.of((update) => {
     if (!controller.enabled || !update.docChanged) return;
     /* Retain a distinct count for transactions that are not ordinary typing,

@@ -1,3 +1,4 @@
+import { measurePerformance } from "../performance";
 import { reportError } from "../bridge";
 
 interface MathJaxApi {
@@ -40,10 +41,12 @@ function startMathJax(): Promise<void> {
   return mathJaxScript;
 }
 
-async function waitForMathJax(timeout = 10_000): Promise<MathJaxApi> {
+async function waitForMathJax(timeout = 10_000, signal?: AbortSignal): Promise<MathJaxApi> {
+  signal?.throwIfAborted();
   void startMathJax().catch(() => undefined);
   const started = performance.now();
   while (performance.now() - started < timeout) {
+    signal?.throwIfAborted();
     const failure = (window as MathJaxWindow).__phiMathJaxError;
     if (failure) throw new Error(`MathJax could not load: ${failure}`);
     const mathjax = api();
@@ -83,7 +86,9 @@ async function convertMath(
   mathjax: MathJaxApi,
   source: string,
   display: boolean,
+  signal?: AbortSignal,
 ): Promise<Element> {
+  signal?.throwIfAborted();
   if (!mathjax.tex2svg) {
     if (mathjax.tex2svgPromise)
       return mathjax.tex2svgPromise(source, { display });
@@ -95,8 +100,9 @@ async function convertMath(
   // work and retry instead of displaying MathJax's internal exception. The
   // browser-wide tex2svgPromise() queue can remain pending in WebKitGTK.
   for (let attempt = 0; attempt < 32; attempt++) {
+    signal?.throwIfAborted();
     try {
-      return mathjax.tex2svg(source, { display });
+      return measurePerformance("math/typeset", () => mathjax.tex2svg!(source, { display }));
     } catch (error) {
       const retry = retryPromise(error);
       if (!retry) throw error;
@@ -178,7 +184,11 @@ export async function renderMath(
   latex: string,
   display: boolean,
   target: HTMLElement,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) return;
+  const sourcePreamble = preamble;
+  const revision = preambleRevision;
   const key = `${preambleRevision}\0${display ? "display" : "inline"}\0${latex}`;
   const cached = cache.get(key);
   if (cached) {
@@ -192,7 +202,8 @@ export async function renderMath(
     target.removeAttribute("title");
     target.classList.add("math-loading");
     target.textContent = latex;
-    const mathjax = await waitForMathJax();
+    const mathjax = await waitForMathJax(10_000, signal);
+    if (signal?.aborted) return;
     if (target.closest("[data-preview-measurement]")) {
       // Promise-based conversion still contains synchronous typesetting. Start
       // speculative conversions in idle time, after visible work has painted.
@@ -203,9 +214,11 @@ export async function renderMath(
       });
       if (!target.isConnected) return;
     }
+    if (signal?.aborted) return;
     const normalized = display ? latex : normalizeInlineEnvironments(latex);
-    const source = `${preamble ? `${preamble}\n` : ""}${normalized}`;
-    const rendered = await convertMath(mathjax, source, display);
+    const source = `${sourcePreamble ? `${sourcePreamble}\n` : ""}${normalized}`;
+    const rendered = await convertMath(mathjax, source, display, signal);
+    if (signal?.aborted || revision !== preambleRevision) return;
     const mathError = renderedError(rendered);
     if (mathError) throw new Error(mathError);
     target.replaceChildren(rendered);
@@ -213,6 +226,7 @@ export async function renderMath(
     cache.set(key, target.innerHTML);
     if (cache.size > 256) cache.delete(cache.keys().next().value as string);
   } catch (error) {
+    if (signal?.aborted) return;
     showMathError(target, latex, error);
     reportError(error, "mathjax");
   }

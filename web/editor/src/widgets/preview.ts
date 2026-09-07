@@ -347,6 +347,7 @@ export class LineHeightEstimateWidget extends WidgetType {
 }
 
 interface PreviewImageCacheEntry {
+  intrinsicFromHeader?: boolean;
   uri?: string;
   resolving?: Promise<string>;
   naturalWidth?: number;
@@ -393,6 +394,7 @@ export function seedPreviewImageGeometry(
     const key = `${previewGeometryContext.documentPath}\u0000local:${geometry.target}`;
     lruSet(previewImageCaches, key, {
       uri: vaultUri(geometry.path),
+      intrinsicFromHeader: true,
       naturalWidth: geometry.width,
       naturalHeight: geometry.height,
     }, PREVIEW_IMAGE_CACHE_LIMIT);
@@ -437,6 +439,7 @@ function resolveLocalImage(
       if ((result.width ?? 0) > 0 && (result.height ?? 0) > 0) {
         entry.naturalWidth = result.width;
         entry.naturalHeight = result.height;
+        entry.intrinsicFromHeader = true;
       }
       const uri = vaultUri(result.path);
       entry.uri = uri;
@@ -583,6 +586,8 @@ export class HorizontalRuleWidget extends WidgetType {
   }
 }
 
+const mathRenderControllers = new WeakMap<HTMLElement, AbortController>();
+
 export class MathWidget extends WidgetType {
   readonly geometryContext = previewGeometryContext;
 
@@ -638,8 +643,11 @@ export class MathWidget extends WidgetType {
       element.style.boxSizing = "border-box";
       element.style.overflowY = "clip";
     }
-    const rendered = renderMath(this.latex, this.display, element);
+    const controller = new AbortController();
+    mathRenderControllers.set(element, controller);
+    const rendered = renderMath(this.latex, this.display, element, controller.signal);
     if (this.display) void rendered.then(() => {
+      if (controller.signal.aborted) return;
       element.style.removeProperty("height");
       element.style.removeProperty("box-sizing");
       element.style.removeProperty("overflow-y");
@@ -655,6 +663,11 @@ export class MathWidget extends WidgetType {
       });
     });
     return element;
+  }
+
+  destroy(dom: HTMLElement): void {
+    mathRenderControllers.get(dom)?.abort();
+    mathRenderControllers.delete(dom);
   }
 
   ignoreEvent(): boolean { return true; }
@@ -736,7 +749,11 @@ function interactiveImage(
   image.decoding = "async";
   let measured = false;
   const imageLoaded = () => {
-    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+    // Keep file-header dimensions authoritative. A rendered SVG instance can
+    // report dimensions affected by its requested size in WebKit; caching
+    // those makes a different occurrence inherit that size during scrolling.
+    const svgHeader = cache.intrinsicFromHeader && /\.svg(?:$|[?#])/i.test(cacheKey);
+    if (!svgHeader && image.naturalWidth > 0 && image.naturalHeight > 0) {
       cache.naturalWidth = image.naturalWidth;
       cache.naturalHeight = image.naturalHeight;
     }
