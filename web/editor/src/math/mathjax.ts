@@ -193,6 +193,16 @@ export async function renderMath(
     target.classList.add("math-loading");
     target.textContent = latex;
     const mathjax = await waitForMathJax();
+    if (target.closest("[data-preview-measurement]")) {
+      // Promise-based conversion still contains synchronous typesetting. Start
+      // speculative conversions in idle time, after visible work has painted.
+      await new Promise<void>(resolve => {
+        if (typeof window.requestIdleCallback === "function")
+          window.requestIdleCallback(() => resolve());
+        else window.setTimeout(resolve, 16);
+      });
+      if (!target.isConnected) return;
+    }
     const normalized = display ? latex : normalizeInlineEnvironments(latex);
     const source = `${preamble ? `${preamble}\n` : ""}${normalized}`;
     const rendered = await convertMath(mathjax, source, display);

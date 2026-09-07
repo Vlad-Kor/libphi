@@ -361,7 +361,7 @@ describe("CodeMirror document transactions", () => {
     const remountedWidget = new LinkWidget(
       "Pictures/diagram.png", "diagram.png", 0, 25, true, true,
     );
-    expect(remountedWidget.estimatedHeight).toBeCloseTo(522.67, 1);
+    expect(remountedWidget.estimatedHeight).toBeCloseTo(520, 1);
     const remounted = remountedWidget.toDOM(view);
     const remountedImage = remounted.querySelector<HTMLImageElement>("img")!;
     expect(requests).toHaveLength(1);
@@ -392,7 +392,7 @@ describe("CodeMirror document transactions", () => {
     const widget = new LinkWidget(
       "Pasted image.png", "Pasted image.png", 0, 24, true, true,
     );
-    expect(widget.estimatedHeight).toBeCloseTo(304, 0);
+    expect(widget.estimatedHeight).toBeCloseTo(300, 0);
     const view = viewFor("![[Pasted image.png]]");
     const dom = widget.toDOM(view);
     expect(dom.querySelector("img")?.getAttribute("src"))

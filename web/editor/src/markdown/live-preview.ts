@@ -1,7 +1,6 @@
 import {
   type EditorState,
   type Range,
-  StateEffect,
   StateField,
   type Transaction,
 } from "@codemirror/state";
@@ -38,6 +37,14 @@ import {
   type MarkdownAnalysis,
 } from "./analysis";
 import { measurePerformance } from "../performance";
+import {
+  clearPreviewGeometry,
+  lineGeometryKey,
+  measuredPreviewGeometry,
+  previewGeometry,
+  previewGeometryPreflight,
+  withMeasuredGeometry,
+} from "./geometry";
 import { exportPreviewMode } from "../settings";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
@@ -52,7 +59,7 @@ const htmlTag = Decoration.mark({ class: "cm-html-tag" });
 const htmlAttribute = Decoration.mark({ class: "cm-html-attribute" });
 const htmlValue = Decoration.mark({ class: "cm-html-value" });
 const htmlPunctuation = Decoration.mark({ class: "cm-html-punctuation" });
-export const refreshLivePreview = StateEffect.define<null>();
+export const refreshLivePreview = clearPreviewGeometry;
 
 function active(node: MarkdownNode, state: EditorState): boolean {
   return !exportPreviewMode() && previewNodeIsActive(node, state);
@@ -268,6 +275,10 @@ function buildDecorationsNow(state: EditorState,
         /* Keep the terminating newline outside block replacements. It belongs
          * to the following source line, whose geometry must not appear or
          * disappear as the caret moves between adjacent blank lines. */
+        const widget = replacement.spec.widget;
+        if (widget) withMeasuredGeometry(widget,
+          JSON.stringify([node.kind, node.text, node.meta, node.from, node.to]),
+          state.field(previewGeometry, false) ?? new Map());
         builder.add(node.from, node.to, replacement);
         coveredUntil = node.to;
         continue;
@@ -283,7 +294,8 @@ function buildDecorationsNow(state: EditorState,
           Number(node.contentFrom ?? node.from), node.to,
         );
         builder.add(node.from, node.from, Decoration.widget({
-          widget: new LineHeightEstimateWidget(
+          phiLineGeometry: true,
+      widget: new LineHeightEstimateWidget(
             estimatedHeadingHeight(level, headingText),
           ),
           side: -1,
@@ -332,7 +344,8 @@ function buildDecorationsNow(state: EditorState,
           Number(node.meta?.contentFrom ?? node.from), listLine.to,
         );
         builder.add(node.from, node.from, Decoration.widget({
-          widget: new LineHeightEstimateWidget(estimatedListLineHeight(
+          phiLineGeometry: true,
+      widget: new LineHeightEstimateWidget(estimatedListLineHeight(
             listText,
             indentColumns * 0.375 + (node.meta?.task ? 1.5 : markerIndent),
           )),
@@ -388,7 +401,40 @@ function buildDecorationsNow(state: EditorState,
       case "html": if (isActive) addHtmlSyntax(builder, node); break;
     }
   }
-  return Decoration.set(ranges, true);
+  // Inline formatting can change wrapping even when it does not increase the
+  // tallest glyph. Measure the containing line, not just the inline widget.
+  const preliminary = Decoration.set(ranges, true);
+  const inlineLines = new Set<number>();
+  for (const node of nodes) {
+    if (active(node, state)) continue;
+    const first = state.doc.lineAt(node.from);
+    if (node.to <= first.to) inlineLines.add(first.from);
+  }
+  for (const from of inlineLines) {
+    const line = state.doc.lineAt(from);
+    let covered = false;
+    preliminary.between(line.from, line.to, (a, b, decoration) => {
+      if (decoration.spec.block || decoration.spec.phiLineGeometry ||
+          a < line.from || b > line.to) covered = true;
+    });
+    if (!covered) ranges.push(Decoration.widget({
+      phiLineGeometry: true,
+      widget: new LineHeightEstimateWidget(-1), side: -1,
+    }).range(from));
+  }
+  const result = Decoration.set(ranges, true);
+  const heights = state.field(previewGeometry, false);
+  if (!heights?.size) return result;
+  const measured = ranges.map(range => {
+    if (!(range.value.spec.widget instanceof LineHeightEstimateWidget)) return range;
+    const line = state.doc.lineAt(range.from);
+    const height = heights.get(lineGeometryKey(line.text, result, line.from, line.to));
+    return height == null ? range : Decoration.widget({
+      phiLineGeometry: true,
+      widget: new LineHeightEstimateWidget(height), side: -1,
+    }).range(range.from);
+  });
+  return Decoration.set(measured, true);
 }
 
 function buildMathTooltips(state: EditorState): readonly Tooltip[] {
@@ -436,8 +482,9 @@ function changesFollowAllNodes(transaction: Transaction): boolean {
 const livePreviewDecorations = StateField.define<DecorationSet>({
   create: buildDecorations,
   update(value, transaction) {
-    const forced = transaction.effects.some((effect) =>
-      effect.is(refreshLivePreview) || effect.is(pinPreviewSource));
+    const forced = transaction.reconfigured || transaction.effects.some((effect) =>
+      effect.is(refreshLivePreview) || effect.is(pinPreviewSource) ||
+      effect.is(measuredPreviewGeometry));
     if (forced) return buildDecorations(transaction.state);
     if (transaction.docChanged) {
       const previous = markdownAnalysis(transaction.startState);
@@ -470,5 +517,7 @@ export const livePreview = [
   markdownAnalysisField,
   previewSourceRange,
   ...previewInteraction,
+  previewGeometry,
   livePreviewDecorations,
+  previewGeometryPreflight(livePreviewDecorations),
 ];

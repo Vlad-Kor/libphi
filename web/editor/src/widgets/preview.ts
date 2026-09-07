@@ -21,6 +21,33 @@ import {
 } from "../markdown/preview-interaction";
 
 let mermaidSequence = 0;
+const mermaidSvgCache = new Map<string, string>();
+
+function installMermaidSvg(container: HTMLElement, svg: string): void {
+  container.innerHTML = svg;
+  // Cached SVGs need fresh fragment IDs when the same diagram appears twice.
+  const prefix = `phi-mermaid-copy-${++mermaidSequence}-`;
+  const ids = new Map<string, string>();
+  for (const element of container.querySelectorAll("[id]"))
+    ids.set(element.id, prefix + element.id);
+  for (const element of container.querySelectorAll("*")) {
+    for (const attribute of [...element.attributes]) {
+      let value = attribute.value;
+      if (attribute.name === "id") value = ids.get(value) ?? value;
+      else if (attribute.name === "aria-labelledby" || attribute.name === "aria-describedby")
+        value = value.split(/\s+/).map(id => ids.get(id) ?? id).join(" ");
+      else value = value.replace(/#([^\s"'(){};,]+)/g,
+        (reference, id) => ids.has(id) ? `#${ids.get(id)}` : reference);
+      if (value !== attribute.value) element.setAttribute(attribute.name, value);
+    }
+    if (element.tagName.toLowerCase() === "style") {
+      element.textContent = (element.textContent ?? "").replace(
+        /#([^\s"'(){};,]+)/g,
+        (reference, id) => ids.has(id) ? `#${ids.get(id)}` : reference,
+      );
+    }
+  }
+}
 interface MermaidApi {
   initialize(config: Record<string, unknown>): void;
   render(id: string, source: string): Promise<{ svg: string }>;
@@ -205,23 +232,21 @@ let previewGeometryContext: PreviewGeometryContext = {
   key: "\u0000w780:s100",
 };
 
-/* Geometry is deliberately bucketed. Tiny allocation differences should not
- * invalidate otherwise useful measurements, and a 16 px width difference is
- * smaller than the uncertainty in CodeMirror's off-screen line estimates. */
+/* Wrapping can change at a subpixel boundary. Never bucket measured geometry. */
 export function setPreviewGeometryContext(
   documentPath: string,
   textWidth: number,
   fontScale: number,
 ): void {
-  const width = Math.max(160, Math.round((Number.isFinite(textWidth)
-    ? textWidth : 780) / 16) * 16);
+  const width = Math.max(160, (Number.isFinite(textWidth)
+    ? textWidth : 780));
   const scale = Math.max(0.5, Math.min(3, Number.isFinite(fontScale)
     ? fontScale : 1));
   previewGeometryContext = {
     documentPath,
     textWidth: width,
     fontScale: scale,
-    key: `${documentPath}\u0000w${width}:s${Math.round(scale * 100)}`,
+    key: `${documentPath}\u0000w${width}:s${scale}`,
   };
 }
 
@@ -260,7 +285,7 @@ function rememberHeight(
   lruSet(
     previewHeightCache,
     `${context.key}\u0000${key}`,
-    Math.max(1, Math.round(height * 2) / 2),
+    height,
     PREVIEW_HEIGHT_CACHE_LIMIT,
   );
 }
@@ -310,7 +335,7 @@ export function estimatedListLineHeight(text: string, indentEm: number): number 
 export class LineHeightEstimateWidget extends WidgetType {
   constructor(readonly height: number) { super(); }
   eq(other: LineHeightEstimateWidget): boolean {
-    return Math.abs(other.height - this.height) < 0.5;
+    return other.height === this.height;
   }
   get estimatedHeight(): number { return this.height; }
   toDOM(): HTMLElement {
@@ -472,6 +497,7 @@ function observeNoteEmbedResize(
   context: PreviewGeometryContext,
   geometryKey: string,
 ): void {
+  if (!element.isConnected) return;
   const measure = () => view.requestMeasure({
     key: element,
     read: () => element.isConnected
@@ -607,8 +633,16 @@ export class MathWidget extends WidgetType {
     };
     element.addEventListener("pointerdown", revealMath);
     element.addEventListener("click", revealMath);
+    if (this.display && !this.editing) {
+      element.style.height = `${this.estimatedHeight}px`;
+      element.style.boxSizing = "border-box";
+      element.style.overflowY = "clip";
+    }
     const rendered = renderMath(this.latex, this.display, element);
     if (this.display) void rendered.then(() => {
+      element.style.removeProperty("height");
+      element.style.removeProperty("box-sizing");
+      element.style.removeProperty("overflow-y");
       wireMathScroll(element);
       view.requestMeasure({
         key: element,
@@ -1240,8 +1274,12 @@ export class CalloutWidget extends WidgetType {
 }
 
 export class MermaidWidget extends WidgetType {
+  readonly geometryContext = previewGeometryContext;
   constructor(readonly source: string, readonly from: number) { super(); }
-  eq(other: MermaidWidget): boolean { return other.source === this.source; }
+  eq(other: MermaidWidget): boolean {
+    return other.source === this.source && other.from === this.from &&
+      other.geometryContext.key === this.geometryContext.key;
+  }
 
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement("div");
@@ -1255,11 +1293,29 @@ export class MermaidWidget extends WidgetType {
     container.addEventListener("pointerdown", revealMermaid);
     container.addEventListener("click", revealMermaid);
     container.addEventListener("dblclick", revealMermaid);
+    const cacheKey = `${this.geometryContext.key}\0${this.source}`;
+    const cached = mermaidSvgCache.get(cacheKey);
+    if (cached) {
+      installMermaidSvg(container, cached);
+      return container;
+    }
+    container.dataset.geometryPending = "true";
+    if (this.estimatedHeight >= 0) container.style.height = `${this.estimatedHeight}px`;
     const id = `phi-mermaid-${++mermaidSequence}`;
     ensureMermaidReady()
       .then((mermaid) => mermaid.render(id, this.source))
-      .then(({ svg }) => { container.innerHTML = sanitizeHtml(svg); })
+      .then(({ svg }) => {
+        const clean = sanitizeHtml(svg);
+        mermaidSvgCache.set(cacheKey, clean);
+        if (mermaidSvgCache.size > 256)
+          mermaidSvgCache.delete(mermaidSvgCache.keys().next().value!);
+        installMermaidSvg(container, clean);
+        container.style.removeProperty("height");
+        delete container.dataset.geometryPending;
+      })
       .catch((error) => {
+        container.style.removeProperty("height");
+        delete container.dataset.geometryPending;
         container.className = "mermaid-widget render-error";
         container.textContent = error instanceof Error ? error.message : String(error);
         reportError(error, "mermaid");

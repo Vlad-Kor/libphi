@@ -94,15 +94,15 @@ export function setRichTableGeometryContext(
   textWidth: number,
   fontScale: number,
 ): void {
-  const width = Math.max(160, Math.round((Number.isFinite(textWidth)
-    ? textWidth : 780) / 16) * 16);
+  const width = Math.max(160, (Number.isFinite(textWidth)
+    ? textWidth : 780));
   const scale = Math.max(0.5, Math.min(3, Number.isFinite(fontScale)
     ? fontScale : 1));
   richTableGeometryContext = {
     documentPath,
     textWidth: width,
     fontScale: scale,
-    key: `${documentPath}\u0000w${width}:s${Math.round(scale * 100)}`,
+    key: `${documentPath}\u0000w${width}:s${scale}`,
   };
 }
 
@@ -137,7 +137,7 @@ function rememberTableHeight(
   if (!Number.isFinite(height) || height < 1) return;
   const key = tableHeightCacheKey(context, geometryKey);
   tableHeightCache.delete(key);
-  tableHeightCache.set(key, Math.round(height * 2) / 2);
+  tableHeightCache.set(key, height);
   while (tableHeightCache.size > TABLE_HEIGHT_CACHE_LIMIT)
     tableHeightCache.delete(tableHeightCache.keys().next().value!);
 }

@@ -26,6 +26,7 @@ import {
 import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
+import { previewGeometryEnvironment } from "./markdown/geometry";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { markdownAnalysis } from "./markdown/analysis";
 import {
@@ -361,6 +362,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
             this.settings.executableSnippets && this.settings.latexConceal,
           ),
         ),
+        previewGeometryEnvironment.of(() => this.updatePreviewGeometryContext()),
         previewCompartment.of(this.settings.sourceMode ? [] : livePreview),
         wrappingCompartment.of(this.settings.lineWrapping ? EditorView.lineWrapping : []),
         themeCompartment.of(EditorView.theme({}, { dark: this.darkTheme })),
