@@ -42,6 +42,21 @@ gchar *pdfv_markdown_vault_adapter_read_text(
 gchar *pdfv_markdown_vault_adapter_read_embed(
     PdfvMarkdownVaultAdapter *self, const gchar *source_path,
     const gchar *target, gchar **resolved_path, GError **error);
+/* Preview resolution may scan the vault. Run it outside the GTK thread.
+ * The adapter is immutable after construction and the task owns its inputs. */
+typedef struct {
+  gchar *path;
+  gchar *text; /* NULL for attachments. */
+  GFile *file; /* NULL for note embeds. */
+} PdfvMarkdownPreview;
+void pdfv_markdown_preview_free(PdfvMarkdownPreview *preview);
+void pdfv_markdown_vault_adapter_preview_async(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gboolean embed, gboolean relative_to_note,
+    GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+PdfvMarkdownPreview *pdfv_markdown_vault_adapter_preview_finish(
+    PdfvMarkdownVaultAdapter *self, GAsyncResult *result, GError **error);
+
 GBytes *pdfv_markdown_vault_adapter_read_bytes(
     PdfvMarkdownVaultAdapter *self, const gchar *relative_path,
     gchar **content_type, GError **error);

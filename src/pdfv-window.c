@@ -1735,8 +1735,17 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
   if (file_is_markdown(group->file)) {
     workspace_preview_cancel_load(self);
     g_set_object(&self->workspace_preview_file, group->file);
-    open_markdown_in_tab_async(self, group->file,
+    GFile *target = g_file_dup(group->file);
+    if (!match->filename_match) {
+      gint64 *range = g_new(gint64, 2);
+      range[0] = match->source_from;
+      range[1] = match->source_to;
+      g_object_set_data_full(G_OBJECT(target), "markdown-search-range", range,
+                             g_free);
+    }
+    open_markdown_in_tab_async(self, target,
                                self->workspace_preview_tab, FALSE);
+    g_object_unref(target);
     adw_tab_view_set_selected_page(self->tab_view,
                                    self->workspace_preview_tab);
     return;
@@ -3008,6 +3017,9 @@ typedef struct {
   PdfvMarkdownEditor *editor;
   GCancellable *cancellable;
   gchar *fragment;
+  gboolean has_search_range;
+  gint64 search_from;
+  gint64 search_to;
 } MarkdownOpenRequest;
 
 static void markdown_open_request_free(MarkdownOpenRequest *request) {
@@ -3062,6 +3074,9 @@ static void on_markdown_opened(GObject *source, GAsyncResult *result,
         pdfv_markdown_editor_reveal_fragment(request->editor,
                                              request->fragment);
     }
+    if (request->has_search_range)
+      pdfv_markdown_editor_reveal_range(request->editor, request->search_from,
+                                        request->search_to);
     if (pdfv_markdown_editor_get_ready(request->editor))
       schedule_markdown_editor_prewarm(
           self, pdfv_markdown_editor_get_vault_root(request->editor));
@@ -3174,6 +3189,13 @@ static void open_markdown_in_tab_async(PdfvWindow *self, GFile *file,
   request->editor = g_object_ref(editor);
   request->cancellable = g_cancellable_new();
   request->fragment = fragment;
+  const gint64 *search_range = g_object_get_data(
+      G_OBJECT(file), "markdown-search-range");
+  if (search_range) {
+    request->has_search_range = TRUE;
+    request->search_from = search_range[0];
+    request->search_to = search_range[1];
+  }
   g_object_set_data_full(G_OBJECT(stack), "open-cancellable",
                          g_object_ref(request->cancellable), g_object_unref);
   pdfv_markdown_editor_open_file_async(editor, file, request->cancellable,
@@ -6481,6 +6503,7 @@ static void action_find(GSimpleAction *action, GVariant *parameter,
 
   gtk_search_bar_set_search_mode(self->search_bar, TRUE);
   gtk_widget_grab_focus(GTK_WIDGET(self->search_entry));
+  gtk_editable_select_region(GTK_EDITABLE(self->search_entry), 0, -1);
 }
 
 static void action_find_next(GSimpleAction *action, GVariant *parameter,

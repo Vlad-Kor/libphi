@@ -171,13 +171,32 @@ export function wireMathScroll(target: HTMLElement): void {
     const maximum = target.scrollWidth - target.clientWidth;
     const next = Math.max(0, Math.min(maximum,
       target.scrollLeft + event.deltaX * scale));
-    /* Do not trap the rest of a kinetic gesture at either edge.  Let WebKit
-     * hand it back to CodeMirror's outer scroller instead. */
-    if (next === target.scrollLeft) return;
+    /* Keep the horizontal gesture contained even at an edge. Handing it to
+     * the document here leaks its small vertical component into scrollTop. */
     target.scrollLeft = next;
     event.preventDefault();
     event.stopPropagation();
   }, { passive: false });
+}
+
+/** Native scrollbar events target the scroll container, just like its padding. */
+export function isMathScrollbarEvent(target: HTMLElement, event: Event): boolean {
+  if (!(event instanceof MouseEvent) || event.target !== target ||
+      !target.classList.contains("math-overflow") ||
+      target.scrollWidth <= target.clientWidth)
+    return false;
+  const rect = target.getBoundingClientRect();
+  if (!target.offsetHeight || !target.offsetWidth) return false;
+  const scaleX = rect.width / target.offsetWidth;
+  const scaleY = rect.height / target.offsetHeight;
+  const left = rect.left + target.clientLeft * scaleX;
+  const top = rect.top + target.clientTop * scaleY;
+  // Custom WebKit scrollbar styling reserves a real gutter. Use its measured
+  // boundary, so editor font scale and borders cannot turn content into chrome.
+  const scrollbarTop = top + target.clientHeight * scaleY;
+  return event.clientX >= left &&
+    event.clientX < left + target.clientWidth * scaleX &&
+    event.clientY >= scrollbarTop && event.clientY < rect.bottom;
 }
 
 export async function renderMath(

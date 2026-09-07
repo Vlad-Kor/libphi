@@ -114,7 +114,7 @@ describe("lazy preview renderers", () => {
     expect(bubbled).toHaveBeenCalledTimes(2);
   });
 
-  it("releases horizontal momentum at an equation boundary", () => {
+  it("contains horizontal momentum and vertical drift at both equation boundaries", () => {
     const parent = document.createElement("div");
     const equation = document.createElement("div");
     parent.append(equation);
@@ -136,8 +136,56 @@ describe("lazy preview renderers", () => {
     equation.dispatchEvent(pan);
 
     expect(equation.scrollLeft).toBe(600);
-    expect(pan.defaultPrevented).toBe(false);
-    expect(bubbled).toHaveBeenCalledOnce();
+    expect(pan.defaultPrevented).toBe(true);
+    expect(bubbled).not.toHaveBeenCalled();
+    equation.scrollLeft = 0;
+    const reverse = new WheelEvent("wheel", {
+      bubbles: true, cancelable: true, deltaX: -48, deltaY: -3,
+    });
+    equation.dispatchEvent(reverse);
+    expect(equation.scrollLeft).toBe(0);
+    expect(reverse.defaultPrevented).toBe(true);
+    expect(bubbled).not.toHaveBeenCalled();
+  });
+
+  it("leaves native math scrollbar presses and clicks alone but reveals equation content", () => {
+    (window as unknown as { MathJax: unknown }).MathJax = {
+      tex2svg: () => document.createElement("mjx-container"),
+    };
+    const dispatch = vi.fn();
+    const view = {
+      dispatch, focus: vi.fn(), state: EditorState.create({ doc: "$$long equation$$" }),
+      requestMeasure: vi.fn(),
+    } as unknown as EditorView;
+    const widget = new MathWidget("scrollbar interaction", true, 0);
+    const equation = widget.toDOM(view);
+    widget.destroy(equation);
+    equation.classList.add("math-overflow");
+    Object.defineProperties(equation, {
+      clientWidth: { value: 300 }, scrollWidth: { value: 900 },
+      offsetWidth: { value: 300 }, offsetHeight: { value: 100 },
+      clientHeight: { value: 88 },
+    });
+    // A transformed widget checks that hit testing uses viewport coordinates.
+    equation.getBoundingClientRect = () => ({
+      left: 20, top: 30, right: 620, bottom: 230, width: 600, height: 200,
+      x: 20, y: 30, toJSON: () => ({}),
+    });
+    for (const type of ["pointerdown", "click"]) {
+      const scrollbar = new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: 100, clientY: 220,
+      });
+      equation.dispatchEvent(scrollbar);
+      expect(scrollbar.defaultPrevented).toBe(false);
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+    const content = new MouseEvent("pointerdown", {
+      bubbles: true, cancelable: true, clientX: 100, clientY: 100,
+    });
+    equation.dispatchEvent(content);
+    expect(content.defaultPrevented).toBe(true);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0][0].selection).toEqual({ anchor: 1 });
   });
 
   it("does not intercept gestures on equations that fit", () => {

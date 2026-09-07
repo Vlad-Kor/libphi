@@ -138,7 +138,8 @@ export function mathNodeAt(
     else high = middle;
   }
   const candidate = analysis.math[Math.max(0, low - 1)];
-  if (candidate && selectionTouches(candidate, range)) return candidate;
+  if (candidate && (selectionTouches(candidate, range) ||
+      (range.from === range.to && range.from === candidate.to))) return candidate;
   return analysis.math.slice(low).find((node) =>
     node.from < range.to && selectionTouches(node, range));
 }

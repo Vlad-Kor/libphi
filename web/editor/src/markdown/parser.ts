@@ -620,7 +620,8 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     const taskMatch = match[2]
       ? /^\[([^\]])\]([ \t]*)/.exec(text.slice(markerContentFrom, to))
       : null;
-    const contentFrom = markerContentFrom + (taskMatch?.[0].length ?? 0);
+    const contentFrom = markerContentFrom + (taskMatch
+      ? 3 + Math.min(1, taskMatch[2].length) : 0);
     nodes.push({
       kind: "list-item",
       from: match.index,
@@ -650,7 +651,9 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     if (!inside(match.index, protectedRanges)) {
       const marker = match[0].lastIndexOf("[");
       const from = match.index + marker;
-      const to = from + 3 + match[2].length;
+      // The checkbox supplies one separator visually; extra source whitespace
+      // remains editable and visible, including for checked tasks.
+      const to = from + 3 + Math.min(1, match[2].length);
       nodes.push({
         kind: "task",
         from,

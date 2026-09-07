@@ -67,6 +67,11 @@ static void search_finished(GObject *source, GAsyncResult *result,
     g_assert_cmpuint(group->matches->len, >, 0);
     PdfvWorkspaceMatch *match = g_ptr_array_index(group->matches, 0);
     g_assert_nonnull(g_strstr_len(match->snippet, -1, "präsentiert"));
+    if (g_file_equal(group->file, state->note)) {
+      /* ß expands under casefold, emoji occupies two UTF-16 units, CRLF one. */
+      g_assert_cmpint(match->source_from, ==, 28);
+      g_assert_cmpint(match->source_to, ==, 39);
+    }
   }
   g_assert_cmpuint(pdfv_workspace_get_cache_hit_count(state->workspace), ==,
                    state->expected_cache_hits);
@@ -266,7 +271,7 @@ static void test_workspace_search(void) {
   state.note = g_file_get_child(state.empty, "lecture.md");
   gchar *note_path = g_file_get_path(state.note);
   g_assert_true(g_file_set_contents(
-      note_path, "# Lecture\nDieses Dokument präsentiert Markdown.\n", -1,
+      note_path, "# Straße 😀\r\nDieses Dokument präsentiert Markdown.\r\n", -1,
       &error));
   g_assert_no_error(error);
   g_free(note_path);

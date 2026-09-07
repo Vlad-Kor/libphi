@@ -430,6 +430,15 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 }
 .math-display { display: block; width: 100%; padding: .625em 0; text-align: center; }
 .math-widget.math-overflow { overflow-x: auto; }
+/* Reserve native scrollbar chrome so clicking/dragging it can be distinguished
+   from clicking the equation, including on systems with overlay scrollbars. */
+.math-widget.math-overflow::-webkit-scrollbar { height: 12px; }
+.math-widget.math-overflow::-webkit-scrollbar-thumb {
+  background: var(--editor-muted);
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
 .cm-latex-delimiter { color: color-mix(in srgb, #2ec27e 82%, var(--editor-fg)); font-weight: 650; }
 .cm-latex-command { color: color-mix(in srgb, #c061cb 78%, var(--editor-fg)); }
 .cm-latex-number { color: color-mix(in srgb, #e66100 82%, var(--editor-fg)); }

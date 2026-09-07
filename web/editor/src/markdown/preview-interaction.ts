@@ -15,6 +15,7 @@ import {
   type KeyBinding,
 } from "@codemirror/view";
 import { markdownAnalysis } from "./analysis";
+import { presentationSelection, stableSelectionPresentation } from "./selection-presentation";
 import {
   pinPreviewSource,
   previewSourceRange,
@@ -52,12 +53,13 @@ export function previewNodeIsActive(
    * text selection is different: dragging across a hard item (or Select All)
    * must expose the selected source and preserve normal text operations. */
   if (isHardRenderedNode(node)) {
-    return state.selection.ranges.some((selection) =>
+    return presentationSelection(state).ranges.some((selection) =>
       !selection.empty && selectionTouches(node, selection)
     );
   }
-  return state.selection.ranges.some((selection) => {
-    if (node.kind === "inline-code" && node.meta?.incomplete &&
+  return presentationSelection(state).ranges.some((selection) => {
+    if (((node.kind === "inline-code" && node.meta?.incomplete) ||
+         node.kind === "math" || node.kind === "display-math") &&
         selection.empty) {
       return selection.from >= node.from && selection.from <= node.to;
     }
@@ -656,6 +658,7 @@ const hardPreviewKeymap: readonly KeyBinding[] = [
 ];
 
 export const previewInteraction = [
+  ...stableSelectionPresentation,
   hardPreviewSelection,
   hardPreviewAtomicRanges,
   hardPreviewDOM,

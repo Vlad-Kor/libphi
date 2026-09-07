@@ -6,6 +6,7 @@ import { previewGeometry, previewGeometryStatus } from "../src/markdown/geometry
 import { EditorView } from "@codemirror/view";
 import * as widgets from "../src/widgets/preview";
 import { RichTableWidget } from "../src/widgets/table";
+import { isMathScrollbarEvent, wireMathScroll } from "../src/math/mathjax";
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 for (const Widget of [...Object.values(widgets), RichTableWidget]) {
@@ -121,6 +122,38 @@ async function run() {
   const results: unknown[] = [];
   const oracleErrors: unknown[] = [];
   const failures: unknown[] = [];
+  // Real WebKit layout must reserve a measurable gutter, including with GTK
+  // overlay scrollbars. Synthetic DOM events below verify dispatch only;
+  // physical touchpad momentum still requires manual hardware testing.
+  const equation = document.createElement("div");
+  equation.className = "math-widget math-display";
+  equation.style.cssText = "position:fixed;left:0;top:0;width:300px";
+  equation.innerHTML = '<div style="width:900px;height:40px"></div>';
+  document.body.append(equation);
+  wireMathScroll(equation);
+  const box = equation.getBoundingClientRect();
+  const gutter = equation.offsetHeight - equation.clientHeight;
+  const scrollbarPress = new MouseEvent("pointerdown", {
+    bubbles: true, cancelable: true, clientX: box.left + 20,
+    clientY: box.bottom - gutter / 2,
+  });
+  let scrollbarHit = false;
+  equation.addEventListener("pointerdown", event => {
+    scrollbarHit = isMathScrollbarEvent(equation, event);
+  });
+  equation.dispatchEvent(scrollbarPress);
+  if (gutter <= 0 || !scrollbarHit)
+    failures.push({ error: "Math scrollbar has no hit-testable gutter", gutter, scrollbarHit });
+  for (const start of [100, 600]) {
+    equation.scrollLeft = start;
+    const pan = new WheelEvent("wheel", {
+      bubbles: true, cancelable: true, deltaX: 48, deltaY: 3,
+    });
+    equation.dispatchEvent(pan);
+    if (!pan.defaultPrevented || equation.scrollLeft !== Math.min(600, start + 48))
+      failures.push({ error: "Math horizontal pan escaped", start, left: equation.scrollLeft });
+  }
+  equation.remove();
   for (const set of view.state.facet(EditorView.decorations)) {
     if (typeof set === 'function') continue;
     for (let it = set.iter(); it.value; it.next()) {

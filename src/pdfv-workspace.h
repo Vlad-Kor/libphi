@@ -50,6 +50,8 @@ typedef struct {
   gint page;
   gchar *snippet;
   gboolean filename_match;
+  gint64 source_from; /* UTF-16 offsets after CRLF normalization */
+  gint64 source_to;
 } PdfvWorkspaceMatch;
 
 typedef struct {

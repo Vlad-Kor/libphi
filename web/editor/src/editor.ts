@@ -1,8 +1,8 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { foldedRanges, unfoldEffect, bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { Compartment, EditorSelection, EditorState, type Text } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, type StateEffect, type Text } from "@codemirror/state";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchKeymap, type SearchQuery } from "@codemirror/search";
 import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap, rectangularSelection } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
@@ -341,11 +341,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         keymap.of([
           ...formattingKeymap,
           { key: "Mod-s", preventDefault: true, run: () => { void this.requestSave(); return true; } },
-          { key: "Mod-f", preventDefault: true, run: () => {
-            const opened = openSearchPanel(this.view);
-            queueMicrotask(() => this.enhanceSearchPanel());
-            return opened;
-          } },
+          { key: "Mod-f", scope: "editor search-panel", preventDefault: true,
+            run: () => this.openFind() },
           ...closeBracketsKeymap,
           ...completionKeymap,
           ...searchKeymap,
@@ -380,6 +377,30 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         }),
       ],
     });
+  }
+
+  private openFind(): boolean {
+    const opened = openSearchPanel(this.view);
+    queueMicrotask(() => {
+      this.enhanceSearchPanel();
+      const input = this.view.dom.querySelector<HTMLInputElement>(
+        '.cm-search input[name="search"]',
+      );
+      input?.focus({ preventScroll: true });
+      input?.select();
+    });
+    return opened;
+  }
+
+  private revealRange(from: number, to: number): void {
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    from = Math.max(0, Math.min(this.view.state.doc.length, Math.trunc(from)));
+    to = Math.max(from, Math.min(this.view.state.doc.length, Math.trunc(to)));
+    const effects: StateEffect<unknown>[] = [EditorView.scrollIntoView(EditorSelection.range(from, to), { y: "center" })];
+    foldedRanges(this.view.state).between(from, to, (start, end) => {
+      effects.push(unfoldEffect.of({ from: start, to: end }));
+    });
+    this.view.dispatch({ selection: { anchor: from, head: to }, effects });
   }
 
   private enhanceSearchPanel(): void {
@@ -891,8 +912,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       return;
     }
     if (command === "editor.find") {
-      openSearchPanel(this.view);
-      queueMicrotask(() => this.enhanceSearchPanel());
+      this.openFind();
       return;
     }
     if (command === "editor.findNext") { findNext(this.view); return; }
@@ -964,6 +984,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         invalidateMath();
         this.view.dispatch({ effects: refreshLivePreview.of(null) });
         break;
+      case "navigation/reveal-range": this.revealRange(Number(payload.from), Number(payload.to)); break;
       case "navigation/reveal": this.revealFragment(String(payload.target ?? "")); break;
       case "command/run": this.runCommand(String(payload.command ?? "")); break;
       case "table/show-picker": this.showTablePicker(); break;

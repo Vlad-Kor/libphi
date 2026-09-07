@@ -311,6 +311,48 @@ static void test_byte_preserving_read(VaultFixture *fixture,
   g_object_unref(binary);
 }
 
+typedef struct {
+  gboolean done;
+  PdfvMarkdownPreview *preview;
+  GError *error;
+} PreviewTestResult;
+
+static void preview_test_done(GObject *source, GAsyncResult *result,
+                              gpointer user_data) {
+  PreviewTestResult *received = user_data;
+  received->preview = pdfv_markdown_vault_adapter_preview_finish(
+      PDFV_MARKDOWN_VAULT_ADAPTER(source), result, &received->error);
+  received->done = TRUE;
+}
+
+static void test_async_preview(VaultFixture *fixture, gconstpointer data) {
+  (void)data;
+  const gchar *targets[] = {"Other#Other heading", "Missing note", "Diagram.png", "missing.png"};
+  for (guint i = 0; i < G_N_ELEMENTS(targets); i++) {
+    PreviewTestResult result = {0};
+    gchar *target = g_strdup(targets[i]);
+    pdfv_markdown_vault_adapter_preview_async(
+        fixture->vault, "Overview.md", target, i < 2, FALSE,
+        NULL, preview_test_done, &result);
+    /* Inputs belong to the caller and may disappear as soon as it returns. */
+    g_free(target);
+    g_assert_false(result.done);
+    while (!result.done) g_main_context_iteration(NULL, TRUE);
+    if (i % 2) {
+      g_assert_null(result.preview);
+      g_assert_error(result.error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    } else {
+      g_assert_no_error(result.error);
+      g_assert_nonnull(result.preview);
+      g_assert_cmpstr(result.preview->path, ==, i == 0 ? "Nested/Other.md" : "~Images/Diagram.png");
+      if (i == 0) g_assert_nonnull(strstr(result.preview->text, "Other heading"));
+      else g_assert_true(G_IS_FILE(result.preview->file));
+    }
+    pdfv_markdown_preview_free(result.preview);
+    g_clear_error(&result.error);
+  }
+}
+
 int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add("/markdown-vault/safe-resolution", VaultFixture, NULL,
@@ -322,5 +364,7 @@ int main(int argc, char **argv) {
   g_test_add("/markdown-vault/byte-preserving-read", VaultFixture, NULL,
              vault_fixture_setup, test_byte_preserving_read,
              vault_fixture_teardown);
+  g_test_add("/markdown-vault/async-preview", VaultFixture, NULL,
+             vault_fixture_setup, test_async_preview, vault_fixture_teardown);
   return g_test_run();
 }

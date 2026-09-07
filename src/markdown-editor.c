@@ -500,6 +500,60 @@ static void handle_link(PdfvMarkdownEditor *self, const gchar *type,
   g_clear_error(&error);
 }
 
+typedef struct {
+  GWeakRef editor;
+  gchar *id;
+} PreviewResponse;
+
+static void on_preview_resolved(GObject *source, GAsyncResult *result,
+                                gpointer user_data) {
+  PreviewResponse *request = user_data;
+  PdfvMarkdownEditor *self = g_weak_ref_get(&request->editor);
+  GError *error = NULL;
+  PdfvMarkdownPreview *preview = pdfv_markdown_vault_adapter_preview_finish(
+      PDFV_MARKDOWN_VAULT_ADAPTER(source), result, &error);
+  if (self && self->web_view) {
+    if (!preview) {
+      send_response_error(self, request->id, error);
+    } else {
+      JsonObject *value = json_object_new_owned();
+      json_object_set_string_member(value, "path", preview->path);
+      if (preview->text)
+        json_object_set_string_member(value, "text", preview->text);
+      if (preview->file) {
+        gchar *filename = g_file_get_path(preview->file);
+        gint width = 0, height = 0;
+        if (filename && gdk_pixbuf_get_file_info(filename, &width, &height) &&
+            width > 0 && height > 0) {
+          json_object_set_int_member(value, "width", width);
+          json_object_set_int_member(value, "height", height);
+        }
+        g_free(filename);
+      }
+      JsonNode *node = json_node_new(JSON_NODE_OBJECT);
+      json_node_take_object(node, value);
+      send_response_node(self, request->id, node, NULL);
+    }
+  }
+  pdfv_markdown_preview_free(preview);
+  g_clear_error(&error);
+  g_clear_object(&self);
+  g_weak_ref_clear(&request->editor);
+  g_free(request->id);
+  g_free(request);
+}
+
+static void request_preview(PdfvMarkdownEditor *self, const gchar *id,
+                            const gchar *source_path, const gchar *target,
+                            gboolean embed, gboolean relative) {
+  PreviewResponse *request = g_new0(PreviewResponse, 1);
+  g_weak_ref_init(&request->editor, self);
+  request->id = g_strdup(id);
+  pdfv_markdown_vault_adapter_preview_async(
+      self->vault, source_path, target, embed, relative, NULL,
+      on_preview_resolved, request);
+}
+
 static void handle_embed_read(PdfvMarkdownEditor *self, const gchar *id,
                               JsonObject *payload) {
   const gchar *target = payload ? json_object_get_string_member_with_default(
@@ -516,23 +570,7 @@ static void handle_embed_read(PdfvMarkdownEditor *self, const gchar *id,
     send_response_node(self, id, NULL, "Maximum embed depth exceeded");
     return;
   }
-  GError *error = NULL;
-  gchar *relative = NULL;
-  gchar *text = pdfv_markdown_vault_adapter_read_embed(
-      self->vault, source_path, target, &relative, &error);
-  if (!text) {
-    send_response_error(self, id, error);
-  } else {
-    JsonObject *value = json_object_new_owned();
-    json_object_set_string_member(value, "text", text);
-    json_object_set_string_member(value, "path", relative);
-    JsonNode *node = json_node_new(JSON_NODE_OBJECT);
-    json_node_take_object(node, value);
-    send_response_node(self, id, node, NULL);
-  }
-  g_free(text);
-  g_free(relative);
-  g_clear_error(&error);
+  request_preview(self, id, source_path, target, TRUE, FALSE);
 }
 
 static const gchar *extension_for_mime(const gchar *mime) {
@@ -777,6 +815,10 @@ static void handle_attachment_action(PdfvMarkdownEditor *self,
       ? json_object_get_string_member_with_default(payload, "sourcePath",
                                                     self->relative_path)
       : self->relative_path;
+  if (g_str_equal(type, "attachment/resolve")) {
+    request_preview(self, id, source_path, target, FALSE, relative);
+    return;
+  }
   GError *error = NULL;
   GFile *file = resolve_vault_attachment(self, target, relative, source_path,
                                          &error);
@@ -1787,6 +1829,17 @@ void pdfv_markdown_editor_run_command(PdfvMarkdownEditor *self,
   JsonObject *payload = json_object_new_owned();
   json_object_set_string_member(payload, "command", command);
   pdfv_markdown_editor_bridge_send(self->bridge, "command/run", NULL,
+                                   payload);
+  json_object_unref(payload);
+}
+
+void pdfv_markdown_editor_reveal_range(PdfvMarkdownEditor *self,
+                                       gint64 from, gint64 to) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  JsonObject *payload = json_object_new_owned();
+  json_object_set_int_member(payload, "from", from);
+  json_object_set_int_member(payload, "to", to);
+  pdfv_markdown_editor_bridge_send(self->bridge, "navigation/reveal-range", NULL,
                                    payload);
   json_object_unref(payload);
 }

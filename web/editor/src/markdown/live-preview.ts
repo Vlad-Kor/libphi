@@ -45,6 +45,7 @@ import {
   previewGeometryPreflight,
   withMeasuredGeometry,
 } from "./geometry";
+import { holdSelectionPresentation, presentationSelection } from "./selection-presentation";
 import { exportPreviewMode } from "../settings";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
@@ -370,7 +371,7 @@ function buildDecorationsNow(state: EditorState,
         }
         if (node.meta?.task) {
           const prefixTo = Number(node.meta?.contentFrom ?? node.to);
-          const prefixActive = state.selection.ranges.some((selection) =>
+          const prefixActive = presentationSelection(state).ranges.some((selection) =>
             selection.from === selection.to
               ? selection.from >= node.from && selection.from < prefixTo
               : selection.from < prefixTo && selection.to > node.from);
@@ -484,6 +485,7 @@ const livePreviewDecorations = StateField.define<DecorationSet>({
   update(value, transaction) {
     const forced = transaction.reconfigured || transaction.effects.some((effect) =>
       effect.is(refreshLivePreview) || effect.is(pinPreviewSource) ||
+      effect.is(holdSelectionPresentation) ||
       effect.is(measuredPreviewGeometry));
     if (forced) return buildDecorations(transaction.state);
     if (transaction.docChanged) {

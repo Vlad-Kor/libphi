@@ -301,6 +301,59 @@ static void on_cover_changed(AdwSwitchRow *row, GParamSpec *pspec,
   send_preview_state(self, "export/metadata");
 }
 
+typedef struct {
+  GWeakRef exporter;
+  gchar *id;
+} PreviewResponse;
+
+static void on_preview_resolved(GObject *source, GAsyncResult *result,
+                                gpointer user_data) {
+  PreviewResponse *request = user_data;
+  PdfvMarkdownExport *self = g_weak_ref_get(&request->exporter);
+  GError *error = NULL;
+  PdfvMarkdownPreview *preview = pdfv_markdown_vault_adapter_preview_finish(
+      PDFV_MARKDOWN_VAULT_ADAPTER(source), result, &error);
+  if (self && self->web_view) {
+    if (!preview) {
+      send_response(self, request->id, NULL,
+                    error ? error->message : "Preview target was not found");
+    } else {
+      JsonObject *value = json_object_new();
+      json_object_set_string_member(value, "path", preview->path);
+      if (preview->text)
+        json_object_set_string_member(value, "text", preview->text);
+      if (preview->file) {
+        gchar *filename = g_file_get_path(preview->file);
+        gint width = 0, height = 0;
+        if (filename && gdk_pixbuf_get_file_info(filename, &width, &height) &&
+            width > 0 && height > 0) {
+          json_object_set_int_member(value, "width", width);
+          json_object_set_int_member(value, "height", height);
+        }
+        g_free(filename);
+      }
+      send_response(self, request->id, object_node(value), NULL);
+    }
+  }
+  pdfv_markdown_preview_free(preview);
+  g_clear_error(&error);
+  g_clear_object(&self);
+  g_weak_ref_clear(&request->exporter);
+  g_free(request->id);
+  g_free(request);
+}
+
+static void request_preview(PdfvMarkdownExport *self, const gchar *id,
+                            const gchar *source_path, const gchar *target,
+                            gboolean embed, gboolean relative) {
+  PreviewResponse *request = g_new0(PreviewResponse, 1);
+  g_weak_ref_init(&request->exporter, self);
+  request->id = g_strdup(id);
+  pdfv_markdown_vault_adapter_preview_async(
+      self->vault, source_path, target, embed, relative, NULL,
+      on_preview_resolved, request);
+}
+
 static void handle_embed_read(PdfvMarkdownExport *self, const gchar *id,
                               JsonObject *payload) {
   const gchar *target = payload
@@ -316,22 +369,7 @@ static void handle_embed_read(PdfvMarkdownExport *self, const gchar *id,
     send_response(self, id, NULL, "Maximum embed depth exceeded");
     return;
   }
-  GError *error = NULL;
-  gchar *resolved_path = NULL;
-  gchar *text = pdfv_markdown_vault_adapter_read_embed(
-      self->vault, source_path, target, &resolved_path, &error);
-  if (!text) {
-    send_response(self, id, NULL,
-                  error ? error->message : "Embedded note was not found");
-  } else {
-    JsonObject *value = json_object_new();
-    json_object_set_string_member(value, "text", text);
-    json_object_set_string_member(value, "path", resolved_path);
-    send_response(self, id, object_node(value), NULL);
-  }
-  g_free(resolved_path);
-  g_free(text);
-  g_clear_error(&error);
+  request_preview(self, id, source_path, target, TRUE, FALSE);
 }
 
 static void handle_attachment_resolve(PdfvMarkdownExport *self,
@@ -346,32 +384,7 @@ static void handle_attachment_resolve(PdfvMarkdownExport *self,
       : self->current_path;
   gboolean relative = payload &&
       json_object_get_boolean_member_with_default(payload, "relative", FALSE);
-  GError *error = NULL;
-  GFile *file = pdfv_markdown_vault_adapter_resolve_attachment(
-      self->vault, source_path, target, relative, &error);
-  if (!file) {
-    send_response(self, id, NULL,
-                  error ? error->message : "Attachment was not found");
-  } else {
-    JsonObject *value = json_object_new();
-    gchar *path = pdfv_markdown_vault_adapter_relative_path(self->vault, file);
-    json_object_set_string_member(value, "path", path);
-    gchar *filename = g_file_get_path(file);
-    if (filename) {
-      gint width = 0;
-      gint height = 0;
-      if (gdk_pixbuf_get_file_info(filename, &width, &height) && width > 0 &&
-          height > 0) {
-        json_object_set_int_member(value, "width", width);
-        json_object_set_int_member(value, "height", height);
-      }
-    }
-    send_response(self, id, object_node(value), NULL);
-    g_free(filename);
-    g_free(path);
-  }
-  g_clear_object(&file);
-  g_clear_error(&error);
+  request_preview(self, id, source_path, target, FALSE, relative);
 }
 
 static gchar *safe_suggested_filename(const gchar *requested) {
@@ -1855,7 +1868,7 @@ static GtkWidget *create_busy_overlay(PdfvMarkdownExport *self) {
   gtk_widget_set_valign(backdrop, GTK_ALIGN_FILL);
   gtk_widget_set_hexpand(backdrop, TRUE);
   gtk_widget_set_vexpand(backdrop, TRUE);
-  gtk_widget_add_css_class(backdrop, "view");
+  gtk_widget_add_css_class(backdrop, "background");
 
   GtkWidget *card = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_widget_set_halign(card, GTK_ALIGN_CENTER);

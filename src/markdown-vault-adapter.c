@@ -602,6 +602,79 @@ gchar *pdfv_markdown_vault_adapter_read_embed(
   return fragment;
 }
 
+typedef struct {
+  gchar *source_path;
+  gchar *target;
+  gboolean embed;
+  gboolean relative;
+} PreviewRequest;
+
+static void preview_request_free(PreviewRequest *request) {
+  g_free(request->source_path);
+  g_free(request->target);
+  g_free(request);
+}
+
+void pdfv_markdown_preview_free(PdfvMarkdownPreview *preview) {
+  if (!preview) return;
+  g_free(preview->path);
+  g_free(preview->text);
+  g_clear_object(&preview->file);
+  g_free(preview);
+}
+
+static void preview_thread(GTask *task, gpointer source_object,
+                           gpointer task_data, GCancellable *cancellable) {
+  (void)cancellable;
+  if (g_task_return_error_if_cancelled(task)) return;
+  PdfvMarkdownVaultAdapter *self = source_object;
+  PreviewRequest *request = task_data;
+  PdfvMarkdownPreview *preview = g_new0(PdfvMarkdownPreview, 1);
+  GError *error = NULL;
+  if (request->embed) {
+    preview->text = pdfv_markdown_vault_adapter_read_embed(
+        self, request->source_path, request->target, &preview->path, &error);
+  } else {
+    preview->file = pdfv_markdown_vault_adapter_resolve_attachment(
+        self, request->source_path, request->target, request->relative, &error);
+    if (preview->file)
+      preview->path = pdfv_markdown_vault_adapter_relative_path(self, preview->file);
+  }
+  if (!preview->path) {
+    pdfv_markdown_preview_free(preview);
+    if (error) g_task_return_error(task, error);
+    else g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                "Preview target was not found");
+    return;
+  }
+  g_task_return_pointer(task, preview, (GDestroyNotify)pdfv_markdown_preview_free);
+}
+
+void pdfv_markdown_vault_adapter_preview_async(
+    PdfvMarkdownVaultAdapter *self, const gchar *source_path,
+    const gchar *target, gboolean embed, gboolean relative_to_note,
+    GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_VAULT_ADAPTER(self));
+  GTask *task = g_task_new(self, cancellable, callback, user_data);
+  g_task_set_source_tag(task, pdfv_markdown_vault_adapter_preview_async);
+  PreviewRequest *request = g_new0(PreviewRequest, 1);
+  request->source_path = g_strdup(source_path);
+  request->target = g_strdup(target);
+  request->embed = embed;
+  request->relative = relative_to_note;
+  g_task_set_task_data(task, request, (GDestroyNotify)preview_request_free);
+  g_task_run_in_thread(task, preview_thread);
+  g_object_unref(task);
+}
+
+PdfvMarkdownPreview *pdfv_markdown_vault_adapter_preview_finish(
+    PdfvMarkdownVaultAdapter *self, GAsyncResult *result, GError **error) {
+  g_return_val_if_fail(g_task_is_valid(result, self), NULL);
+  g_return_val_if_fail(g_async_result_is_tagged(
+      result, pdfv_markdown_vault_adapter_preview_async), NULL);
+  return g_task_propagate_pointer(G_TASK(result), error);
+}
+
 GBytes *pdfv_markdown_vault_adapter_read_bytes(
     PdfvMarkdownVaultAdapter *self, const gchar *relative_path,
     gchar **content_type, GError **error) {

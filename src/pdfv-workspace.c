@@ -1239,6 +1239,33 @@ static gchar *make_snippet(const gchar *text, const gchar *folded,
   return g_string_free(clean, FALSE);
 }
 
+/* Case folding may expand a character (ß -> ss), and CodeMirror counts
+ * UTF-16 units rather than UTF-8 bytes. Map the folded match back to source. */
+static void match_source_range(const gchar *text, gsize folded_from,
+                                gsize folded_to, PdfvWorkspaceMatch *match) {
+  gsize folded_offset = 0;
+  gint64 source_offset = 0;
+  gboolean started = FALSE;
+  for (const gchar *p = text; *p; p = g_utf8_next_char(p)) {
+    const gchar *next = g_utf8_next_char(p);
+    gchar *folded = g_utf8_casefold(p, next - p);
+    gsize length = strlen(folded);
+    g_free(folded);
+    gint units = g_utf8_get_char(p) > 0xffff ? 2 : 1;
+    if (*p == '\r' && *next == '\n') units = 0;
+    if (!started && folded_offset + length > folded_from) {
+      match->source_from = source_offset;
+      started = TRUE;
+    }
+    source_offset += units;
+    folded_offset += length;
+    if (folded_offset >= folded_to) {
+      match->source_to = source_offset;
+      return;
+    }
+  }
+}
+
 static void search_worker(GTask *task, gpointer source_object,
                           gpointer task_data, GCancellable *cancellable) {
   (void)source_object;
@@ -1298,6 +1325,8 @@ static void search_worker(GTask *task, gpointer source_object,
       PdfvWorkspaceMatch *match = g_new0(PdfvWorkspaceMatch, 1);
       match->page = p;
       match->snippet = make_snippet(page->text, page->folded, found);
+      match_source_range(page->text, found - page->folded,
+                         found - page->folded + strlen(needle), match);
       g_ptr_array_add(group->matches, match);
       content_match = TRUE;
     }

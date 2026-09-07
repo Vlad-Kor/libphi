@@ -41,6 +41,8 @@ void pdfv_markdown_editor_reload_async(
 
 void pdfv_markdown_editor_run_command(PdfvMarkdownEditor *self,
                                       const gchar *command);
+void pdfv_markdown_editor_reveal_range(PdfvMarkdownEditor *self,
+                                       gint64 from, gint64 to);
 void pdfv_markdown_editor_reveal_fragment(PdfvMarkdownEditor *self,
                                           const gchar *target);
 void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,

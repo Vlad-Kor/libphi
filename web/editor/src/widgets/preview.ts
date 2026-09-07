@@ -1,7 +1,7 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { parseDocument } from "yaml";
 import { requestNative, reportError, sendNative } from "../bridge";
-import { getMathRevision, renderMath, wireMathScroll } from "../math/mathjax";
+import { getMathRevision, isMathScrollbarEvent, renderMath, wireMathScroll } from "../math/mathjax";
 import {
   rawHtmlIsBlock,
   renderMarkdown,
@@ -632,6 +632,7 @@ export class MathWidget extends WidgetType {
     element.tabIndex = 0;
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
     const revealMath = (event: Event) => {
+      if (isMathScrollbarEvent(element, event)) return;
       event.preventDefault();
       event.stopPropagation();
       reveal(view, this.from);
@@ -818,6 +819,23 @@ function interactiveImage(
   return markHardRenderedItem(view, container, from, to, true, true);
 }
 
+interface NoteEmbedResult { text?: string; path?: string }
+const noteEmbedDisposers = new WeakMap<HTMLElement, () => void>();
+const pendingNoteEmbeds = new Map<string, Promise<NoteEmbedResult>>();
+
+function readNoteEmbed(target: string, sourcePath: string): Promise<NoteEmbedResult> {
+  const key = `${sourcePath}\u0000${target}`;
+  const pending = pendingNoteEmbeds.get(key);
+  if (pending) return pending;
+  const request = requestNative<NoteEmbedResult>("embed/read", {
+    target, sourcePath, depth: 1,
+  });
+  const clear = () => { pendingNoteEmbeds.delete(key); };
+  void request.then(clear, clear);
+  pendingNoteEmbeds.set(key, request);
+  return request;
+}
+
 export class LinkWidget extends WidgetType {
   readonly geometryContext = previewGeometryContext;
 
@@ -937,14 +955,12 @@ export class LinkWidget extends WidgetType {
     body.className = "embed-body dimmed";
     body.textContent = "Loading embed…";
     container.append(title, source, body);
-    requestNative<{ text?: string; path?: string }>(
-      "embed/read", {
-        target: this.target,
-        sourcePath: this.geometryContext.documentPath,
-        depth: 1,
-      },
-    )
+    let destroyed = false;
+    const dispose = () => { destroyed = true; };
+    noteEmbedDisposers.set(container, dispose);
+    readNoteEmbed(this.target, this.geometryContext.documentPath)
       .then((result) => {
+        if (destroyed) return;
         body.classList.remove("dimmed");
         body.innerHTML = renderMarkdown(result?.text ?? "");
         wireRenderedContent(body, result?.path ?? "");
@@ -954,10 +970,13 @@ export class LinkWidget extends WidgetType {
         );
       })
       .catch((error) => {
+        if (destroyed) return;
         body.className = "embed-body render-error";
         body.textContent = error instanceof Error ? error.message : String(error);
         container.style.removeProperty("min-height");
-        view.requestMeasure();
+        observeNoteEmbedResize(
+          view, container, this.geometryContext, this.geometryKey,
+        );
       });
     return markHardRenderedItem(
       view, container, this.from, this.to, false,
@@ -985,6 +1004,8 @@ export class LinkWidget extends WidgetType {
   ignoreEvent(): boolean { return this.embed; }
 
   destroy(dom: HTMLElement): void {
+    noteEmbedDisposers.get(dom)?.();
+    noteEmbedDisposers.delete(dom);
     stopObservingWidgetResize(dom);
   }
 }
@@ -1271,13 +1292,12 @@ export class CalloutWidget extends WidgetType {
     body.innerHTML = renderMarkdown(this.body);
     wireRenderedContent(body);
     details.append(title, body);
+    details.addEventListener("toggle", () => view.requestMeasure());
     const revealClick = (event: MouseEvent) => {
+      // Let the browser's summary control own disclosure, including its marker.
+      if (event.target instanceof Node && title.contains(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.target instanceof Node && title.contains(event.target)) {
-        revealAt(view, this.from + 2);
-        return;
-      }
       const selected = clickedSourceOffset(body, this.body, event) ?? 0;
       revealAt(view, calloutBodyPosition(view, this.from, this.body, selected));
     };
@@ -1475,8 +1495,12 @@ export class RawHtmlWidget extends WidgetType {
         view, container, this.from, this.to, false,
       );
     }
+    container.querySelectorAll("details").forEach(details => {
+      details.addEventListener("toggle", () => view.requestMeasure());
+    });
     const revealHtml = (rawEvent: Event) => {
       const event = rawEvent as MouseEvent;
+      if (event.target instanceof Element && event.target.closest("summary")) return;
       event.preventDefault();
       event.stopPropagation();
       const offset = clickedSourceOffset(container, this.source, event) ?? 0;
