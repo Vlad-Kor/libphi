@@ -45,6 +45,7 @@ import {
   previewGeometryPreflight,
   withMeasuredGeometry,
 } from "./geometry";
+import { revealDraggedPreview } from "./drag-reveal";
 import { exportPreviewMode } from "../settings";
 
 const hidden = Decoration.replace({ widget: new HiddenWidget() });
@@ -484,6 +485,7 @@ const livePreviewDecorations = StateField.define<DecorationSet>({
   update(value, transaction) {
     const forced = transaction.reconfigured || transaction.effects.some((effect) =>
       effect.is(refreshLivePreview) || effect.is(pinPreviewSource) ||
+      effect.is(revealDraggedPreview) ||
       effect.is(measuredPreviewGeometry));
     if (forced) return buildDecorations(transaction.state);
     if (transaction.docChanged) {

@@ -7,6 +7,7 @@ import { latexEnhancements } from "../src/latex-suite/enhancements";
 const frame = () => new Promise<void>(resolve => setTimeout(resolve, 35));
 export async function verifyPointerConceal(): Promise<void> {
   await verifyCommandDrag();
+  await verifyPreviewEntry();
   await verifyWrappedEquation(String.raw`\(G^*\)`);
   await verifyWrappedEquation("$G^*$");
 }
@@ -152,5 +153,53 @@ async function verifyCommandDrag(): Promise<void> {
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
     view.destroy();
     parent.remove();
+  }
+}
+
+async function verifyPreviewEntry(): Promise<void> {
+  for (const source of ["$\\frac{abcdefgh}{ijklmnop}$", '<span style="color:#ed4564">drawing of the planar dual</span>']) {
+    const text = `Before ${source} after`;
+    const parent = document.createElement("div");
+    parent.style.cssText = "position:fixed;top:0;left:0;width:1000px;height:300px;z-index:100";
+    document.body.append(parent);
+    const view = new EditorView({ parent, state: EditorState.create({
+      doc: text, selection: { anchor: 0 },
+      extensions: [markdown(), livePreview.slice(0, -1), latexEnhancements(true), EditorView.lineWrapping],
+    }) });
+    try {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        await frame();
+        if (!view.contentDOM.querySelector(".math-loading")) break;
+      }
+      const widget = view.contentDOM.querySelector<HTMLElement>(".math-widget, .raw-html-widget");
+      if (!widget) throw new Error("Missing rendered preview in edge-entry fixture");
+      const box = widget.getBoundingClientRect();
+      const start = view.coordsAtPos(0)!;
+      view.contentDOM.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true, cancelable: true, button: 0, buttons: 1, detail: 1,
+        clientX: start.left, clientY: (start.top + start.bottom) / 2,
+      }));
+      document.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true, cancelable: true, buttons: 1,
+        clientX: box.left + 1, clientY: (box.top + box.bottom) / 2,
+      }));
+      if (view.contentDOM.contains(widget))
+        throw new Error(`Preview did not reveal at its first pixel: ${source}`);
+      // Moving back out must not undo the reveal during the same gesture.
+      document.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true, cancelable: true, buttons: 1,
+        clientX: start.left, clientY: (start.top + start.bottom) / 2,
+      }));
+      await frame();
+      if (view.contentDOM.querySelector(".math-widget, .raw-html-widget"))
+        throw new Error("Preview re-rendered before drag release");
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+      if (!view.contentDOM.querySelector(".math-widget, .raw-html-widget"))
+        throw new Error("Preview did not render again after selection left it and drag ended");
+    } finally {
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+      view.destroy();
+      parent.remove();
+    }
   }
 }
