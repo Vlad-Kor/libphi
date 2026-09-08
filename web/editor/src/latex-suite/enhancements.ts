@@ -780,8 +780,15 @@ const latexConcealPlugin = ViewPlugin.fromClass(class {
   }
 }, {
   decorations: (plugin) => plugin.decorations,
-  provide: (plugin) => EditorView.atomicRanges.of((view) =>
-    view.plugin(plugin)?.atomicRanges ?? RangeSet.empty),
+  provide: (plugin) => EditorView.atomicRanges.of((view) => {
+    const presentation = view.plugin(plugin);
+    // MouseSelection snapshots atoms on mousedown. Retaining conceal atoms in
+    // that snapshot prevents character selection after the command reveals.
+    // Replacement DOM supplies pointer boundaries while concealed; keep the
+    // extra atomic ranges only for keyboard traversal.
+    return presentation?.guard.selecting
+      ? RangeSet.empty : presentation?.atomicRanges ?? RangeSet.empty;
+  }),
 });
 
 export function latexEnhancements(conceal: boolean): Extension {

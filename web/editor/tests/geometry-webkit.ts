@@ -181,4 +181,4 @@ async function run() {
   }
   (window as any).webkit.messageHandlers.test.postMessage((failures.length || oracleErrors.length || previewGeometryStatus(view)?.pending || previewGeometryStatus(view)?.skipped || heights.size < 20 ? 'FAIL ' : 'PASS ') + JSON.stringify({ width: innerWidth, scale: getComputedStyle(document.body).fontSize, openMs, firstFrameMs, preflightMs, cached: heights.size, results, failures, oracleErrors }));
 }
-run().catch(error => (window as any).webkit.messageHandlers.test.postMessage('FAIL ' + error.stack));
+run().catch(error => (window as any).webkit.messageHandlers.test.postMessage('FAIL ' + error.message + '\n' + error.stack));

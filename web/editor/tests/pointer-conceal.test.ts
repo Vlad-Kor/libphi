@@ -9,6 +9,7 @@ const guards: ConcealPointerGuard[] = [];
 afterEach(() => {
   guards.splice(0).forEach(guard => guard.destroy());
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 function setup() {
@@ -21,10 +22,20 @@ function setup() {
   document.body.append(dom);
   let top = 10;
   let request: MeasureRequest;
+  vi.spyOn(document, "createRange").mockReturnValue({
+    setStart() {}, setEnd() {},
+    getClientRects: () => top === 10
+      ? [new DOMRect(75, top, 30, 10)]
+      : [new DOMRect(75, 10, 5, 10), new DOMRect(5, top, 30, 10)],
+  } as unknown as Range);
   const view = {
     dom, contentDOM: dom, posAtDOM: () => 4,
+    domAtPos: () => ({ node: span, offset: 0 }),
     state: EditorState.create({ doc: "  $G^*" }),
-    coordsAtPos: (pos: number) => ({ left: pos < 4 ? 75 : 90, right: pos < 4 ? 75 : 90, top, bottom: top + 10 }),
+    coordsAtPos: (pos: number) => {
+      const left = (top === 10 ? 75 : 5) + (pos - 2) * 7.5;
+      return { left, right: left, top, bottom: top + 10 };
+    },
     requestMeasure: (value: MeasureRequest) => { request = value; },
     dispatch: vi.fn(),
   } as unknown as EditorView;
@@ -67,5 +78,19 @@ it.each(["mouseup", "blur"])("clears wrap hysteresis on %s", event => {
   guard.reveal(spec, true);
   measure(30);
   window.dispatchEvent(new Event(event));
+  expect(guard.reveal(spec, false)).toBe(false);
+});
+
+
+it("stays revealed across the line gap and while moving over the new base position", () => {
+  const { guard, spec, measure, move, view } = setup();
+  guard.reveal(spec, true);
+  measure(30);
+  for (const [x, y] of [[80, 15], [50, 25], [13, 35], [14, 35], [12, 35], [80, 15]]) {
+    move(x, y);
+    expect(guard.reveal(spec, false)).toBe(true);
+  }
+  expect(view.dispatch).not.toHaveBeenCalled();
+  move(50, 50);
   expect(guard.reveal(spec, false)).toBe(false);
 });

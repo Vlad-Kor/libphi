@@ -5,6 +5,8 @@ import type { LatexConcealSpec } from "./enhancements";
 export const refreshPointerConceal = StateEffect.define<null>();
 interface RevealRegion {
   from: number;
+  wordFrom: number;
+  wordTo: number;
   left: number;
   right: number;
   top: number;
@@ -12,7 +14,7 @@ interface RevealRegion {
 }
 
 // Reveal immediately. If revealing moves a fragment onto the following row,
-// retain its source while the pointer occupies its former visual position.
+// retain its source over both the former and the new visual positions.
 // This affects presentation only; CodeMirror still selects literal offsets.
 export class ConcealPointerGuard {
   private destroyed = false;
@@ -21,6 +23,8 @@ export class ConcealPointerGuard {
   private y = 0;
   private before = new Map<number, RevealRegion>();
   private revealed = new Map<number, RevealRegion>();
+
+  get selecting(): boolean { return this.active; }
 
   constructor(private readonly view: EditorView) {
     const doc = view.dom.ownerDocument;
@@ -34,6 +38,25 @@ export class ConcealPointerGuard {
   private inside(region: RevealRegion): boolean {
     return this.x >= region.left && this.x <= region.right &&
       this.y >= region.top && this.y <= region.bottom;
+  }
+
+  private insideReflow(region: RevealRegion): boolean {
+    if (this.inside(region)) return true;
+    const start = this.view.domAtPos(region.wordFrom);
+    const end = this.view.domAtPos(region.wordTo);
+    const range = this.view.dom.ownerDocument.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    const boxes = [...range.getClientRects()].filter(box => box.width > 0);
+    // Endpoints can straddle rows (the delimiter stays above while G wraps).
+    // Use the browser's actual text fragments, including the new base glyph.
+    if (boxes.some(box => this.x >= box.left && this.x <= box.right &&
+        this.y >= box.top && this.y <= box.bottom)) return true;
+    // Preserve the transition through the line gap as well.
+    return boxes.some(box => box.top >= region.bottom - 1 &&
+      this.y >= region.bottom && this.y <= box.top &&
+      this.x >= Math.min(region.left, box.left) &&
+      this.x <= Math.max(region.right, box.right));
   }
 
   private capture(event: MouseEvent): void {
@@ -53,11 +76,13 @@ export class ConcealPointerGuard {
       const line = this.view.state.doc.lineAt(from);
       const prefix = this.view.state.sliceDoc(line.from, from);
       const wordFrom = from - (/\S+$/.exec(prefix)?.[0].length ?? 0);
+      const wordTo = from + (/^\S+/.exec(this.view.state.sliceDoc(from, line.to))?.[0].length ?? 0);
       const wordCaret = this.view.coordsAtPos(wordFrom);
       const sameRow = wordCaret && wordCaret.top < caret.bottom &&
         wordCaret.bottom > caret.top;
       this.before.set(from, {
-        from, left: sameRow ? Math.min(box.left, wordCaret.left) : box.left, right,
+        from, wordFrom, wordTo,
+        left: sameRow ? Math.min(box.left, wordCaret.left) : box.left, right,
         top: Math.min(box.top, caret.top), bottom: Math.max(box.bottom, caret.bottom),
       });
     }
@@ -76,7 +101,7 @@ export class ConcealPointerGuard {
     this.capture(event);
     let changed = false;
     for (const [key, region] of this.revealed) {
-      if (!this.inside(region)) {
+      if (!this.insideReflow(region)) {
         this.revealed.delete(key);
         changed = true;
       }

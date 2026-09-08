@@ -6,6 +6,7 @@ import { latexEnhancements } from "../src/latex-suite/enhancements";
 
 const frame = () => new Promise<void>(resolve => setTimeout(resolve, 35));
 export async function verifyPointerConceal(): Promise<void> {
+  await verifyCommandDrag();
   await verifyWrappedEquation(String.raw`\(G^*\)`);
   await verifyWrappedEquation("$G^*$");
 }
@@ -27,22 +28,30 @@ async function verifyWrappedEquation(math: string): Promise<void> {
     extensions: [markdown(), livePreview.slice(0, -1), latexEnhancements(true), EditorView.lineWrapping],
   }) });
   try {
-    let original: DOMRect | undefined;
-    for (let spacing = 0; spacing <= 5; spacing += 0.02) {
+    // Find the expanded word's first wrap threshold without sweeping hundreds
+    // of frames (background WebKit windows may throttle their timers).
+    let low = 0, high = 5;
+    view.dispatch({ selection: EditorSelection.range(from, from + 3) });
+    for (let iteration = 0; iteration < 14; iteration++) {
+      const spacing = (low + high) / 2;
       stage = `spacing ${spacing}`;
       view.contentDOM.style.letterSpacing = `${spacing}px`;
-      view.dispatch({ selection: { anchor: from } });
       view.requestMeasure();
       await frame();
-      const span = view.contentDOM.querySelector<HTMLElement>(".cm-latex-conceal-script");
-      if (!span) throw new Error("Concealed script missing before selection");
-      const before = span.getBoundingClientRect();
-      view.dispatch({ selection: EditorSelection.range(from, from + 3) });
-      await frame();
-      const after = view.coordsAtPos(from + 1)!;
-      if (after.top >= before.bottom) { original = before; break; }
+      if (view.coordsAtPos(from + 1)!.top > view.coordsAtPos(0)!.bottom)
+        high = spacing;
+      else low = spacing;
     }
-    if (!original) throw new Error("Could not reproduce the wrap boundary for G^*");
+    view.contentDOM.style.letterSpacing = `${high}px`;
+    view.dispatch({ selection: { anchor: from } });
+    await frame();
+    const span = view.contentDOM.querySelector<HTMLElement>(".cm-latex-conceal-script");
+    if (!span) throw new Error("Concealed script missing before selection");
+    const original = span.getBoundingClientRect();
+    view.dispatch({ selection: EditorSelection.range(from, from + 3) });
+    await frame();
+    if (view.coordsAtPos(from + 1)!.top < original.bottom)
+      throw new Error("Could not reproduce the wrap boundary for G^*");
     view.dispatch({ selection: { anchor } });
     await frame();
     stage = "drag";
@@ -79,6 +88,19 @@ async function verifyWrappedEquation(math: string): Promise<void> {
       if (view.contentDOM.querySelector(".cm-latex-conceal-script"))
         throw new Error(`Wrapped ${math} re-concealed over its former G position`);
     }
+    const wrappedBase = view.coordsAtPos(from)!;
+    if (wrappedBase.top <= caret.top) throw new Error("Expected G on the next row");
+    for (const offset of [1, 2, 1, 0.5, 1.5, 1]) {
+      document.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true, cancelable: true, buttons: 1,
+        clientX: wrappedBase.left + offset,
+        clientY: (wrappedBase.top + wrappedBase.bottom) / 2,
+      }));
+      await frame();
+      if (view.contentDOM.querySelector(".cm-latex-conceal-script") ||
+          view.coordsAtPos(from)!.top < wrappedBase.top - 1)
+        throw new Error(`Wrapped ${math} jumped while moving over its new G position`);
+    }
     // Precision remains ordinary source selection, including the single ^.
     view.dispatch({ selection: EditorSelection.range(from + 1, from + 2), userEvent: "select.pointer" });
     if (view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) !== "^")
@@ -89,5 +111,46 @@ async function verifyWrappedEquation(math: string): Promise<void> {
     view.destroy();
     parent.remove();
     window.onerror = onerror;
+  }
+}
+
+async function verifyCommandDrag(): Promise<void> {
+  const text = "testtestestestestetstesttesttesttesttestioajwefepiofjapfieo${\\displaystyle \\mathbb{R}^{2} }$";
+  const parent = document.createElement("div");
+  parent.style.cssText = "position:fixed;top:0;left:0;width:1000px;height:300px;z-index:100";
+  document.body.append(parent);
+  const anchor = text.indexOf("$");
+  const view = new EditorView({ parent, state: EditorState.create({
+    doc: text, selection: { anchor },
+    extensions: [markdown(), livePreview.slice(0, -1), latexEnhancements(true), EditorView.lineWrapping],
+  }) });
+  const move = (x: number, y: number) => document.dispatchEvent(new MouseEvent("mousemove", {
+    bubbles: true, cancelable: true, buttons: 1, clientX: x, clientY: y,
+  }));
+  try {
+    await frame();
+    const glyph = [...view.contentDOM.querySelectorAll(".cm-latex-conceal")]
+      .find(element => element.textContent === "ℝ");
+    if (!glyph) throw new Error("Missing concealed mathbb in command-drag fixture");
+    const glyphBox = glyph.getBoundingClientRect();
+    const start = view.coordsAtPos(anchor)!;
+    view.contentDOM.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, detail: 1,
+      clientX: start.left, clientY: (start.top + start.bottom) / 2,
+    }));
+    move(glyphBox.right, (glyphBox.top + glyphBox.bottom) / 2);
+    await frame();
+    for (const offset of [2, 3, 4, 3]) {
+      const target = text.indexOf("mathbb") + offset;
+      const caret = view.coordsAtPos(target)!;
+      move(caret.left + 0.1, (caret.top + caret.bottom) / 2);
+      await frame();
+      if (view.state.selection.main.head !== target)
+        throw new Error(`Command drag snapped from ${target} to ${view.state.selection.main.head}`);
+    }
+  } finally {
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+    view.destroy();
+    parent.remove();
   }
 }

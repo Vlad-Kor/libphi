@@ -53,3 +53,26 @@ it.each([" ", "   ", "\t\t"])("preserves extra whitespace following a task check
   expect(view.dom.querySelector(".task-checkbox")).not.toBeNull();
   expect(view.dom.querySelector(".cm-line")?.textContent).toBe(`${spaces.slice(1)}done`);
 });
+
+
+it("does not snapshot conceal atoms into a drag that will reveal command source", () => {
+  const text = "testtestestestestetstesttesttesttesttestioajwefepiofjapfieo${\\displaystyle \\mathbb{R}^{2} }$";
+  const editor = open(text);
+  const { view } = editor;
+  editor.updateSettings({ executableSnippets: true, latexConceal: true });
+  view.dispatch({ selection: { anchor: text.indexOf("$") } });
+  const atoms = () => view.state.facet(EditorView.atomicRanges)
+    .reduce((count, get) => count + get(view).size, 0);
+  expect(atoms()).toBeGreaterThan(0);
+  // The document capture listener runs before CodeMirror takes its snapshot.
+  // Suppress only jsdom's unsupported native coordinate hit testing.
+  view.contentDOM.addEventListener("mousedown", event => event.stopImmediatePropagation(), { once: true });
+  view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, buttons: 1 }));
+  expect(atoms()).toBe(0);
+  const from = text.indexOf("mathbb") + 2;
+  view.dispatch({ selection: EditorSelection.range(from, from + 1), userEvent: "select.pointer" });
+  expect(view.state.sliceDoc(from, from + 1)).toBe("t");
+  window.dispatchEvent(new MouseEvent("mouseup"));
+  view.dispatch({ selection: { anchor: text.indexOf("$") } });
+  expect(atoms()).toBeGreaterThan(0);
+});
