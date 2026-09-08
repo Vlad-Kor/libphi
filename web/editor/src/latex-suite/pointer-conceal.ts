@@ -24,8 +24,6 @@ export class ConcealPointerGuard {
   private before = new Map<number, RevealRegion>();
   private revealed = new Map<number, RevealRegion>();
 
-  get selecting(): boolean { return this.active; }
-
   constructor(private readonly view: EditorView) {
     const doc = view.dom.ownerDocument;
     doc.addEventListener("mousedown", this.down, true);

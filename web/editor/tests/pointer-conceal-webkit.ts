@@ -6,8 +6,7 @@ import { latexEnhancements } from "../src/latex-suite/enhancements";
 
 const frame = () => new Promise<void>(resolve => setTimeout(resolve, 35));
 export async function verifyPointerConceal(): Promise<void> {
-  await verifyCommandDrag();
-  await verifyPreviewEntry();
+  await verifyPreviewSelectionLifecycle();
   await verifyWrappedEquation(String.raw`\(G^*\)`);
   await verifyWrappedEquation("$G^*$");
 }
@@ -106,6 +105,14 @@ async function verifyWrappedEquation(math: string): Promise<void> {
     view.dispatch({ selection: EditorSelection.range(from + 1, from + 2), userEvent: "select.pointer" });
     if (view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) !== "^")
       throw new Error("Cannot select an individual revealed script character");
+    const outside = view.coordsAtPos(0)!;
+    document.dispatchEvent(new MouseEvent("mousemove", {
+      bubbles: true, cancelable: true, buttons: 1,
+      clientX: outside.left, clientY: (outside.top + outside.bottom) / 2,
+    }));
+    await frame();
+    if (!view.contentDOM.querySelector(".math-inline"))
+      throw new Error("Wrapped equation stayed revealed after the drag left it");
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
   } finally {
     stage = "cleanup";
@@ -115,48 +122,7 @@ async function verifyWrappedEquation(math: string): Promise<void> {
   }
 }
 
-async function verifyCommandDrag(): Promise<void> {
-  const text = "testtestestestestetstesttesttesttesttestioajwefepiofjapfieo${\\displaystyle \\mathbb{R}^{2} }$";
-  const parent = document.createElement("div");
-  parent.style.cssText = "position:fixed;top:0;left:0;width:1000px;height:300px;z-index:100";
-  document.body.append(parent);
-  const anchor = text.indexOf("$");
-  const view = new EditorView({ parent, state: EditorState.create({
-    doc: text, selection: { anchor },
-    extensions: [markdown(), livePreview.slice(0, -1), latexEnhancements(true), EditorView.lineWrapping],
-  }) });
-  const move = (x: number, y: number) => document.dispatchEvent(new MouseEvent("mousemove", {
-    bubbles: true, cancelable: true, buttons: 1, clientX: x, clientY: y,
-  }));
-  try {
-    await frame();
-    const glyph = [...view.contentDOM.querySelectorAll(".cm-latex-conceal")]
-      .find(element => element.textContent === "ℝ");
-    if (!glyph) throw new Error("Missing concealed mathbb in command-drag fixture");
-    const glyphBox = glyph.getBoundingClientRect();
-    const start = view.coordsAtPos(anchor)!;
-    view.contentDOM.dispatchEvent(new MouseEvent("mousedown", {
-      bubbles: true, cancelable: true, button: 0, buttons: 1, detail: 1,
-      clientX: start.left, clientY: (start.top + start.bottom) / 2,
-    }));
-    move(glyphBox.right, (glyphBox.top + glyphBox.bottom) / 2);
-    await frame();
-    for (const offset of [2, 3, 4, 3]) {
-      const target = text.indexOf("mathbb") + offset;
-      const caret = view.coordsAtPos(target)!;
-      move(caret.left + 0.1, (caret.top + caret.bottom) / 2);
-      await frame();
-      if (view.state.selection.main.head !== target)
-        throw new Error(`Command drag snapped from ${target} to ${view.state.selection.main.head}`);
-    }
-  } finally {
-    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
-    view.destroy();
-    parent.remove();
-  }
-}
-
-async function verifyPreviewEntry(): Promise<void> {
+async function verifyPreviewSelectionLifecycle(): Promise<void> {
   for (const source of ["$\\frac{abcdefgh}{ijklmnop}$", '<span style="color:#ed4564">drawing of the planar dual</span>']) {
     const text = `Before ${source} after`;
     const parent = document.createElement("div");
@@ -181,18 +147,19 @@ async function verifyPreviewEntry(): Promise<void> {
       }));
       document.dispatchEvent(new MouseEvent("mousemove", {
         bubbles: true, cancelable: true, buttons: 1,
-        clientX: box.left + 1, clientY: (box.top + box.bottom) / 2,
+        clientX: box.right + 1, clientY: (box.top + box.bottom) / 2,
       }));
       if (view.contentDOM.contains(widget))
-        throw new Error(`Preview did not reveal at its first pixel: ${source}`);
-      // Moving back out must not undo the reveal during the same gesture.
+        throw new Error(`Selected preview did not reveal: ${source}`);
+      // Baseline behavior: backing out re-renders immediately, even while
+      // the mouse button remains held. No whole-gesture source pinning.
       document.dispatchEvent(new MouseEvent("mousemove", {
         bubbles: true, cancelable: true, buttons: 1,
         clientX: start.left, clientY: (start.top + start.bottom) / 2,
       }));
       await frame();
-      if (view.contentDOM.querySelector(".math-widget, .raw-html-widget"))
-        throw new Error("Preview re-rendered before drag release");
+      if (!view.contentDOM.querySelector(".math-widget, .raw-html-widget"))
+        throw new Error("Unselected preview stayed revealed during the drag");
       document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
       if (!view.contentDOM.querySelector(".math-widget, .raw-html-widget"))
         throw new Error("Preview did not render again after selection left it and drag ended");

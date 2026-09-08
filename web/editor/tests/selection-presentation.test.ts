@@ -55,7 +55,7 @@ it.each([" ", "   ", "\t\t"])("preserves extra whitespace following a task check
 });
 
 
-it("does not snapshot conceal atoms into a drag that will reveal command source", () => {
+it("preserves the baseline conceal atomic ranges during a drag", () => {
   const text = "testtestestestestetstesttesttesttesttestioajwefepiofjapfieo${\\displaystyle \\mathbb{R}^{2} }$";
   const editor = open(text);
   const { view } = editor;
@@ -66,9 +66,9 @@ it("does not snapshot conceal atoms into a drag that will reveal command source"
   expect(atoms()).toBeGreaterThan(0);
   // The document capture listener runs before CodeMirror takes its snapshot.
   // Suppress only jsdom's unsupported native coordinate hit testing.
-  view.contentDOM.addEventListener("mousedown", event => event.stopImmediatePropagation(), { once: true });
+  document.addEventListener("mousedown", event => event.stopPropagation(), { capture: true, once: true });
   view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, buttons: 1 }));
-  expect(atoms()).toBe(0);
+  expect(atoms()).toBeGreaterThan(0);
   const from = text.indexOf("mathbb") + 2;
   view.dispatch({ selection: EditorSelection.range(from, from + 1), userEvent: "select.pointer" });
   expect(view.state.sliceDoc(from, from + 1)).toBe("t");
@@ -76,3 +76,15 @@ it("does not snapshot conceal atoms into a drag that will reveal command source"
   view.dispatch({ selection: { anchor: text.indexOf("$") } });
   expect(atoms()).toBeGreaterThan(0);
 });
+
+it.each(["$x^2$", '<span style="color:#ed4564">drawing of the planar dual</span>'])(
+  "restores preview as soon as a pointer selection leaves %s", source => {
+    const { view } = open(`Before ${source} after`);
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(view.contentDOM.querySelector(".math-widget, .raw-html-widget")).not.toBeNull();
+    view.dispatch({ selection: EditorSelection.range(0, 7 + source.length), userEvent: "select.pointer" });
+    expect(view.contentDOM.querySelector(".math-widget, .raw-html-widget")).toBeNull();
+    view.dispatch({ selection: EditorSelection.range(0, 3), userEvent: "select.pointer" });
+    expect(view.contentDOM.querySelector(".math-widget, .raw-html-widget")).not.toBeNull();
+  },
+);

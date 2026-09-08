@@ -15,7 +15,6 @@ import {
   type KeyBinding,
 } from "@codemirror/view";
 import { markdownAnalysis } from "./analysis";
-import { draggedPreviewSources, revealPreviewOnDrag } from "./drag-reveal";
 import {
   pinPreviewSource,
   previewSourceRange,
@@ -46,8 +45,6 @@ export function previewNodeIsActive(
   node: MarkdownNode,
   state: EditorState,
 ): boolean {
-  if (state.field(draggedPreviewSources, false)?.some(range =>
-      range.from === node.from && range.to === node.to)) return true;
   const pinned = state.field(previewSourceRange, false);
   if (pinned && node.from < pinned.to && node.to > pinned.from) return true;
   /* A caret inside hard source is only an implementation detail of clicking
@@ -660,7 +657,6 @@ const hardPreviewKeymap: readonly KeyBinding[] = [
 ];
 
 export const previewInteraction = [
-  ...revealPreviewOnDrag,
   hardPreviewSelection,
   hardPreviewAtomicRanges,
   hardPreviewDOM,
