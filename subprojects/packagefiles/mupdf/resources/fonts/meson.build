@@ -151,6 +151,7 @@ fonts = [
 	'noto/NotoSansSoraSompeng-Regular.otf',
 	'noto/NotoSansSoyombo-Regular.otf',
 	'noto/NotoSansSundanese-Regular.otf',
+	'noto/NotoSansSunuwar-Regular.otf',
 	'noto/NotoSansSylotiNagri-Regular.otf',
 	'noto/NotoSansSyriac-Regular.otf',
 	'noto/NotoSansTagalog-Regular.otf',

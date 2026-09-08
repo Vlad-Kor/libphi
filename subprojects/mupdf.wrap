@@ -1,7 +1,8 @@
 [wrap-git]
 url = https://github.com/ArtifexSoftware/mupdf.git
 push-url = git@github.com:ArtifexSoftware/mupdf.git
-revision = 952d907a2c91e5b8b07b2570bd10e7d7a7b15498
+# MuPDF 1.28.0 release tag.
+revision = 205b8cf43551279d1215e88fe2845c5d595bade9
 depth = 1
 clone-recursive = true
 

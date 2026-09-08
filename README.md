@@ -5,7 +5,12 @@ libadwaita.
 
 ## Build from source
 
-For a single-user install:
+With Flatpak (recommended):
+
+```bash
+flatpak-builder --user --install-deps-from=flathub --install --force-clean flatpak-build ai.korsakov.Phi.yml
+```
+Directly with Meson:
 
 ```bash
 meson setup _build --prefix="$HOME/.local"
@@ -22,4 +27,3 @@ files identify their respective authors.
 See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for bundled and
 optional dependencies. The installed web editor carries its exhaustive,
 versioned license inventory in `share/phi/editor/THIRD_PARTY_LICENSES.txt`.
-

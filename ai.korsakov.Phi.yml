@@ -1,0 +1,45 @@
+app-id: ai.korsakov.Phi
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: pdfv
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=cups
+  - --device=dri
+
+modules:
+  - name: phi
+    buildsystem: meson
+    config-opts:
+      - --buildtype=release
+    sources:
+      # Build the current checkout so this manifest is useful during development.
+      - type: dir
+        path: .
+        skip:
+          - .flatpak-builder
+          - .git
+          - _build
+          - flatpak-build
+          - flatpak-repo
+          - subprojects/mupdf
+          - web/editor/node_modules
+
+      # MuPDF is not part of the GNOME runtime. Pin both its release tag and
+      # commit so a moved tag cannot silently change a build.
+      - type: git
+        url: https://github.com/ArtifexSoftware/mupdf.git
+        tag: 1.28.0
+        commit: 205b8cf43551279d1215e88fe2845c5d595bade9
+        dest: subprojects/mupdf
+
+      # A pre-populated subproject does not trigger Meson's wrap overlay, so
+      # apply the same in-tree Meson integration explicitly.
+      - type: dir
+        path: subprojects/packagefiles/mupdf
+        dest: subprojects/mupdf

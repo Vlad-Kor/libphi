@@ -42,11 +42,17 @@ foreach source_path, installed_name : mupdf_license_files
 		install_dir: mupdf_license_dir)
 endforeach
 
+install_subdir('resources/hyphen/license',
+	install_dir: mupdf_license_dir / 'hyphenation',
+	strip_directory: true)
+
 hexdump_gen = generator(find_program('bash'),
 	arguments: [meson.current_source_dir() / 'scripts' / 'hexdump.sh', '@INPUT@'],
 	capture: true,
 	output: '@BASENAME@.c'
 )
+
+hyphen_src = hexdump_gen.process('resources/hyphen/hyph-all.zip')
 
 subdir('resources/fonts')
 

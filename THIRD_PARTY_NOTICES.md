@@ -34,7 +34,8 @@ version 3 or later. That fallback source is not maintained by Phi; Phi adds a
 Meson build integration and does not replace the upstream license terms.
 
 Fallback installations include the MuPDF license and the license or notice
-files for its compiled third-party libraries and embedded fonts under:
+files for its compiled third-party libraries, embedded fonts, and hyphenation
+patterns under:
 
 `share/doc/phi/licenses/mupdf/`
 

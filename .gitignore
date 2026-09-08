@@ -1,5 +1,7 @@
 .idea/
 .vscode/
+.flatpak-builder/
+flatpak-build/
 subprojects/gtk
 subprojects/libsass
 subprojects/mupdf

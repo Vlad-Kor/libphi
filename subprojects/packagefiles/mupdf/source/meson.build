@@ -1,5 +1,6 @@
 fitz_src = [
 	'fitz/archive.c',
+	'fitz/barcode.c',
 	'fitz/bbox-device.c',
 	'fitz/bidi-std.c',
 	'fitz/bidi.c',
@@ -17,6 +18,7 @@ fitz_src = [
 	'fitz/crypt-arc4.c',
 	'fitz/crypt-md5.c',
 	'fitz/crypt-sha2.c',
+	'fitz/cull-device.c',
 	'fitz/deskew.c',
 	'fitz/device.c',
 	'fitz/directory.c',
@@ -61,6 +63,7 @@ fitz_src = [
 	'fitz/harfbuzz.c',
 	'fitz/hash.c',
 	'fitz/heap.c',
+	'fitz/hyphen.c',
 	'fitz/image.c',
 	'fitz/jmemcust.c',
 	'fitz/json.c',
@@ -82,6 +85,7 @@ fitz_src = [
 	'fitz/memory.c',
 	'fitz/noto.c',
 	'fitz/ocr-device.c',
+	'fitz/options.c',
 	'fitz/outline.c',
 	'fitz/output-cbz.c',
 	'fitz/output-csv.c',
@@ -107,9 +111,12 @@ fitz_src = [
 	'fitz/shade.c',
 	'fitz/skew.c',
 	'fitz/stext-boxer.c',
+	'fitz/stext-classify.c',
 	'fitz/stext-device.c',
+	'fitz/stext-iterator.c',
 	'fitz/stext-output.c',
 	'fitz/stext-para.c',
+	'fitz/stext-raft.c',
 	'fitz/stext-search.c',
 	'fitz/stext-table.c',
 	'fitz/store.c',
@@ -176,6 +183,7 @@ pdf_src = [
 	'pdf/pdf-op-color.c',
 	'pdf/pdf-op-filter.c',
 	'pdf/pdf-op-run.c',
+	'pdf/pdf-op-vectorize.c',
 	'pdf/pdf-outline.c',
 	'pdf/pdf-page.c',
 	'pdf/pdf-parse.c',
@@ -188,6 +196,7 @@ pdf_src = [
 	'pdf/pdf-shade.c',
 	'pdf/pdf-signature.c',
 	'pdf/pdf-store.c',
+	'pdf/pdf-struct.c',
 	'pdf/pdf-stream.c',
 	'pdf/pdf-subset.c',
 	'pdf/pdf-type3.c',
@@ -253,9 +262,13 @@ doc_handlers_src = [
 # Version script to hide internal symbols (libjpeg, zlib, etc.) and only export fz_* and pdf_* API
 mupdf_version_script = meson.current_source_dir() / 'mupdf.map'
 
-mupdf_lib = library('mupdf', fitz_src, font_src, doc_handlers_src,
+mupdf_lib = library('mupdf', fitz_src, font_src, hyphen_src, doc_handlers_src,
 	include_directories: inc,
 	dependencies: thirdparty_deps,
+	# Phi uses MuPDF for PDF documents. Keep 1.28's optional Markdown and
+	# barcode handlers disabled rather than pulling two otherwise-unused
+	# parser/decoder dependency trees into the fallback build.
+	c_args: ['-DFZ_ENABLE_MD=0', '-DFZ_ENABLE_BARCODE=0'],
 	install: true,
 	soversion: version_split[1],
 	version: meson.project_version(),
