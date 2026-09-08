@@ -7,6 +7,11 @@ command: pdfv
 finish-args:
   - --share=ipc
   - --share=network
+  # A file-chooser portal grant covers only the selected document. Markdown
+  # notes also need their relative links, embeds, and pasted attachments, so a
+  # standalone README must be able to reach siblings outside the document
+  # portal just as a directly installed build can.
+  - --filesystem=home
   - --socket=fallback-x11
   - --socket=wayland
   - --socket=cups
