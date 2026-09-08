@@ -151,6 +151,8 @@ struct _PdfvWindow {
   AdwTabPage *window_title_page;
   gboolean closing_window;
   gboolean closing_after_tab_transfer;
+  gboolean awaiting_detached_tab;
+  PdfvWindow *detached_tab_source;
   gint normal_window_width;
   gint normal_window_height;
   gboolean fullscreen_chrome_active;
@@ -3458,7 +3460,9 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
 
   adw_tab_view_close_page_finish(tab_view, page, TRUE);
   restore_tab_after_close(self, g_steal_pointer(&return_page));
-  if (self->closing_window || adw_tab_view_get_n_pages(tab_view) == 0)
+  if (self->closing_window ||
+      (adw_tab_view_get_n_pages(tab_view) == 0 &&
+       !self->awaiting_detached_tab))
     g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, continue_window_close_idle,
                     g_object_ref(self), g_object_unref);
   return GDK_EVENT_STOP;
@@ -4973,6 +4977,88 @@ static void rebind_transferred_tab(PdfvWindow *source,
       schedule_markdown_editor_prewarm(
           destination, pdfv_markdown_editor_get_vault_root(editor));
   }
+}
+
+static gboolean close_empty_transferred_window_idle(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (adw_tab_view_get_n_pages(self->tab_view) == 0) {
+    self->closing_after_tab_transfer = TRUE;
+    gtk_window_close(GTK_WINDOW(self));
+  }
+  return G_SOURCE_REMOVE;
+}
+
+static void on_detached_tab_attached(AdwTabView *tab_view,
+                                     AdwTabPage *page,
+                                     gint position,
+                                     PdfvWindow *self) {
+  (void)tab_view;
+  (void)position;
+  if (!self->awaiting_detached_tab || !self->detached_tab_source)
+    return;
+
+  PdfvWindow *source = g_steal_pointer(&self->detached_tab_source);
+  self->awaiting_detached_tab = FALSE;
+  GtkWidget *stack = adw_tab_page_get_child(page);
+  GFile *file = GTK_IS_STACK(stack)
+      ? g_object_get_data(G_OBJECT(stack), "document-file") : NULL;
+  gboolean was_workspace_browse = page == source->workspace_browse_tab;
+
+  if (file && source->workspace) {
+    GFile *root = pdfv_workspace_get_folder(source->workspace);
+    if (pdfv_workspace_file_is_within(root, file))
+      open_workspace_folder_internal(self, root, FALSE);
+  }
+
+  rebind_transferred_tab(source, self, page);
+  if (was_workspace_browse) {
+    source->workspace_browse_tab = NULL;
+    self->workspace_browse_tab = page;
+  }
+  g_object_set_data(G_OBJECT(page), "tab-return-page", NULL);
+  if (source->current_view ==
+      g_object_get_data(G_OBJECT(stack), "document-view"))
+    source->current_view = NULL;
+  if (source->current_editor ==
+      g_object_get_data(G_OBJECT(stack), "markdown-editor"))
+    source->current_editor = NULL;
+
+  adw_tab_view_set_selected_page(self->tab_view, page);
+  if (source->workspace)
+    save_workspace_tab_session(source);
+  if (self->workspace)
+    save_workspace_tab_session(self);
+  if (adw_tab_view_get_n_pages(source->tab_view) == 0)
+    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
+                    close_empty_transferred_window_idle,
+                    g_object_ref(source), g_object_unref);
+  g_object_unref(source);
+}
+
+static AdwTabView *on_tab_create_window(AdwTabView *tab_view,
+                                        PdfvWindow *self) {
+  AdwTabPage *page = adw_tab_view_get_selected_page(tab_view);
+  if (!tab_can_move_to_new_window(self, page))
+    return NULL;
+  GtkApplication *application =
+      gtk_window_get_application(GTK_WINDOW(self));
+  if (!application)
+    return NULL;
+
+  PdfvWindow *destination =
+      pdfv_window_new(ADW_APPLICATION(application));
+  destination->awaiting_detached_tab = TRUE;
+  destination->detached_tab_source = g_object_ref(self);
+
+  AdwTabPage *placeholder =
+      adw_tab_view_get_selected_page(destination->tab_view);
+  if (placeholder) {
+    g_object_set_data(G_OBJECT(placeholder), "skip-closed-tab-history",
+                      GINT_TO_POINTER(1));
+    adw_tab_view_close_page(destination->tab_view, placeholder);
+  }
+  gtk_window_present(GTK_WINDOW(destination));
+  return destination->tab_view;
 }
 
 static void action_tab_context_move_new_window(GSimpleAction *action,
@@ -6850,6 +6936,7 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->workspace_context_file);
   g_clear_object(&self->tab_context_page);
   g_clear_object(&self->tab_context_file);
+  g_clear_object(&self->detached_tab_source);
   g_clear_object(&self->workspace_return_tab);
   g_clear_pointer(&self->workspace_results, g_ptr_array_unref);
   g_clear_pointer(&self->workspace_result_headers, g_ptr_array_unref);
@@ -7319,6 +7406,10 @@ static void pdfv_window_init(PdfvWindow *self) {
                    G_CALLBACK(on_tab_selected), self);
   g_signal_connect(self->tab_view, "close-page", G_CALLBACK(on_tab_close_page),
                    self);
+  g_signal_connect(self->tab_view, "create-window",
+                   G_CALLBACK(on_tab_create_window), self);
+  g_signal_connect(self->tab_view, "page-attached",
+                   G_CALLBACK(on_detached_tab_attached), self);
 
   /* Content overlay for floating controls */
   self->content_overlay = gtk_overlay_new();
