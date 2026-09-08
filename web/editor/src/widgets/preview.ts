@@ -1286,13 +1286,16 @@ export class CalloutWidget extends WidgetType {
     title.tabIndex = -1;
     const label = this.title || this.type.replace(/(^|-)(\p{L})/gu,
       (_m, prefix, letter) => `${prefix ? " " : ""}${letter.toUpperCase()}`);
-    title.append(calloutIcon(this.type), document.createTextNode(label));
+    const labelDOM = document.createElement("span");
+    labelDOM.className = "callout-label";
+    labelDOM.textContent = label;
+    title.append(calloutIcon(this.type), labelDOM);
     wireRenderedContent(title);
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "callout-toggle";
+    toggle.textContent = "›";
     const updateToggle = () => {
-      toggle.textContent = details.open ? "⌄" : "›";
       toggle.setAttribute("aria-expanded", String(details.open));
       toggle.setAttribute("aria-label", `${details.open ? "Collapse" : "Expand"} callout`);
     };
@@ -1305,7 +1308,10 @@ export class CalloutWidget extends WidgetType {
       details.open = !details.open;
       updateToggle();
     });
-    title.append(toggle);
+    const toggleAnchor = document.createElement("span");
+    toggleAnchor.className = "callout-toggle-anchor";
+    toggleAnchor.append(toggle);
+    labelDOM.append(toggleAnchor);
     const body = document.createElement("div");
     body.className = "callout-content";
     body.innerHTML = renderMarkdown(this.body);

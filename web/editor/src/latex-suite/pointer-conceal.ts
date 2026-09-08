@@ -47,8 +47,17 @@ export class ConcealPointerGuard {
       const from = this.view.posAtDOM(dom);
       const caret = this.view.coordsAtPos(from);
       if (!caret || !box.width) continue;
+      // A script can push its whole unbroken word (e.g. $G^*) to the
+      // following row. Protect the former G/delimiter position too, not just
+      // the superscript's box, or tiny movements there clear the guard.
+      const line = this.view.state.doc.lineAt(from);
+      const prefix = this.view.state.sliceDoc(line.from, from);
+      const wordFrom = from - (/\S+$/.exec(prefix)?.[0].length ?? 0);
+      const wordCaret = this.view.coordsAtPos(wordFrom);
+      const sameRow = wordCaret && wordCaret.top < caret.bottom &&
+        wordCaret.bottom > caret.top;
       this.before.set(from, {
-        from, left: box.left, right,
+        from, left: sameRow ? Math.min(box.left, wordCaret.left) : box.left, right,
         top: Math.min(box.top, caret.top), bottom: Math.max(box.bottom, caret.bottom),
       });
     }

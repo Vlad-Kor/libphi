@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 type MeasureRequest = Parameters<EditorView["requestMeasure"]>[0] & {};
 import { afterEach, expect, it, vi } from "vitest";
@@ -22,7 +23,8 @@ function setup() {
   let request: MeasureRequest;
   const view = {
     dom, contentDOM: dom, posAtDOM: () => 4,
-    coordsAtPos: () => ({ left: 90, right: 90, top, bottom: top + 10 }),
+    state: EditorState.create({ doc: "  $G^*" }),
+    coordsAtPos: (pos: number) => ({ left: pos < 4 ? 75 : 90, right: pos < 4 ? 75 : 90, top, bottom: top + 10 }),
     requestMeasure: (value: MeasureRequest) => { request = value; },
     dispatch: vi.fn(),
   } as unknown as EditorView;
@@ -44,7 +46,11 @@ it("keeps a wrapped fragment revealed over its former position, then releases wh
   expect(guard.reveal(spec, false)).toBe(true);
   move(95);
   expect(guard.reveal(spec, false)).toBe(true);
-  move(80);
+  for (const x of [80, 81, 79, 80]) {
+    move(x);
+    expect(guard.reveal(spec, false)).toBe(true);
+  }
+  move(70);
   expect(guard.reveal(spec, false)).toBe(false);
 });
 

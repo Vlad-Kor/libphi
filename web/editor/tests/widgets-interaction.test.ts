@@ -43,10 +43,13 @@ it("lets the callout button repeatedly expand and collapse without editing", () 
   document.body.append(dom);
   const button = dom.querySelector("button")!;
   expect(button.getAttribute("aria-expanded")).toBe("false");
+  expect(button.textContent).toBe("›");
+  expect(button.closest(".callout-label")?.firstChild?.textContent).toBe("Heading");
   button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
   button.click();
   expect(dom.open).toBe(true);
   expect(button.getAttribute("aria-expanded")).toBe("true");
+  expect(button.textContent).toBe("›");
   expect(button.getAttribute("aria-label")).toBe("Collapse callout");
   // Native keyboard activation also dispatches click, with no pointerdown.
   button.click();

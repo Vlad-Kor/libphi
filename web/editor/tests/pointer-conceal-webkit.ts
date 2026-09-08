@@ -6,14 +6,20 @@ import { latexEnhancements } from "../src/latex-suite/enhancements";
 
 const frame = () => new Promise<void>(resolve => setTimeout(resolve, 35));
 export async function verifyPointerConceal(): Promise<void> {
+  await verifyWrappedEquation(String.raw`\(G^*\)`);
+  await verifyWrappedEquation("$G^*$");
+}
+
+async function verifyWrappedEquation(math: string): Promise<void> {
   let stage = "creating";
   const onerror = window.onerror;
   window.onerror = (message, ...args) => onerror?.call(window, `${stage}: ${message}`, ...args);
   const parent = document.createElement("div");
   parent.style.cssText = "position:fixed;top:0;left:0;width:1000px;height:300px;z-index:100";
   document.body.append(parent);
-  const text = String.raw`Looking at the rectangle boundaries gives a <span style=color:#ed4564>drawing of the planar dual</span> \(G^*\):`;
+  const text = `Looking at the rectangle boundaries gives a <span style=color:#ed4564>drawing of the planar dual</span> ${math}:`;
   const from = text.indexOf("G^");
+  const anchor = text.indexOf(math);
   // Use the same presentation extensions, excluding background geometry
   // preflight: this test exercises pointer layout, not the idle resize pass.
   const view = new EditorView({ parent, state: EditorState.create({
@@ -37,15 +43,16 @@ export async function verifyPointerConceal(): Promise<void> {
       if (after.top >= before.bottom) { original = before; break; }
     }
     if (!original) throw new Error("Could not reproduce the wrap boundary for G^*");
-    view.dispatch({ selection: { anchor: from } });
+    view.dispatch({ selection: { anchor } });
     await frame();
     stage = "drag";
     const caret = view.coordsAtPos(from)!;
+    const start = view.coordsAtPos(anchor)!;
     // Start CodeMirror's real mouse selection, then move over the concealed
     // script. Its scheduled re-hit-tests must not start a render/reveal loop.
     view.contentDOM.dispatchEvent(new MouseEvent("mousedown", {
       bubbles: true, cancelable: true, button: 0, buttons: 1, detail: 1,
-      clientX: caret.left, clientY: (caret.top + caret.bottom) / 2,
+      clientX: start.left, clientY: (start.top + start.bottom) / 2,
     }));
     document.dispatchEvent(new MouseEvent("mousemove", {
       bubbles: true, cancelable: true, buttons: 1,
@@ -53,13 +60,24 @@ export async function verifyPointerConceal(): Promise<void> {
     }));
     // Ensure we enter the script even when WebKit maps the superscript's
     // trailing coordinate to its neighboring replacement boundary.
-    view.dispatch({ selection: EditorSelection.range(from, from + 3), userEvent: "select.pointer" });
+    view.dispatch({ selection: EditorSelection.range(anchor, from + 3), userEvent: "select.pointer" });
     if (view.contentDOM.querySelector(".cm-latex-conceal-script"))
       throw new Error("Pointer selection did not reveal the script immediately");
     for (let sample = 0; sample < 8; sample++) {
       await new Promise(resolve => setTimeout(resolve, 25));
       if (view.contentDOM.querySelector(".cm-latex-conceal-script"))
         throw new Error("Wrapped script re-concealed under stationary pointer");
+    }
+    // The former base G is left of the superscript. Moving by even one pixel
+    // here used to drop the guard although the same word had moved as a unit.
+    for (const offset of [1, 2, 1, 0.5, 1.5, 1]) {
+      document.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true, cancelable: true, buttons: 1,
+        clientX: caret.left + offset, clientY: (caret.top + caret.bottom) / 2,
+      }));
+      await frame();
+      if (view.contentDOM.querySelector(".cm-latex-conceal-script"))
+        throw new Error(`Wrapped ${math} re-concealed over its former G position`);
     }
     // Precision remains ordinary source selection, including the single ^.
     view.dispatch({ selection: EditorSelection.range(from + 1, from + 2), userEvent: "select.pointer" });
