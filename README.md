@@ -8,6 +8,7 @@ libadwaita.
 With Flatpak (recommended):
 
 ```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak-builder --user --install-deps-from=flathub --install --force-clean flatpak-build ai.korsakov.Phi.yml
 ```
 Directly with Meson:
