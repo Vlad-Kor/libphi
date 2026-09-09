@@ -3,6 +3,7 @@ import { redo, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, Prec } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, WidgetType } from "@codemirror/view";
+import { wireHorizontalScroll } from "../horizontal-scroll";
 import {
   handleLatexTab,
   latexSnippetsEnabled,
@@ -320,6 +321,7 @@ class RichTableController {
     const scroller = document.createElement("div");
     scroller.className = "rich-table-scroll";
     scroller.append(table);
+    wireHorizontalScroll(scroller, false);
 
     const frame = document.createElement("div");
     frame.className = "rich-table-frame";

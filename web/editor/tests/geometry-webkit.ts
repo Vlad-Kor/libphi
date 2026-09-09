@@ -178,6 +178,39 @@ async function run() {
     failures.push({ error: "Code scrollbar pan escaped", codeGutter,
       prevented: scrollbarPan.defaultPrevented, left: code.scrollLeft });
   codeRoot.remove();
+  const tableSource = [
+    "| One | Two | Three | Four | Five | Six |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| wide | wide | wide | wide | wide | wide |",
+  ].join("\n");
+  const tableWidget = new RichTableWidget(tableSource, 0, tableSource.length);
+  const tableRoot = tableWidget.toDOM(view);
+  tableRoot.style.cssText = "position:fixed;left:0;top:240px;width:300px";
+  document.body.append(tableRoot);
+  const tableScroller = tableRoot.querySelector<HTMLElement>(".rich-table-scroll")!;
+  for (let index = 0; index < 20; index++) {
+    if (tableScroller.classList.contains("rich-table-overflowing") &&
+        tableScroller.offsetHeight > tableScroller.clientHeight)
+      break;
+    await wait(25);
+  }
+  const tableBox = tableScroller.getBoundingClientRect();
+  const tableGutter = tableScroller.offsetHeight - tableScroller.clientHeight;
+  tableScroller.scrollLeft = 100;
+  const tableScrollbarPan = new WheelEvent("wheel", {
+    bubbles: true, cancelable: true, clientX: tableBox.left + 20,
+    clientY: tableBox.bottom - tableGutter / 2, deltaX: 0, deltaY: 48,
+  });
+  tableScroller.dispatchEvent(tableScrollbarPan);
+  if (!tableScroller.classList.contains("rich-table-overflowing") ||
+      tableGutter <= 0 || !tableScrollbarPan.defaultPrevented ||
+      tableScroller.scrollLeft !== 148)
+    failures.push({ error: "Table scrollbar pan escaped", tableGutter,
+      overflowing: tableScroller.classList.contains("rich-table-overflowing"),
+      prevented: tableScrollbarPan.defaultPrevented,
+      left: tableScroller.scrollLeft });
+  tableWidget.destroy(tableRoot);
+  tableRoot.remove();
   for (const set of view.state.facet(EditorView.decorations)) {
     if (typeof set === 'function') continue;
     for (let it = set.iter(); it.value; it.next()) {

@@ -433,9 +433,11 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 /* Reserve measurable native chrome for nested scrollbar hit testing, including
    on systems with overlay scrollbars. */
 .math-widget.math-overflow::-webkit-scrollbar,
-pre::-webkit-scrollbar { height: 12px; }
+pre::-webkit-scrollbar,
+.rich-table-scroll.rich-table-overflowing::-webkit-scrollbar { height: 12px; }
 .math-widget.math-overflow::-webkit-scrollbar-thumb,
-pre::-webkit-scrollbar-thumb {
+pre::-webkit-scrollbar-thumb,
+.rich-table-scroll.rich-table-overflowing::-webkit-scrollbar-thumb {
   background: var(--editor-muted);
   border: 3px solid transparent;
   border-radius: 6px;
@@ -570,7 +572,6 @@ th { background: var(--editor-code-bg); }
   max-width: 100%;
   overflow-x: hidden;
   overflow-y: clip;
-  scrollbar-width: thin;
 }
 .rich-table-scroll.rich-table-overflowing { overflow-x: auto; }
 .rich-table-grid {
