@@ -8,6 +8,7 @@ import { EditorView } from "@codemirror/view";
 import * as widgets from "../src/widgets/preview";
 import { RichTableWidget } from "../src/widgets/table";
 import { isMathScrollbarEvent, wireMathScroll } from "../src/math/mathjax";
+import { wireHorizontalScroll } from "../src/horizontal-scroll";
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 for (const Widget of [...Object.values(widgets), RichTableWidget]) {
@@ -156,6 +157,27 @@ async function run() {
       failures.push({ error: "Math horizontal pan escaped", start, left: equation.scrollLeft });
   }
   equation.remove();
+  const codeRoot = document.createElement("div");
+  codeRoot.style.cssText = "position:fixed;left:0;top:120px;width:300px";
+  const code = document.createElement("pre");
+  code.style.cssText = "box-sizing:border-box;margin:0;width:300px";
+  code.innerHTML = '<code style="display:block;width:900px">wide code</code>';
+  codeRoot.append(code);
+  document.body.append(codeRoot);
+  wireHorizontalScroll(code, false);
+  const codeBox = code.getBoundingClientRect();
+  const codeGutter = code.offsetHeight - code.clientHeight;
+  code.scrollLeft = 100;
+  const scrollbarPan = new WheelEvent("wheel", {
+    bubbles: true, cancelable: true, clientX: codeBox.left + 20,
+    clientY: codeBox.bottom - codeGutter / 2, deltaX: 0, deltaY: 48,
+  });
+  // Match WebKitGTK's physical touchpad mapping over scrollbar chrome.
+  code.dispatchEvent(scrollbarPan);
+  if (codeGutter <= 0 || !scrollbarPan.defaultPrevented || code.scrollLeft !== 148)
+    failures.push({ error: "Code scrollbar pan escaped", codeGutter,
+      prevented: scrollbarPan.defaultPrevented, left: code.scrollLeft });
+  codeRoot.remove();
   for (const set of view.state.facet(EditorView.decorations)) {
     if (typeof set === 'function') continue;
     for (let it = set.iter(); it.value; it.next()) {

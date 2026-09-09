@@ -18,6 +18,7 @@ import "prismjs/components/prism-rust";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-yaml";
 import { requestNative, sendNative } from "../bridge";
+import { wireHorizontalScroll } from "../horizontal-scroll";
 import { renderMath, wireMathScroll } from "../math/mathjax";
 import { remoteImagesAllowed } from "../settings";
 import { parseMarkdownNodes } from "./parser";
@@ -329,6 +330,11 @@ function wireRenderedMath(root: HTMLElement): void {
   }
 }
 
+function wireRenderedCodeScroll(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>("pre").forEach((code) =>
+    wireHorizontalScroll(code, false));
+}
+
 function vaultUri(path: string): string {
   return `vault:///${path.split("/").map(encodeURIComponent).join("/")}`;
 }
@@ -470,6 +476,7 @@ export function wireRenderedContent(root: HTMLElement,
   wireRenderedCallouts(root);
   wireRenderedLinks(root);
   wireRenderedMath(root);
+  wireRenderedCodeScroll(root);
   wireLocalImages(root, sourcePath);
   wireRemoteImages(root);
   wireRemoteIframes(root);

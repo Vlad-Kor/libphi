@@ -1,5 +1,9 @@
 import { measurePerformance } from "../performance";
 import { reportError } from "../bridge";
+import {
+  isHorizontalScrollbarEvent,
+  wireHorizontalScroll,
+} from "../horizontal-scroll";
 
 interface MathJaxApi {
   startup?: { promise?: Promise<unknown> };
@@ -17,7 +21,6 @@ interface MathJaxWindow extends Window {
 }
 
 const cache = new Map<string, string>();
-const scrollWired = new WeakSet<HTMLElement>();
 let preamble = "";
 let preambleRevision = 0;
 let mathJaxScript: Promise<void> | undefined;
@@ -150,33 +153,14 @@ export function wireMathScroll(target: HTMLElement): void {
    * web process instead of keeping it entirely on the asynchronous scrolling
    * path.  Only install one when the equation really needs horizontal
    * scrolling; ordinary equations should never affect document momentum. */
-  if (scrollWired.has(target)) return;
+  if (target.classList.contains("math-overflow")) return;
   /* `overflow-x: auto` also makes the element a nested asynchronous scroll
    * container in WebKit, even when its contents fit. Touchpad momentum can
    * then stop when it crosses an ordinary display equation. Only create that
    * nested scroller after measuring a genuinely overflowing expression. */
   if (target.scrollWidth <= target.clientWidth) return;
   target.classList.add("math-overflow");
-  scrollWired.add(target);
-  target.addEventListener("wheel", (event) => {
-    // Pinch zoom is exposed as a Ctrl-modified wheel gesture by WebKit. Leave it
-    // to the browser, as well as ordinary vertical document scrolling.
-    if (event.ctrlKey || event.defaultPrevented ||
-        Math.abs(event.deltaX) <= Math.abs(event.deltaY) ||
-        target.scrollWidth <= target.clientWidth)
-      return;
-
-    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
-      event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? target.clientWidth : 1;
-    const maximum = target.scrollWidth - target.clientWidth;
-    const next = Math.max(0, Math.min(maximum,
-      target.scrollLeft + event.deltaX * scale));
-    /* Keep the horizontal gesture contained even at an edge. Handing it to
-     * the document here leaks its small vertical component into scrollTop. */
-    target.scrollLeft = next;
-    event.preventDefault();
-    event.stopPropagation();
-  }, { passive: false });
+  wireHorizontalScroll(target);
 }
 
 /** Native scrollbar events target the scroll container, just like its padding. */
@@ -185,18 +169,7 @@ export function isMathScrollbarEvent(target: HTMLElement, event: Event): boolean
       !target.classList.contains("math-overflow") ||
       target.scrollWidth <= target.clientWidth)
     return false;
-  const rect = target.getBoundingClientRect();
-  if (!target.offsetHeight || !target.offsetWidth) return false;
-  const scaleX = rect.width / target.offsetWidth;
-  const scaleY = rect.height / target.offsetHeight;
-  const left = rect.left + target.clientLeft * scaleX;
-  const top = rect.top + target.clientTop * scaleY;
-  // Custom WebKit scrollbar styling reserves a real gutter. Use its measured
-  // boundary, so editor font scale and borders cannot turn content into chrome.
-  const scrollbarTop = top + target.clientHeight * scaleY;
-  return event.clientX >= left &&
-    event.clientX < left + target.clientWidth * scaleX &&
-    event.clientY >= scrollbarTop && event.clientY < rect.bottom;
+  return isHorizontalScrollbarEvent(target, event);
 }
 
 export async function renderMath(

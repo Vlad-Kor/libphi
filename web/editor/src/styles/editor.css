@@ -430,10 +430,12 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 }
 .math-display { display: block; width: 100%; padding: .625em 0; text-align: center; }
 .math-widget.math-overflow { overflow-x: auto; }
-/* Reserve native scrollbar chrome so clicking/dragging it can be distinguished
-   from clicking the equation, including on systems with overlay scrollbars. */
-.math-widget.math-overflow::-webkit-scrollbar { height: 12px; }
-.math-widget.math-overflow::-webkit-scrollbar-thumb {
+/* Reserve measurable native chrome for nested scrollbar hit testing, including
+   on systems with overlay scrollbars. */
+.math-widget.math-overflow::-webkit-scrollbar,
+pre::-webkit-scrollbar { height: 12px; }
+.math-widget.math-overflow::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb {
   background: var(--editor-muted);
   border: 3px solid transparent;
   border-radius: 6px;
