@@ -14,8 +14,32 @@ export const clearPreviewGeometry = StateEffect.define<null>();
 export const previewGeometry = StateField.define<ReadonlyMap<string, number>>({
   create: () => new Map(),
   update(value, transaction) {
-    if (transaction.docChanged || transaction.reconfigured || transaction.effects.some(e => e.is(clearPreviewGeometry)))
+    if (transaction.reconfigured || transaction.effects.some(e => e.is(clearPreviewGeometry)))
       return new Map();
+    if (transaction.docChanged) {
+      let changedFrom = transaction.startState.doc.length;
+      transaction.changes.iterChanges(from => {
+        changedFrom = Math.min(changedFrom, from);
+      });
+      /* Geometry before the first edit remains valid and determines the
+       * viewport position of the caret. Dropping it for one transaction made
+       * typing temporarily fall back to estimates, then jump back when the
+       * background measurements were published again. Geometry at and after
+       * the edit is allowed to warm again, which also discards stale keys. */
+      value = new Map([...value].filter(([key]) => {
+        try {
+          const identity = JSON.parse(key) as unknown;
+          if (!Array.isArray(identity)) return true;
+          if (identity[0] === "line" && typeof identity[2] === "number")
+            return identity[2] <= changedFrom;
+          if (identity[0] === "widget" && typeof identity[5] === "number")
+            return identity[5] <= changedFrom;
+        } catch {
+          /* Only Phi's positional keys are pruned here. */
+        }
+        return true;
+      }));
+    }
     for (const effect of transaction.effects)
       if (effect.is(measuredPreviewGeometry)) return new Map([...value, ...effect.value]);
     return value;
@@ -25,7 +49,7 @@ export const previewGeometry = StateField.define<ReadonlyMap<string, number>>({
 export function lineGeometryKey(
   text: string, decorations: DecorationSet, from: number, to: number,
 ): string {
-  const signature: unknown[] = ["line", text];
+  const signature: unknown[] = ["line", from, to, text];
   decorations.between(from, to, (a, b, decoration) => {
     const widget = decoration.spec.widget as WidgetType | undefined;
     if (decoration.spec.phiLineGeometry) return;

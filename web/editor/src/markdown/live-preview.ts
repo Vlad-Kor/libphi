@@ -277,7 +277,9 @@ function buildDecorationsNow(state: EditorState,
          * disappear as the caret moves between adjacent blank lines. */
         const widget = replacement.spec.widget;
         if (widget) withMeasuredGeometry(widget,
-          JSON.stringify([node.kind, node.text, node.meta, node.from, node.to]),
+          JSON.stringify([
+            "widget", node.kind, node.text, node.meta, node.from, node.to,
+          ]),
           state.field(previewGeometry, false) ?? new Map());
         builder.add(node.from, node.to, replacement);
         coveredUntil = node.to;

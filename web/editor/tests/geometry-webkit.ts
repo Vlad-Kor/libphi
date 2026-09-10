@@ -66,8 +66,9 @@ async function run() {
     '![[document.pdf]]',
     '![[audio.wav]]',
     '![[video.webm]]',
-    '![small](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMTUwIj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjE1MCIgZmlsbD0icmVkIi8+PC9zdmc+)',
     ...Array.from({ length: 80 }, (_, i) => `Plain paragraph ${i}.`),
+    'Typing target between rendered blocks.',
+    '![small](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMTUwIj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjE1MCIgZmlsbD0icmVkIi8+PC9zdmc+)',
     'end',
   ].join('\n\n');
   const supportedKinds = {
@@ -121,10 +122,42 @@ async function run() {
     if (stable > 5 && previewGeometryStatus(view)?.pending === false) break;
   }
   const preflightMs = performance.now() - started;
+  const typingAt = view.state.doc.toString().indexOf('Typing target');
+  view.dispatch({
+    selection: { anchor: typingAt },
+    effects: EditorView.scrollIntoView(typingAt, { y: 'center' }),
+  });
+  await wait(200);
+  const typingTop = view.scrollDOM.scrollTop;
+  view.dispatch({
+    changes: { from: typingAt, to: typingAt + 1, insert: 't' },
+    selection: { anchor: typingAt + 1 },
+    scrollIntoView: true,
+    userEvent: 'input.type',
+  });
+  let typingScrollDelta = 0;
+  for (let index = 0; index < 40; index++) {
+    await wait(25);
+    typingScrollDelta = Math.max(
+      typingScrollDelta,
+      Math.abs(view.scrollDOM.scrollTop - typingTop),
+    );
+  }
+  previous = 0;
+  stable = 0;
+  for (let i = 0; i < 1000; i++) {
+    await wait(50);
+    const count = view.state.field(previewGeometry).size;
+    stable = count === previous && count > 20 ? stable + 1 : 0;
+    previous = count;
+    if (stable > 5 && previewGeometryStatus(view)?.pending === false) break;
+  }
   const heights = view.state.field(previewGeometry);
   const results: unknown[] = [];
   const oracleErrors: unknown[] = [];
   const failures: unknown[] = [];
+  if (typingScrollDelta > 0.5)
+    failures.push({ error: 'Geometry-neutral typing moved the viewport', typingScrollDelta });
   // Real WebKit layout must reserve a measurable gutter, including with GTK
   // overlay scrollbars. Synthetic DOM events below verify dispatch only;
   // physical touchpad momentum still requires manual hardware testing.
@@ -234,6 +267,6 @@ async function run() {
       if (Math.abs(actual - widget.estimatedHeight) > 0.02) failures.push(record);
     }
   }
-  (window as any).webkit.messageHandlers.test.postMessage((failures.length || oracleErrors.length || previewGeometryStatus(view)?.pending || previewGeometryStatus(view)?.skipped || heights.size < 20 ? 'FAIL ' : 'PASS ') + JSON.stringify({ width: innerWidth, scale: getComputedStyle(document.body).fontSize, openMs, firstFrameMs, preflightMs, cached: heights.size, results, failures, oracleErrors }));
+  (window as any).webkit.messageHandlers.test.postMessage((failures.length || oracleErrors.length || previewGeometryStatus(view)?.pending || previewGeometryStatus(view)?.skipped || heights.size < 20 ? 'FAIL ' : 'PASS ') + JSON.stringify({ width: innerWidth, scale: getComputedStyle(document.body).fontSize, openMs, firstFrameMs, preflightMs, typingScrollDelta, cached: heights.size, results, failures, oracleErrors }));
 }
 run().catch(error => (window as any).webkit.messageHandlers.test.postMessage('FAIL ' + error.message + '\n' + error.stack));

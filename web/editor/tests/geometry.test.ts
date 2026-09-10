@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { EditorState } from "@codemirror/state";
-import { EditorView, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { PreviewIdleGate } from "../src/markdown/preview-idle";
 import { MermaidWidget, LinkWidget, MarkdownLinkWidget, setPreviewGeometryContext, seedPreviewImageGeometry, resetPreviewGeometryCaches } from "../src/widgets/preview";
-import { clearPreviewGeometry, measuredPreviewGeometry, previewGeometry, settlePreview, withMeasuredGeometry } from "../src/markdown/geometry";
+import { clearPreviewGeometry, lineGeometryKey, measuredPreviewGeometry, previewGeometry, settlePreview, withMeasuredGeometry } from "../src/markdown/geometry";
 
 class Preview extends WidgetType {
   get estimatedHeight() { return 64; }
@@ -86,18 +86,32 @@ describe('background preview geometry', () => {
     expect(measured).toBeInstanceOf(Preview);
   });
 
-  it('keeps every height in the active document and clears on edits and geometry changes', () => {
+  it('keeps every height in the active document and clears on geometry changes', () => {
     let state = EditorState.create({ doc: 'abc', extensions: [previewGeometry] });
     const heights = new Map(Array.from({ length: 1024 }, (_, i) => [String(i), i + 0.125]));
     state = state.update({ effects: measuredPreviewGeometry.of(heights) }).state;
     expect(state.field(previewGeometry).size).toBe(1024);
     state = state.update({ selection: { anchor: 2 } }).state;
     expect(state.field(previewGeometry).size).toBe(1024);
-    state = state.update({ changes: { from: 1, insert: 'x' } }).state;
-    expect(state.field(previewGeometry).size).toBe(0);
-    state = state.update({ effects: measuredPreviewGeometry.of(heights) }).state;
     state = state.update({ effects: clearPreviewGeometry.of(null) }).state;
     expect(state.field(previewGeometry).size).toBe(0);
+  });
+
+  it('retains exact geometry before an edit and drops stale geometry after it', () => {
+    let state = EditorState.create({ doc: 'abcdefgh', extensions: [previewGeometry] });
+    const before = JSON.stringify(['widget', 'math', 'a', {}, 0, 2]);
+    const after = JSON.stringify(['widget', 'math', 'b', {}, 5, 7]);
+    const beforeLine = lineGeometryKey('ab', Decoration.none, 0, 2);
+    const afterLine = lineGeometryKey('fg', Decoration.none, 5, 7);
+    state = state.update({
+      effects: measuredPreviewGeometry.of(new Map([
+        [before, 10], [after, 20], [beforeLine, 30], [afterLine, 40],
+      ])),
+    }).state;
+    state = state.update({ changes: { from: 4, insert: 'x' } }).state;
+    expect([...state.field(previewGeometry)]).toEqual([
+      [before, 10], [beforeLine, 30],
+    ]);
   });
 
   it('cancels unresolved renderers immediately instead of publishing a placeholder height', async () => {
