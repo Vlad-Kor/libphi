@@ -10,3 +10,4 @@ subprojects/wayland-protocols
 *.patch
 doc/*
 web/editor/node_modules/
+subprojects/.wraplock
