@@ -1,25 +1,44 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="256" height="256" version="1.1"
-     xmlns="http://www.w3.org/2000/svg"
-     xmlns:xlink="http://www.w3.org/1999/xlink">
-  <defs>
-    <linearGradient id="Gradient" x1="0" x2="0" y1="0" y2="1">
-      <stop offset="0%" style="stop-color:#62A0EA;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#57E389;stop-opacity:1" />
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:gpa="https://www.gtk.org/grappa" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <defs id="defs">
+    <linearGradient id="grad-back" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#38b8ae"/>
+      <stop offset="55%" stop-color="#15968d"/>
+      <stop offset="100%" stop-color="#08776f"/>
     </linearGradient>
-    <filter id="alpha-to-white">
-      <feColorMatrix in="SourceGraphic" type="matrix"
-                     values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0"/>
-    </filter>
-    <g id="child-svg"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" height="16px" width="16px"><path d="M304 112L192 112C183.2 112 176 119.2 176 128L176 512C176 520.8 183.2 528 192 528L448 528C456.8 528 464 520.8 464 512L464 272L376 272C336.2 272 304 239.8 304 200L304 112zM444.1 224L352 131.9L352 200C352 213.3 362.7 224 376 224L444.1 224zM128 128C128 92.7 156.7 64 192 64L325.5 64C342.5 64 358.8 70.7 370.8 82.7L493.3 205.3C505.3 217.3 512 233.6 512 250.6L512 512C512 547.3 483.3 576 448 576L192 576C156.7 576 128 547.3 128 512L128 128z" /></svg></g>
+    <linearGradient id="grad-mid" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c3f2eb"/>
+      <stop offset="52%" stop-color="#83ddd2"/>
+      <stop offset="100%" stop-color="#57c3b8"/>
+    </linearGradient>
+    <linearGradient id="grad-paper" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="66%" stop-color="#fbfdfd"/>
+      <stop offset="100%" stop-color="#eef6f7"/>
+    </linearGradient>
+    <linearGradient id="grad-fold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c4f4ee"/>
+      <stop offset="50%" stop-color="#91e1d9"/>
+      <stop offset="100%" stop-color="#4dbdb8"/>
+    </linearGradient>
+    <linearGradient id="grad-line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6acabd"/>
+      <stop offset="100%" stop-color="#8bd9cf"/>
+    </linearGradient>
+    <linearGradient id="grad-blue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3c91e8"/>
+      <stop offset="100%" stop-color="#5aacf3"/>
+    </linearGradient>
   </defs>
-  <rect
-      width="256"
-      height="256"
-      fill="url(#Gradient)"
-      ry="128"
-      x="0"
-      y="0" />
-  <use xlink:href="#child-svg" filter="url(#alpha-to-white)"
-       transform="matrix(8,0,0,8,64,64)" />
-</svg>
+  <rect id="back-shadow" x="34.7" y="18.4" width="77" height="104" rx="10" ry="10" fill="#204f4d" opacity="0.04" transform="translate(-8.25 -4.75) rotate(-8 73.2 70.4)"/>
+  <rect id="back-body" x="33" y="16.8" width="77" height="104" rx="10" ry="10" fill="#16948d" stroke="none" opacity="0.82" transform="translate(-8.25 -4.75) rotate(-8 71.5 68)"/><rect id="back-sheet" x="33" y="16" width="77" height="104" rx="10" ry="10" fill="url(#grad-back)" stroke="#087c74" stroke-width="0.5" opacity="0.97" transform="translate(-8.25 -4.75) rotate(-8 71.5 68)"/>
+  <rect id="mid-shadow" x="34.7" y="18.4" width="77" height="104" rx="10" ry="10" fill="#2a6662" opacity="0.04" transform="translate(-8.25 -4.75) rotate(8 73.2 70.4)"/>
+  <rect id="mid-body" x="33" y="16.8" width="77" height="104" rx="10" ry="10" fill="#a7e3de" stroke="none" opacity="0.82" transform="translate(-8.25 -4.75) rotate(8 71.5 68)"/><rect id="mid-sheet" x="33" y="16" width="77" height="104" rx="10" ry="10" fill="url(#grad-mid)" stroke="#72cec5" stroke-width="0.5" opacity="0.97" transform="translate(-8.25 -4.75) rotate(8 71.5 68)"/>
+  <path id="front-shadow" fill="#527c7e" opacity="0.14" d="M 43 12 H 88 L 110 34 V 106 C 110 111.522847498 105.522847498 116 100 116 H 43 C 37.4771525017 116 33 111.522847498 33 106 V 22 C 33 16.4771525017 37.4771525017 12 43 12 Z" transform="translate(-8.25 -4.75) translate(0 2)"/>
+  <rect id="front-book-body" x="33" y="12" width="77" height="104" rx="10" ry="10" fill="#f0f3f3" stroke="none" opacity="1" transform="translate(-8.25 -4.75)"/><path id="front-page" fill="url(#grad-paper)" stroke="none" stroke-width="0.8" stroke-linejoin="round" d="M 43 12 H 88 L 110 34 V 106 C 110 111.522847498 105.522847498 116 100 116 H 43 C 37.4771525017 116 33 111.522847498 33 106 V 22 C 33 16.4771525017 37.4771525017 12 43 12 Z" stroke-linecap="round" transform="translate(-8.25 -4.75)"/>
+  <path id="fold" fill="url(#grad-fold)" stroke-linejoin="round" d="M 88 12 L 88 24 C 88 29.5228474983 92.4771525017 34 98 34 L 110 34 L 88 12 Z" transform="translate(-8.25 -4.75)"/>
+  <rect id="line-1" x="48" y="54" width="48" height="5.5" rx="2.75" ry="2.75" fill="url(#grad-line)" transform="translate(-8.25 -4.75)"/>
+  <rect id="line-2" x="48" y="67" width="48" height="5.5" rx="2.75" ry="2.75" fill="url(#grad-line)" transform="translate(-8.25 -4.75) translate(0 0)"/>
+  <rect id="line-3" x="48" y="80" width="48" height="5.5" rx="2.75" ry="2.75" fill="url(#grad-line)" transform="translate(-8.25 -4.75) translate(0 0)"/>
+  <rect id="line-4" x="48" y="93" width="30" height="5.5" rx="2.75" ry="2.75" fill="url(#grad-blue)" transform="translate(-8.25 -4.75)"/>
+<path id="fold-seam-v4" fill="none" stroke="#65c8c3" stroke-width="0.65" stroke-linejoin="round" stroke-linecap="butt" d="M 88 12 L 88 24 C 88 29.5228474983 92.4771525017 34 98 34 L 110 34" transform="translate(-8.25 -4.75)"/><path id="front-outline-v7" fill="none" stroke="#9bd7d4" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round" d="M 43 12 H 88 L 110 34 V 106 C 110 111.522847498 105.522847498 116 100 116 H 43 C 37.4771525017 116 33 111.522847498 33 106 V 22 C 33 16.4771525017 37.4771525017 12 43 12 Z" transform="translate(-8.25 -4.75)"/></svg>
