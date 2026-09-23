@@ -562,27 +562,11 @@ static void on_preview_resolved(GObject *source, GAsyncResult *result,
   PdfvMarkdownPreview *preview = pdfv_markdown_vault_adapter_preview_finish(
       PDFV_MARKDOWN_VAULT_ADAPTER(source), result, &error);
   if (self && self->web_view) {
-    if (!preview) {
+    if (!preview)
       send_response_error(self, request->id, error);
-    } else {
-      JsonObject *value = json_object_new();
-      json_object_set_string_member(value, "path", preview->path);
-      if (preview->text)
-        json_object_set_string_member(value, "text", preview->text);
-      if (preview->file) {
-        gchar *filename = g_file_get_path(preview->file);
-        gint width = 0, height = 0;
-        if (filename && gdk_pixbuf_get_file_info(filename, &width, &height) &&
-            width > 0 && height > 0) {
-          json_object_set_int_member(value, "width", width);
-          json_object_set_int_member(value, "height", height);
-        }
-        g_free(filename);
-      }
-      JsonNode *node = json_node_new(JSON_NODE_OBJECT);
-      json_node_take_object(node, value);
-      send_response_node(self, request->id, node, NULL);
-    }
+    else
+      send_response_node(self, request->id,
+                         pdfv_markdown_preview_to_json(preview), NULL);
   }
   pdfv_markdown_preview_free(preview);
   g_clear_error(&error);

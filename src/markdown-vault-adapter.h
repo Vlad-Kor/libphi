@@ -8,6 +8,7 @@
 #define PDFV_MARKDOWN_VAULT_ADAPTER_H
 
 #include <gio/gio.h>
+#include <json-glib/json-glib.h>
 
 G_BEGIN_DECLS
 
@@ -48,8 +49,12 @@ typedef struct {
   gchar *path;
   gchar *text; /* NULL for attachments. */
   GFile *file; /* NULL for note embeds. */
+  gint width;  /* Image size of an attachment, or 0 when unknown. */
+  gint height;
 } PdfvMarkdownPreview;
 void pdfv_markdown_preview_free(PdfvMarkdownPreview *preview);
+/* The result object answering an embed/read or attachment/resolve request. */
+JsonNode *pdfv_markdown_preview_to_json(const PdfvMarkdownPreview *preview);
 void pdfv_markdown_vault_adapter_preview_async(
     PdfvMarkdownVaultAdapter *self, const gchar *source_path,
     const gchar *target, gboolean embed, gboolean relative_to_note,

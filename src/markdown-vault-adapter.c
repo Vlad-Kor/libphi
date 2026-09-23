@@ -6,7 +6,7 @@
 
 #include "markdown-vault-adapter.h"
 
-#include <json-glib/json-glib.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <string.h>
 
 struct _PdfvMarkdownVaultAdapter {
@@ -623,6 +623,20 @@ void pdfv_markdown_preview_free(PdfvMarkdownPreview *preview) {
   g_free(preview);
 }
 
+JsonNode *pdfv_markdown_preview_to_json(const PdfvMarkdownPreview *preview) {
+  JsonObject *value = json_object_new();
+  json_object_set_string_member(value, "path", preview->path);
+  if (preview->text)
+    json_object_set_string_member(value, "text", preview->text);
+  if (preview->width > 0 && preview->height > 0) {
+    json_object_set_int_member(value, "width", preview->width);
+    json_object_set_int_member(value, "height", preview->height);
+  }
+  JsonNode *node = json_node_new(JSON_NODE_OBJECT);
+  json_node_take_object(node, value);
+  return node;
+}
+
 static void preview_thread(GTask *task, gpointer source_object,
                            gpointer task_data, GCancellable *cancellable) {
   (void)cancellable;
@@ -637,8 +651,17 @@ static void preview_thread(GTask *task, gpointer source_object,
   } else {
     preview->file = pdfv_markdown_vault_adapter_resolve_attachment(
         self, request->source_path, request->target, request->relative, &error);
-    if (preview->file)
+    if (preview->file) {
       preview->path = pdfv_markdown_vault_adapter_relative_path(self, preview->file);
+      /* Reading the image header is file I/O too; keep it off the UI. */
+      gchar *filename = g_file_get_path(preview->file);
+      if (!filename ||
+          !gdk_pixbuf_get_file_info(filename, &preview->width,
+                                    &preview->height) ||
+          preview->width <= 0 || preview->height <= 0)
+        preview->width = preview->height = 0;
+      g_free(filename);
+    }
   }
   if (!preview->path) {
     pdfv_markdown_preview_free(preview);

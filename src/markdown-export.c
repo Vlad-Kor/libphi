@@ -11,7 +11,6 @@
 #include "markdown-resource-scheme.h"
 #include "markdown-vault-adapter.h"
 
-#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
 #include <mupdf/fitz.h>
@@ -137,12 +136,6 @@ static gchar *note_title(const gchar *path) {
   if (dot && note_filename_supported(title))
     *dot = '\0';
   return title;
-}
-
-static JsonNode *object_node(JsonObject *object) {
-  JsonNode *node = json_node_new(JSON_NODE_OBJECT);
-  json_node_take_object(node, object);
-  return node;
 }
 
 static void send_response(PdfvMarkdownExport *self, const gchar *id,
@@ -314,26 +307,12 @@ static void on_preview_resolved(GObject *source, GAsyncResult *result,
   PdfvMarkdownPreview *preview = pdfv_markdown_vault_adapter_preview_finish(
       PDFV_MARKDOWN_VAULT_ADAPTER(source), result, &error);
   if (self && self->web_view) {
-    if (!preview) {
+    if (!preview)
       send_response(self, request->id, NULL,
                     error ? error->message : "Preview target was not found");
-    } else {
-      JsonObject *value = json_object_new();
-      json_object_set_string_member(value, "path", preview->path);
-      if (preview->text)
-        json_object_set_string_member(value, "text", preview->text);
-      if (preview->file) {
-        gchar *filename = g_file_get_path(preview->file);
-        gint width = 0, height = 0;
-        if (filename && gdk_pixbuf_get_file_info(filename, &width, &height) &&
-            width > 0 && height > 0) {
-          json_object_set_int_member(value, "width", width);
-          json_object_set_int_member(value, "height", height);
-        }
-        g_free(filename);
-      }
-      send_response(self, request->id, object_node(value), NULL);
-    }
+    else
+      send_response(self, request->id,
+                    pdfv_markdown_preview_to_json(preview), NULL);
   }
   pdfv_markdown_preview_free(preview);
   g_clear_error(&error);

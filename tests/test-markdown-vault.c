@@ -6,6 +6,7 @@
 
 #include "markdown-vault-adapter.h"
 
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib/gstdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -386,6 +387,40 @@ static void test_open_read(VaultFixture *fixture, gconstpointer data) {
   g_clear_error(&error);
 }
 
+static void test_preview_image_size(VaultFixture *fixture,
+                                    gconstpointer data) {
+  (void)data;
+  GError *error = NULL;
+  gchar *path = g_build_filename(fixture->path, "Photo.png", NULL);
+  GdkPixbuf *pixbuf = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 3, 2);
+  gdk_pixbuf_fill(pixbuf, 0xffffffff);
+  g_assert_true(gdk_pixbuf_save(pixbuf, path, "png", &error, NULL));
+  g_assert_no_error(error);
+  g_object_unref(pixbuf);
+
+  const gchar *targets[] = {"Photo.png", "Diagram.png"};
+  for (guint i = 0; i < G_N_ELEMENTS(targets); i++) {
+    PreviewTestResult result = {0};
+    pdfv_markdown_vault_adapter_preview_async(
+        fixture->vault, "Overview.md", targets[i], FALSE, FALSE, NULL,
+        preview_test_done, &result);
+    while (!result.done) g_main_context_iteration(NULL, TRUE);
+    g_assert_no_error(result.error);
+    /* Diagram.png is not a decodable image, so its size stays unknown. */
+    g_assert_cmpint(result.preview->width, ==, i == 0 ? 3 : 0);
+    g_assert_cmpint(result.preview->height, ==, i == 0 ? 2 : 0);
+    JsonNode *node = pdfv_markdown_preview_to_json(result.preview);
+    JsonObject *object = json_node_get_object(node);
+    g_assert_cmpstr(json_object_get_string_member(object, "path"), ==,
+                    i == 0 ? "Photo.png" : "~Images/Diagram.png");
+    g_assert_cmpint(json_object_has_member(object, "width"), ==, i == 0);
+    json_node_unref(node);
+    pdfv_markdown_preview_free(result.preview);
+  }
+  g_assert_cmpint(g_unlink(path), ==, 0);
+  g_free(path);
+}
+
 int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add("/markdown-vault/safe-resolution", VaultFixture, NULL,
@@ -399,6 +434,9 @@ int main(int argc, char **argv) {
              vault_fixture_teardown);
   g_test_add("/markdown-vault/async-preview", VaultFixture, NULL,
              vault_fixture_setup, test_async_preview, vault_fixture_teardown);
+  g_test_add("/markdown-vault/preview-image-size", VaultFixture, NULL,
+             vault_fixture_setup, test_preview_image_size,
+             vault_fixture_teardown);
   g_test_add("/markdown-vault/open-read", VaultFixture, NULL,
              vault_fixture_setup, test_open_read, vault_fixture_teardown);
   return g_test_run();

@@ -80,7 +80,7 @@ if get_option('app')
 		'test-markdown-vault.c',
 		'../src/markdown-vault-adapter.c',
 		include_directories: [inc, include_directories('../src')],
-		dependencies: [gio_dep, json_glib_dep],
+		dependencies: [gio_dep, json_glib_dep, gdk_pixbuf_dep],
 		c_args: ['-DTEST_MARKDOWN_FIXTURE_DIR="' + meson.current_source_dir() / 'markdown-fixtures' + '"'],
 	)
 
