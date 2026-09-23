@@ -107,6 +107,9 @@ export class ConcealPointerGuard {
     if (changed) this.refresh();
   };
 
+  /** Outside a pointer drag, `reveal` is a pure function of the selection. */
+  get idle(): boolean { return !this.active; }
+
   reveal(spec: LatexConcealSpec, selected: boolean): boolean {
     const key = spec[0].from;
     if (!this.active) return selected;

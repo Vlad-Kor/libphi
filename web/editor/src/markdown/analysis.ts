@@ -288,9 +288,13 @@ function regionAnalysis(previous: MarkdownAnalysis, transaction: Transaction,
   const before: MarkdownNode[] = [];
   const inside: MarkdownNode[] = [];
   const after: MarkdownNode[] = [];
+  /* Strict boundaries: nodes end before the newline that precedes a window
+   * line. One ending exactly at the window start is an unclosed construct
+   * that runs to the end of the note (an open fence) and would grow into the
+   * window, so it must reject the region like any crossing node. */
   for (const node of previous.nodes) {
-    if (node.to <= window.from && node.from < window.from) before.push(node);
-    else if (node.from >= window.oldTo && node.from > window.from) after.push(node);
+    if (node.to < window.from) before.push(node);
+    else if (node.from > window.oldTo) after.push(node);
     else if (node.from >= window.from && node.to <= window.oldTo) inside.push(node);
     else return null;
   }

@@ -682,8 +682,23 @@ function concealPresentation(view: EditorView, guard: ConcealPointerGuard): {
   atomicRanges: RangeSet<RangeValue>;
 } {
   return measurePerformance("latex/conceal-decorations", () => {
+    const { decorations, atomic } = concealRanges(
+      view, guard, markdownAnalysis(view.state).math);
+    return {
+      decorations: Decoration.set(decorations, true),
+      atomicRanges: RangeSet.of(atomic, true),
+    };
+  });
+}
+
+function concealRanges(view: EditorView, guard: ConcealPointerGuard,
+                       math: readonly MarkdownNode[]): {
+  decorations: Range<Decoration>[];
+  atomic: Range<RangeValue>[];
+} {
+  {
     const analysis = markdownAnalysis(view.state);
-    const specs = analysis.math.flatMap((node) =>
+    const specs = math.flatMap((node) =>
       node.contentFrom == null || node.contentTo == null ? [] :
         concealedFragment(
           analysis.text.slice(node.contentFrom, node.contentTo),
@@ -691,7 +706,7 @@ function concealPresentation(view: EditorView, guard: ConcealPointerGuard): {
         ));
     const enabled = specs.filter((spec) =>
       !guard.reveal(spec, selectionTouchesSpec(view, spec))).flat();
-    const decorations = Decoration.set(enabled.map((replacement) =>
+    const decorations = enabled.map((replacement) =>
       replacement.from === replacement.to
         ? Decoration.widget({
           widget: new LatexConcealWidget(replacement),
@@ -700,31 +715,31 @@ function concealPresentation(view: EditorView, guard: ConcealPointerGuard): {
         : Decoration.replace({
           widget: new LatexConcealWidget(replacement),
           inclusive: false,
-        }).range(replacement.from, replacement.to)), true);
-    const builder = new RangeSetBuilder<RangeValue>();
-    for (const replacement of enabled.sort((left, right) =>
-      left.from - right.from)) {
-      if (replacement.from < replacement.to)
-        builder.add(replacement.from, replacement.to, atomicRange);
-    }
-    return { decorations, atomicRanges: builder.finish() };
-  });
+        }).range(replacement.from, replacement.to));
+    const atomic = enabled.filter((replacement) =>
+      replacement.from < replacement.to).map((replacement) =>
+      atomicRange.range(replacement.from, replacement.to));
+    return { decorations, atomic };
+  }
 }
 
-function changedMath(update: ViewUpdate): boolean {
-  const previous = markdownAnalysis(update.startState);
-  const current = markdownAnalysis(update.state);
-  let touched = false;
-  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-    const intersects = (node: { from: number; to: number },
-                        from: number, to: number) =>
-      from === to
-        ? from >= node.from && from <= node.to
-        : from < node.to && to > node.from;
-    touched ||= previous.math.some((node) => intersects(node, fromA, toA)) ||
-      current.math.some((node) => intersects(node, fromB, toB));
+/** Whether no equation changed except by being moved: the analysis reused
+ * every node outside its reparsed lines, and no old or new equation touches
+ * those lines. A full reparse can re-pair math delimiters anywhere (typing one
+ * `$` changes which later text is math), and a region reparse can change any
+ * equation in its window, not only at the edited characters. Mapping the old
+ * decorations in either case left stale highlighting and concealment. */
+function mathMappedOutsideChanges(update: ViewUpdate): boolean {
+  return update.transactions.every((transaction) => {
+    if (!transaction.docChanged) return true;
+    const current = markdownAnalysis(transaction.state);
+    if (current.updateKind === "full") return false;
+    const previous = markdownAnalysis(transaction.startState);
+    const { from, to } = current.changed;
+    const oldTo = to - (transaction.newDoc.length - transaction.startState.doc.length);
+    return !current.math.some((node) => node.from <= to && node.to >= from) &&
+      !previous.math.some((node) => node.from <= oldTo && node.to >= from);
   });
-  return touched;
 }
 
 function selectionInMath(analysis: MarkdownAnalysis,
@@ -761,7 +776,7 @@ const latexSyntaxPlugin = ViewPlugin.fromClass(class {
           sort: true,
         });
       });
-    } else if (update.docChanged && !changedMath(update) &&
+    } else if (update.docChanged && mathMappedOutsideChanges(update) &&
         !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
         !selectionInMath(markdownAnalysis(update.state), update.state)) {
       this.decorations = this.decorations.map(update.changes);
@@ -788,7 +803,28 @@ const latexConcealPlugin = ViewPlugin.fromClass(class {
 
   update(update: ViewUpdate): void {
     if (update.docChanged) this.guard.clear();
-    if (update.docChanged && !changedMath(update) &&
+    const refresh = update.transactions.some((tr) =>
+      tr.effects.some((effect) => effect.is(refreshPointerConceal)));
+    const regions = update.transactions.length === 1 && !refresh &&
+      this.guard.idle ? previewDirtyRegions(update.transactions[0]) : "all";
+    if (regions !== "all" && (update.docChanged || update.selectionSet)) {
+      /* Same scheme as the syntax plugin; valid while no pointer drag is in
+       * progress, because the guard then reveals exactly what is selected. */
+      measurePerformance("latex/conceal-decorations-region", () => {
+        const math = nodesInRegions(markdownAnalysis(update.state).math, regions);
+        const { decorations, atomic } = concealRanges(update.view, this.guard, math);
+        const filter = (from: number, to: number) => !regions.some((region) =>
+          from >= region.from && to <= region.to);
+        const filterFrom = regions[0]?.from ?? 0;
+        const filterTo = regions.at(-1)?.to ?? 0;
+        this.decorations = this.decorations.map(update.changes).update({
+          filter, filterFrom, filterTo, add: decorations, sort: true,
+        });
+        this.atomicRanges = this.atomicRanges.map(update.changes).update({
+          filter, filterFrom, filterTo, add: atomic, sort: true,
+        });
+      });
+    } else if (update.docChanged && mathMappedOutsideChanges(update) &&
         !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
         !selectionInMath(markdownAnalysis(update.state), update.state)) {
       this.decorations = this.decorations.map(update.changes);

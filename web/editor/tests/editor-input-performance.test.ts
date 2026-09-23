@@ -255,7 +255,7 @@ describe("region reparse", () => {
     "$$\n\\frac{a}{b}\n\\sum_i x_i\n$$", "\\[\nx\n\\]", "$$ inline display $$",
     "[^1]: note", "text[^1] ref", "<span>html</span>", "%% comment %%",
     "---", "{", "}", "tag #tag ^block-id", "[[Wiki]] and [link](target)",
-    "![image](a.png)", "", "",
+    "![image](a.png)", "```unclosed", "$$", "> [!tip]", "", "",
   ];
   const tokens = ["x", " ", "\n", "$", "$$", "`", "```", "*", "_", "[", "]",
     "(", ")", "#", "- ", "|", ">", "<", "%", "^", "\\", "~", "=", "{", "}",
@@ -302,6 +302,17 @@ describe("region reparse", () => {
       }
     }
     expect(kinds.region).toBeGreaterThan(500);
+  });
+
+  it("lets an unclosed fence grow into text typed after it", () => {
+    /* An open fence runs to the end of the note, so a paragraph window on a
+     * trailing line starts exactly where the fence node ends. */
+    for (const text of ["```\ncode\n\n", "Intro\n\n~~~\nx\n\n\n"]) {
+      let state = EditorState.create({ doc: text, extensions: [markdownAnalysisField] });
+      state = state.update({ changes: { from: text.length, insert: "[" } }).state;
+      expect(markdownAnalysis(state).nodes)
+        .toEqual(parseMarkdownNodes(state.doc.toString()));
+    }
   });
 
   it("reparses only the code block or equation being typed in", () => {
@@ -404,8 +415,8 @@ describe("incremental live preview decorations", () => {
 });
 
 describe("incremental LaTeX syntax decorations", () => {
-  it("equal a fresh view after edits and selection moves in math", () => {
-    let seed = 17;
+  it.each([false, true])("equal a fresh view after edits and selection moves in math (conceal %s)", (conceal) => {
+    let seed = Number(process.env.PHI_LATEX_SEED ?? 17);
     const next = () => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
       return seed / 0x7fffffff;
@@ -415,14 +426,14 @@ describe("incremental LaTeX syntax decorations", () => {
       "Inline \\(x^2\\) and $[y]$.", "```\n$not math$\n```"];
     const tokens = ["x", "{", "}", "(", ")", "[", "]", "\\", "$", " ", "\n"];
     const extensions = [markdown({ base: markdownLanguage }), livePreview,
-      latexEnhancements(false)];
+      latexEnhancements(conceal)];
     const viewDecorations = (view: EditorView) => view.state
       .facet(EditorView.decorations)
       .map((value) => typeof value === "function" ? value(view) : value);
-    for (let run = 0; run < 12; run++) {
+    for (let run = 0; run < Number(process.env.PHI_LATEX_RUNS ?? 12); run++) {
       const text = Array.from({ length: 6 + Math.floor(next() * 6) },
         () => blocks[Math.floor(next() * blocks.length)]).join("\n");
-      const view = makeView(text, [livePreview, latexEnhancements(false)]);
+      const view = makeView(text, [livePreview, latexEnhancements(conceal)]);
       for (let step = 0; step < 30; step++) {
         const length = view.state.doc.length;
         const at = Math.floor(next() * (length + 1));
@@ -431,18 +442,40 @@ describe("incremental LaTeX syntax decorations", () => {
         } else {
           const insert = tokens[Math.floor(next() * tokens.length)];
           const typing = next() < 0.8;
+          const before = view.state.doc.toString();
+          const change = typing ? { from: at, insert }
+            : { from: at, to: Math.min(length, at + 1) };
           view.dispatch({
-            changes: typing ? { from: at, insert }
-              : { from: at, to: Math.min(length, at + 1) },
+            changes: change,
             selection: { anchor: typing ? at + insert.length : at },
           });
+          if (process.env.PHI_DEBUG_LATEX && JSON.stringify(markdownAnalysis(view.state).nodes) !==
+              JSON.stringify(parseMarkdownNodes(view.state.doc.toString()))) {
+            process.stdout.write(`FIRST-DIVERGENCE BEFORE ${JSON.stringify(before)} CHANGE ${JSON.stringify(change)}\n`);
+          }
         }
         const fresh = new EditorView({ state: EditorState.create({
           doc: view.state.doc, selection: view.state.selection, extensions,
         }) });
         const expected = viewDecorations(fresh);
-        viewDecorations(view).forEach((set, index) =>
-          expect(RangeSet.eq([set], [expected[index]])).toBe(true));
+        viewDecorations(view).forEach((set, index) => {
+          if (process.env.PHI_DEBUG_LATEX && !RangeSet.eq([set], [expected[index]])) {
+            const dump = (value: DecorationSet) => {
+              const out: string[] = [];
+              for (let it = value.iter(); it.value; it.next())
+                out.push(`${it.from}-${it.to}:${it.value.spec.class ?? it.value.spec.widget?.replacement?.text ?? it.value.spec.widget?.constructor.name}`);
+              return out.join(" ");
+            };
+            process.stdout.write(`DOC ${JSON.stringify(view.state.doc.toString())} SEL ${view.state.selection.main.head}\nIDX ${index}\nGOT  ${dump(set)}\nWANT ${dump(expected[index])}\n`);
+            process.stdout.write(`ANALYSIS-EQUAL ${JSON.stringify(markdownAnalysis(view.state).nodes) === JSON.stringify(parseMarkdownNodes(view.state.doc.toString()))} KIND ${markdownAnalysis(view.state).updateKind}\nMATH ${JSON.stringify(markdownAnalysis(view.state).math.map((n) => [n.from, n.to, n.text]))}\n`);
+          }
+          expect(RangeSet.eq([set], [expected[index]])).toBe(true);
+        });
+        const expectedAtomic = fresh.state.facet(EditorView.atomicRanges)
+          .map((provider) => provider(fresh));
+        view.state.facet(EditorView.atomicRanges).map((provider) => provider(view))
+          .forEach((set, index) =>
+            expect(RangeSet.eq([set], [expectedAtomic[index]])).toBe(true));
         fresh.destroy();
       }
     }
