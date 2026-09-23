@@ -293,7 +293,8 @@ static gunichar phi_compose_diacritic(gunichar base, gunichar combining) {
 	return composed;
 }
 
-static void phi_stext_fix_separate_diacritics(fz_stext_page* page) {
+static void phi_stext_fix_separate_diacritics(fz_context* ctx,
+		fz_stext_page* page) {
 	for (fz_stext_block* block = page->first_block; block; block = block->next) {
 		if (block->type != FZ_STEXT_BLOCK_TEXT)
 			continue;
@@ -310,7 +311,10 @@ static void phi_stext_fix_separate_diacritics(fz_stext_page* page) {
 					!composed)
 					continue;
 
-				/* Collapse the overlaid pair so text and quad indexes remain 1:1. */
+				/* Collapse the overlaid pair so text and quad indexes remain 1:1.
+				 * Every character owns a font reference that dropping the page
+				 * releases; base is unlinked, so its reference moves to mark. */
+				fz_font* mark_font = mark->font;
 				mark->c = composed;
 				mark->bidi = base->bidi;
 				mark->flags = base->flags;
@@ -319,6 +323,7 @@ static void phi_stext_fix_separate_diacritics(fz_stext_page* page) {
 				mark->quad = base->quad;
 				mark->size = base->size;
 				mark->font = base->font;
+				fz_drop_font(ctx, mark_font);
 				mark->next = base->next;
 				if (line->last_char == base)
 					line->last_char = mark;
@@ -331,7 +336,7 @@ static fz_stext_page* phi_page_extract_stext(PhiPage* self) {
 	if (!self->stext) {
 		self->stext = fz_new_stext_page_from_page(
 			self->document->ctx, self->page, NULL);
-		phi_stext_fix_separate_diacritics(self->stext);
+		phi_stext_fix_separate_diacritics(self->document->ctx, self->stext);
 	}
 	return fz_keep_stext_page(self->document->ctx, self->stext);
 }
