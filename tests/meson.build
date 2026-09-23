@@ -116,3 +116,20 @@ if get_option('app')
 
 	test('window-components-test', test_window_components)
 endif
+
+# PyGObject smoke test against the uninstalled typelib and library.
+python3 = find_program('python3', required: false)
+if is_variable('phi_gir') and python3.found()
+	gi_env = environment()
+	gi_env.prepend('GI_TYPELIB_PATH', meson.project_build_root() / 'phi')
+	if host_machine.system() == 'windows'
+		gi_env.prepend('PATH', meson.project_build_root() / 'phi')
+	else
+		gi_env.prepend('LD_LIBRARY_PATH', meson.project_build_root() / 'phi')
+	endif
+	test('gi-test', python3,
+		args: [files('test-gi.py')],
+		env: gi_env,
+		depends: phi_gir,
+	)
+endif
