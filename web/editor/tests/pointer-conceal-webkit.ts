@@ -7,8 +7,44 @@ import { latexEnhancements } from "../src/latex-suite/enhancements";
 const frame = () => new Promise<void>(resolve => setTimeout(resolve, 35));
 export async function verifyPointerConceal(): Promise<void> {
   await verifyPreviewSelectionLifecycle();
+  await verifyWrappedArrowAcrossConceal();
   await verifyWrappedEquation(String.raw`\(G^*\)`);
   await verifyWrappedEquation("$G^*$");
+}
+
+/* Down from a leading inline code span reveals its backticks. CodeMirror
+ * resolved the wrapped target in that layout; once the caret left and the
+ * backticks were concealed, the target sat at the end of the first row. */
+async function verifyWrappedArrowAcrossConceal(): Promise<void> {
+  const text = "`PhiDocumentView` should expose only the public API required " +
+    "by consumers. Keep rendering/cache internals private and retain the bytes.";
+  for (let width = 300; width <= 700; width += 20) {
+    const parent = document.createElement("div");
+    parent.style.cssText = `position:fixed;top:0;left:0;width:${width}px;height:300px;z-index:100`;
+    document.body.append(parent);
+    const view = new EditorView({ parent, state: EditorState.create({
+      doc: text, selection: { anchor: 0 },
+      extensions: [markdown(), livePreview.slice(0, -1), EditorView.lineWrapping],
+    }) });
+    try {
+      await frame();
+      const start = view.coordsAtPos(0)!;
+      view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", code: "ArrowDown", keyCode: 40,
+        bubbles: true, cancelable: true,
+      }));
+      await frame();
+      await frame();
+      const head = view.state.selection.main;
+      const caret = view.coordsAtPos(head.head, head.assoc < 0 ? -1 : 1)!;
+      if (caret.top <= start.top || Math.abs(caret.left - start.left) > 6)
+        throw new Error(`Down from wrapped inline code at ${width}px moved from ` +
+          `(${start.left}, ${start.top}) to (${caret.left}, ${caret.top})`);
+    } finally {
+      view.destroy();
+      parent.remove();
+    }
+  }
 }
 
 async function verifyWrappedEquation(math: string): Promise<void> {

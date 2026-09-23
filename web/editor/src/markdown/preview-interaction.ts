@@ -5,8 +5,10 @@ import {
   StateField,
   type EditorState,
   type Range,
+  type SelectionRange,
 } from "@codemirror/state";
 import {
+  BlockType,
   Decoration,
   EditorView,
   keymap,
@@ -432,6 +434,60 @@ function sourceColumnPosition(
   return line.from + Math.min(column, line.length);
 }
 
+/**
+ * Apply CodeMirror's visual vertical motion, then re-resolve it once in the
+ * layout that the new caret produces. Leaving revealed source (for example the
+ * backticks of inline code at a line start) re-conceals it and shifts the
+ * wrapped text, so a target computed in the old layout could land at the far
+ * end of a different visual row instead of below the original caret.
+ */
+function moveToVisualTarget(
+  view: EditorView,
+  origin: SelectionRange,
+  moved: SelectionRange,
+  forward: boolean,
+): boolean {
+  if (view.state.selection.ranges.length > 1) return false;
+  view.dispatch({
+    selection: EditorSelection.create([moved]),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+  const settled = view.state;
+  view.requestMeasure({
+    read: () => {
+      /* A block preview that re-rendered around the origin (such as a code
+       * fence the caret just left) has no text rows to re-resolve from. */
+      if (view.state !== settled ||
+          view.lineBlockAt(origin.head).type !== BlockType.Text)
+        return null;
+      const start = EditorSelection.cursor(
+        origin.head, origin.assoc, undefined, moved.goalColumn,
+      );
+      const again = view.moveVertically(start, forward);
+      const doc = view.state.doc;
+      return again.head === origin.head ||
+          doc.lineAt(again.head).number !== doc.lineAt(moved.head).number ||
+          (again.head === moved.head && again.assoc === moved.assoc)
+        ? null
+        : again;
+    },
+    write: (again) => {
+      if (!again) return;
+      /* Updates are not allowed while CodeMirror is measuring. */
+      queueMicrotask(() => {
+        if (view.state !== settled) return;
+        view.dispatch({
+          selection: EditorSelection.create([again]),
+          scrollIntoView: true,
+          userEvent: "select",
+        });
+      });
+    },
+  });
+  return true;
+}
+
 function moveVerticallyThroughPreview(
   view: EditorView,
   forward: boolean,
@@ -455,7 +511,8 @@ function moveVerticallyThroughPreview(
   const moved = view.moveVertically(selection, forward);
   if (moved.head === selection.head) return false;
   const movedLine = view.state.doc.lineAt(moved.head);
-  if (movedLine.number === currentLine.number) return false;
+  if (movedLine.number === currentLine.number)
+    return moveToVisualTarget(view, selection, moved, forward);
 
   const step = forward ? 1 : -1;
   const column = selection.head - currentLine.from;
@@ -468,7 +525,8 @@ function moveVerticallyThroughPreview(
       /* Widget and heading geometry can make CodeMirror's visual motion jump
        * across more than one source line. Every physical source line remains
        * a navigation stop, including empty separators between previews. */
-      if (number === movedLine.number) continue;
+      if (number === movedLine.number)
+        return moveToVisualTarget(view, selection, moved, forward);
       view.dispatch({
         selection: EditorSelection.cursor(position),
         scrollIntoView: true,
