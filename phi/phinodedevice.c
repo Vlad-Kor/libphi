@@ -232,6 +232,10 @@ static void phi_node_device_fill_path(fz_context* ctx, fz_device* dev, const fz_
 	if (!gsk_path_get_bounds(cpath, &bounds))
 		graphene_rect_init(&bounds, 0.f, 0.f, 0.f, 0.f);
 	GskRenderNode* fill = phi_node_device_make_color(ctx, cs, color, alpha, &bounds);
+	if (!fill) {
+		gsk_path_unref(cpath);
+		return;
+	}
 	
 	GskRenderNode* node = phi_node_device_node_from_fillpath(fill, cpath, even_odd, &fz_identity, &ctm);
 	gsk_path_unref(cpath);
@@ -240,11 +244,9 @@ static void phi_node_device_fill_path(fz_context* ctx, fz_device* dev, const fz_
 	g_ptr_array_add(current->children, node);
 }
 
-static void phi_node_device_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* ss, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params) {
-	PhiNodeDevice* self = (PhiNodeDevice*)dev;
-
+static GskStroke* phi_node_device_convert_stroke(fz_context* ctx, const fz_stroke_state* ss) {
 	/* If ss->linewith is 0, its supposed to be a hairline - Gsk.Stroke doesn't have that
-	 * for now, we'll just hardcode .25 as size, but we might want to switch to a cairo node,
+	 * for now, we'll just hardcode 1 as size, but we might want to switch to a cairo node,
 	 * which has cairo_set_hairline.
 	 */
 	GskStroke* stroke = gsk_stroke_new(ss->linewidth > 0 ? ss->linewidth : 1.);
@@ -277,12 +279,24 @@ static void phi_node_device_stroke_path(fz_context* ctx, fz_device* dev, const f
 	}
 	gsk_stroke_set_dash(stroke, ss->dash_list, ss->dash_len);
 	gsk_stroke_set_dash_offset(stroke, ss->dash_phase);
+	return stroke;
+}
+
+static void phi_node_device_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* ss, fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params) {
+	PhiNodeDevice* self = (PhiNodeDevice*)dev;
+
+	GskStroke* stroke = phi_node_device_convert_stroke(ctx, ss);
 	
 	GskPath* cpath = phi_node_device_convert_path(ctx, path);
 	graphene_rect_t bounds;
 	if (!gsk_path_get_stroke_bounds(cpath, stroke, &bounds))
 		graphene_rect_init(&bounds, 0.f, 0.f, 0.f, 0.f);
 	GskRenderNode* fill = phi_node_device_make_color(ctx, cs, color, alpha, &bounds);
+	if (!fill) {
+		gsk_stroke_free(stroke);
+		gsk_path_unref(cpath);
+		return;
+	}
 	
 	GskRenderNode* node = gsk_stroke_node_new(fill, cpath, stroke);
 	gsk_stroke_free(stroke);
@@ -554,37 +568,7 @@ static void phi_node_device_stroke_text(fz_context* ctx, fz_device* dev, const f
 	(void)color_params;
 	
 	GskPath* path = phi_node_device_text_to_path(ctx, text, ctm);
-	
-	GskStroke* stroke = gsk_stroke_new(ss->linewidth > 0 ? ss->linewidth : 1.);
-	gsk_stroke_set_miter_limit(stroke, ss->miterlimit);
-	switch (ss->start_cap) {
-		case FZ_LINECAP_BUTT:
-			gsk_stroke_set_line_cap(stroke, GSK_LINE_CAP_BUTT);
-			break;
-		case FZ_LINECAP_ROUND:
-			gsk_stroke_set_line_cap(stroke, GSK_LINE_CAP_ROUND);
-			break;
-		case FZ_LINECAP_SQUARE:
-			gsk_stroke_set_line_cap(stroke, GSK_LINE_CAP_SQUARE);
-			break;
-		default:
-			break;
-	}
-	switch (ss->linejoin) {
-		case FZ_LINEJOIN_MITER:
-			gsk_stroke_set_line_join(stroke, GSK_LINE_JOIN_MITER);
-			break;
-		case FZ_LINEJOIN_ROUND:
-			gsk_stroke_set_line_join(stroke, GSK_LINE_JOIN_ROUND);
-			break;
-		case FZ_LINEJOIN_BEVEL:
-			gsk_stroke_set_line_join(stroke, GSK_LINE_JOIN_BEVEL);
-			break;
-		default:
-			break;
-	}
-	gsk_stroke_set_dash(stroke, ss->dash_list, ss->dash_len);
-	gsk_stroke_set_dash_offset(stroke, ss->dash_phase);
+	GskStroke* stroke = phi_node_device_convert_stroke(ctx, ss);
 	
 	graphene_rect_t bounds;
 	if (!gsk_path_get_stroke_bounds(path, stroke, &bounds)) {
@@ -994,7 +978,9 @@ static void phi_node_device_end_tile(fz_context* ctx, fz_device* dev) {
 	if (current->state != PHI_RENDER_STATE_TILE)
 		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_tile called in invalid state");
 	
-	if (current->children->len == 0) {
+	/* A zero step would divide by zero below; there is nothing to repeat. */
+	if (current->children->len == 0 || current->tile.xstep == 0 ||
+		current->tile.ystep == 0) {
 		g_array_remove_index(self->stack, self->stack->len - 1);
 		return;
 	}
@@ -1035,11 +1021,13 @@ static void phi_node_device_end_tile(fz_context* ctx, fz_device* dev) {
 	float y1 = area.y1;
 	
 	/* Limit iterations for safety (very large patterns can cause issues) */
-	int max_tiles_x = (int)ceilf((x1 - x0) / fabsf(xstep)) + 1;
-	int max_tiles_y = (int)ceilf((y1 - y0) / fabsf(ystep)) + 1;
+	float tiles_x = ceilf((x1 - x0) / fabsf(xstep)) + 1;
+	float tiles_y = ceilf((y1 - y0) / fabsf(ystep)) + 1;
 	int max_tiles = 10000; /* Safety limit */
+	int max_tiles_x = (int)fminf(tiles_x, max_tiles);
+	int max_tiles_y = (int)fminf(tiles_y, max_tiles);
 	
-	if (max_tiles_x * max_tiles_y > max_tiles) {
+	if (tiles_x * tiles_y > max_tiles) {
 		fz_warn(ctx, "Tile pattern too large (%d x %d), limiting", max_tiles_x, max_tiles_y);
 		max_tiles_x = (int)sqrtf(max_tiles);
 		max_tiles_y = max_tiles_x;
