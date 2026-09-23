@@ -80,7 +80,6 @@ struct _PhiDocumentView {
     gdouble zoom;
     gdouble minimum_zoom;
     gboolean continuous;
-    gboolean dual_page;
     gboolean inverted;
     gboolean presentation_mode;
     
@@ -181,7 +180,6 @@ enum {
     PROP_DOCUMENT,
     PROP_ZOOM,
     PROP_CONTINUOUS,
-    PROP_DUAL_PAGE,
     PROP_INVERTED,
     PROP_CURRENT_PAGE,
     PROP_CAN_GO_BACK,
@@ -2326,9 +2324,6 @@ phi_document_view_get_property(GObject* object, guint prop_id,
     case PROP_CONTINUOUS:
         g_value_set_boolean(value, self->continuous);
         break;
-    case PROP_DUAL_PAGE:
-        g_value_set_boolean(value, self->dual_page);
-        break;
     case PROP_INVERTED:
         g_value_set_boolean(value, self->inverted);
         break;
@@ -2373,9 +2368,6 @@ phi_document_view_set_property(GObject* object, guint prop_id,
         break;
     case PROP_CONTINUOUS:
         phi_document_view_set_continuous(self, g_value_get_boolean(value));
-        break;
-    case PROP_DUAL_PAGE:
-        phi_document_view_set_dual_page(self, g_value_get_boolean(value));
         break;
     case PROP_INVERTED:
         phi_document_view_set_inverted(self, g_value_get_boolean(value));
@@ -2467,7 +2459,7 @@ phi_document_view_dispose(GObject* object)
  * A scrollable widget that displays a #PhiDocument.
  *
  * Pages are rasterized in tiles on a worker thread and cached by zoom level.
- * The view supports continuous and dual-page layouts, zooming, pinch zoom,
+ * The view supports continuous and single-page layouts, zooming, pinch zoom,
  * text search and selection, links, and link navigation history.
  */
 
@@ -2495,9 +2487,6 @@ phi_document_view_class_init(PhiDocumentViewClass* klass)
     
     props[PROP_CONTINUOUS] = g_param_spec_boolean("continuous", NULL, NULL,
         TRUE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
-    
-    props[PROP_DUAL_PAGE] = g_param_spec_boolean("dual-page", NULL, NULL,
-        FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
     
     props[PROP_INVERTED] = g_param_spec_boolean("inverted", NULL, NULL,
         FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
@@ -2560,7 +2549,6 @@ phi_document_view_init(PhiDocumentView* self)
     self->zoom = 1.0;
     self->minimum_zoom = MIN_ZOOM;
     self->continuous = TRUE;
-    self->dual_page = FALSE;
     self->inverted = FALSE;
     self->presentation_mode = FALSE;
     self->current_page = 0;
@@ -3185,40 +3173,6 @@ phi_document_view_get_continuous(PhiDocumentView* self)
 {
     g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), TRUE);
     return self->continuous;
-}
-
-/**
- * phi_document_view_set_dual_page:
- * @self: a #PhiDocumentView
- * @dual: whether to show two pages side by side
- *
- * Switches dual-page layout.
- */
-void
-phi_document_view_set_dual_page(PhiDocumentView* self, gboolean dual)
-{
-    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
-    
-    if (self->dual_page == dual)
-        return;
-    
-    self->dual_page = dual;
-    calculate_layout(self);
-    gtk_widget_queue_resize(GTK_WIDGET(self));
-    g_object_notify_by_pspec(G_OBJECT(self), props[PROP_DUAL_PAGE]);
-}
-
-/**
- * phi_document_view_get_dual_page:
- * @self: a #PhiDocumentView
- *
- * Returns: whether dual-page layout is enabled
- */
-gboolean
-phi_document_view_get_dual_page(PhiDocumentView* self)
-{
-    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), FALSE);
-    return self->dual_page;
 }
 
 /**

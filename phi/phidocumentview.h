@@ -58,9 +58,6 @@ void phi_document_view_capture_zoom_scroll(PhiDocumentView* self,
 void phi_document_view_set_continuous(PhiDocumentView* self, gboolean continuous);
 gboolean phi_document_view_get_continuous(PhiDocumentView* self);
 
-void phi_document_view_set_dual_page(PhiDocumentView* self, gboolean dual);
-gboolean phi_document_view_get_dual_page(PhiDocumentView* self);
-
 void phi_document_view_set_inverted(PhiDocumentView* self, gboolean inverted);
 gboolean phi_document_view_get_inverted(PhiDocumentView* self);
 
