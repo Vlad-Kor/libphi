@@ -6944,6 +6944,64 @@ static void pdfv_window_dispose(GObject *object) {
   G_OBJECT_CLASS(pdfv_window_parent_class)->dispose(object);
 }
 
+/* Display-wide styles for every window. Install them once per display; a
+ * provider added per window would stay behind after the window closes. */
+static void install_window_css(GdkDisplay *display) {
+  if (g_object_get_data(G_OBJECT(display), "pdfv-window-css"))
+    return;
+  GtkCssProvider *provider = gtk_css_provider_new();
+  gtk_css_provider_load_from_string(
+      provider,
+      ".workspace-search-card {"
+      "  background-color: @window_bg_color;"
+      "  background-image: none;"
+      "  color: @window_fg_color;"
+      "  opacity: 1;"
+      "  border: 1px solid alpha(@window_fg_color, 0.12);"
+      "  border-radius: 18px;"
+      "  box-shadow: 0 12px 32px alpha(black, 0.30);"
+      "}"
+      ".workspace-search-card list {"
+      "  background-color: transparent;"
+      "}"
+      ".pdfv-split-view > .sidebar-pane {"
+      "  box-shadow: none;"
+      "}"
+      ".pdfv-page-selector entry {"
+      "  min-width: 0;"
+      "  padding-left: 6px;"
+      "  padding-right: 6px;"
+      "}"
+      ".pdf-export-paned > separator {"
+      "  background-color: transparent;"
+      "  background-image: none;"
+      "  border: none;"
+      "  box-shadow: none;"
+      "}"
+      ".presentation-end {"
+      "  background: #000000;"
+      "  color: #ffffff;"
+      "}"
+      ".presentation-end-hint {"
+      "  color: alpha(#ffffff, 0.72);"
+      "  font-size: 1.1em;"
+      "}"
+      ".workspace-search-results {"
+      "  background-color: alpha(@window_fg_color, 0.025);"
+      "  border-radius: 12px;"
+      "}"
+      ".workspace-result-header {"
+      "  background-color: alpha(@window_fg_color, 0.035);"
+      "}");
+  gtk_style_context_add_provider_for_display(
+      display,
+      GTK_STYLE_PROVIDER(provider),
+      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(provider);
+  g_object_set_data(G_OBJECT(display), "pdfv-window-css",
+                    GINT_TO_POINTER(1));
+}
+
 static void pdfv_window_init(PdfvWindow *self) {
   self->current_view = NULL;
   self->current_editor = NULL;
@@ -7491,55 +7549,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   GtkWidget *workspace_search_card =
       gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   self->workspace_search_card = workspace_search_card;
-  GtkCssProvider *workspace_search_css = gtk_css_provider_new();
-  gtk_css_provider_load_from_string(
-      workspace_search_css,
-      ".workspace-search-card {"
-      "  background-color: @window_bg_color;"
-      "  background-image: none;"
-      "  color: @window_fg_color;"
-      "  opacity: 1;"
-      "  border: 1px solid alpha(@window_fg_color, 0.12);"
-      "  border-radius: 18px;"
-      "  box-shadow: 0 12px 32px alpha(black, 0.30);"
-      "}"
-      ".workspace-search-card list {"
-      "  background-color: transparent;"
-      "}"
-      ".pdfv-split-view > .sidebar-pane {"
-      "  box-shadow: none;"
-      "}"
-      ".pdfv-page-selector entry {"
-      "  min-width: 0;"
-      "  padding-left: 6px;"
-      "  padding-right: 6px;"
-      "}"
-      ".pdf-export-paned > separator {"
-      "  background-color: transparent;"
-      "  background-image: none;"
-      "  border: none;"
-      "  box-shadow: none;"
-      "}"
-      ".presentation-end {"
-      "  background: #000000;"
-      "  color: #ffffff;"
-      "}"
-      ".presentation-end-hint {"
-      "  color: alpha(#ffffff, 0.72);"
-      "  font-size: 1.1em;"
-      "}"
-      ".workspace-search-results {"
-      "  background-color: alpha(@window_fg_color, 0.025);"
-      "  border-radius: 12px;"
-      "}"
-      ".workspace-result-header {"
-      "  background-color: alpha(@window_fg_color, 0.035);"
-      "}");
-  gtk_style_context_add_provider_for_display(
-      gtk_widget_get_display(GTK_WIDGET(self)),
-      GTK_STYLE_PROVIDER(workspace_search_css),
-      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-  g_object_unref(workspace_search_css);
+  install_window_css(gtk_widget_get_display(GTK_WIDGET(self)));
   gtk_widget_add_css_class(workspace_search_card, "workspace-search-card");
   gtk_widget_set_overflow(workspace_search_card, GTK_OVERFLOW_HIDDEN);
   adw_clamp_set_child(ADW_CLAMP(self->workspace_search_overlay),
@@ -7693,7 +7703,6 @@ static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
   g_return_if_fail(G_IS_FILE(file));
 
   AdwTabPage *page = adw_tab_view_get_selected_page(self->tab_view);
-  GtkWidget *stack;
   gboolean selected_is_empty = FALSE;
   if (page) {
     GtkWidget *selected = adw_tab_page_get_child(page);
@@ -7702,11 +7711,8 @@ static void pdfv_window_open_file_internal(PdfvWindow *self, GFile *file,
                                       GTK_STACK(selected)),
                                   "empty") == 0;
   }
-  if (page && selected_is_empty) {
-    stack = adw_tab_page_get_child(page);
-  } else {
-    stack = create_tab_content(self);
-    page = add_tab_after_selected(self, stack);
+  if (!page || !selected_is_empty) {
+    page = add_tab_after_selected(self, create_tab_content(self));
     adw_tab_view_set_selected_page(self->tab_view, page);
   }
   if (file_is_markdown(file))
