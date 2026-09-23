@@ -116,8 +116,6 @@ static guint editor_signals[N_SIGNALS];
 
 G_DEFINE_FINAL_TYPE(PdfvMarkdownEditor, pdfv_markdown_editor, GTK_TYPE_BOX)
 
-static JsonObject *json_object_new_owned(void) { return json_object_new(); }
-
 static void schedule_autosave(PdfvMarkdownEditor *self);
 static void start_next_save(PdfvMarkdownEditor *self);
 
@@ -219,7 +217,7 @@ static void append_preview_image_geometry(PdfvMarkdownEditor *self,
     gchar *relative = pdfv_markdown_vault_adapter_relative_path(
         self->vault, file);
     if (relative) {
-      JsonObject *entry = json_object_new_owned();
+      JsonObject *entry = json_object_new();
       json_object_set_string_member(entry, "target", target);
       json_object_set_string_member(entry, "path", relative);
       json_object_set_int_member(entry, "width", width);
@@ -275,7 +273,7 @@ static void send_open_document(PdfvMarkdownEditor *self,
                                const gchar *message_type) {
   if (!self->ready || !self->file || !self->current_text)
     return;
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_string_member(payload, "documentId", self->document_id);
   json_object_set_string_member(payload, "path", self->relative_path);
   json_object_set_string_member(payload, "text", self->current_text);
@@ -283,7 +281,7 @@ static void send_open_document(PdfvMarkdownEditor *self,
   json_object_set_string_member(payload, "lineEnding",
                                 line_ending_for_text(self->current_text));
   if (self->has_initial_scroll_state) {
-    JsonObject *scroll = json_object_new_owned();
+    JsonObject *scroll = json_object_new();
     json_object_set_int_member(scroll, "anchor",
                                self->initial_scroll_anchor);
     json_object_set_double_member(scroll, "offset",
@@ -307,7 +305,7 @@ static void send_open_document(PdfvMarkdownEditor *self,
 static void send_theme(PdfvMarkdownEditor *self) {
   if (!self->ready || !self->theme_set)
     return;
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_boolean_member(payload, "dark", self->theme_dark);
   json_object_set_double_member(payload, "fontScale", self->font_scale);
   if (self->theme_background)
@@ -333,7 +331,7 @@ static void send_theme(PdfvMarkdownEditor *self) {
 static void send_settings(PdfvMarkdownEditor *self) {
   if (!self->ready || !self->settings_set)
     return;
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_boolean_member(payload, "allowRemoteImages",
                                  self->allow_remote_images);
   json_object_set_boolean_member(payload, "readableLineWidth",
@@ -408,7 +406,7 @@ static void send_response_node(PdfvMarkdownEditor *self, const gchar *id,
     g_clear_pointer(&result, json_node_unref);
     return;
   }
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   if (error)
     json_object_set_string_member(payload, "error", error);
   else if (result)
@@ -567,7 +565,7 @@ static void on_preview_resolved(GObject *source, GAsyncResult *result,
     if (!preview) {
       send_response_error(self, request->id, error);
     } else {
-      JsonObject *value = json_object_new_owned();
+      JsonObject *value = json_object_new();
       json_object_set_string_member(value, "path", preview->path);
       if (preview->text)
         json_object_set_string_member(value, "text", preview->text);
@@ -745,7 +743,7 @@ static JsonNode *save_attachment_data(PdfvMarkdownEditor *self,
   JsonNode *node = NULL;
   if (saved) {
     gchar *relative = attachment_link_from_note(self, file);
-    JsonObject *value = json_object_new_owned();
+    JsonObject *value = json_object_new();
     json_object_set_string_member(value, "path", relative ? relative : name);
     json_object_set_string_member(value, "name", name);
     node = json_node_new(JSON_NODE_OBJECT);
@@ -829,7 +827,7 @@ static void handle_attachment_paste(PdfvMarkdownEditor *self,
   for (gsize i = 0; !image && i < n_mime_types; i++)
     image = g_str_has_prefix(mime_types[i], "image/");
   if (!image) {
-    JsonObject *value = json_object_new_owned();
+    JsonObject *value = json_object_new();
     json_object_set_boolean_member(value, "image", FALSE);
     JsonNode *node = json_node_new(JSON_NODE_OBJECT);
     json_node_take_object(node, value);
@@ -1266,7 +1264,7 @@ static void on_remove_table_part(GSimpleAction *action, GVariant *parameter,
       g_object_get_data(G_OBJECT(action), "phi-table-index")) - 1;
   if (!kind || !from || *from < 0 || index < 0)
     return;
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_string_member(payload, "kind", kind);
   json_object_set_int_member(payload, "from", *from);
   json_object_set_int_member(payload, "index", index);
@@ -1523,7 +1521,7 @@ static void monitor_external_loaded(GObject *source, GAsyncResult *result,
       g_strcmp0(contents, self->persisted_text) != 0) {
     self->revision++;
     if (self->dirty) {
-      JsonObject *payload = json_object_new_owned();
+      JsonObject *payload = json_object_new();
       json_object_set_string_member(payload, "documentId", self->document_id);
       json_object_set_string_member(payload, "path", self->relative_path);
       json_object_set_string_member(payload, "text", contents);
@@ -1579,7 +1577,7 @@ static void on_preamble_changed(GFileMonitor *monitor, GFile *file,
       event != G_FILE_MONITOR_EVENT_DELETED)
     return;
   gchar *preamble = read_preamble(self);
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_string_member(payload, "preamble", preamble);
   pdfv_markdown_editor_bridge_send(self->bridge, "preamble/update", NULL,
                                    payload);
@@ -1743,7 +1741,7 @@ static void save_file_done(GObject *source, GAsyncResult *result,
    * document/state after comparing savedEditorRevision with its live state.
    * Do not clear dirty here: per-key bridge notifications are coalesced, so
    * the native revision may temporarily lag behind an edit made during I/O. */
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_int_member(payload, "revision", (gint64)self->revision);
   json_object_set_int_member(payload, "editorRevision",
                              (gint64)snapshot->editor_revision);
@@ -1851,7 +1849,7 @@ static void schedule_autosave(PdfvMarkdownEditor *self) {
 void pdfv_markdown_editor_run_command(PdfvMarkdownEditor *self,
                                       const gchar *command) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_string_member(payload, "command", command);
   pdfv_markdown_editor_bridge_send(self->bridge, "command/run", NULL,
                                    payload);
@@ -1861,7 +1859,7 @@ void pdfv_markdown_editor_run_command(PdfvMarkdownEditor *self,
 void pdfv_markdown_editor_reveal_range(PdfvMarkdownEditor *self,
                                        gint64 from, gint64 to) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_int_member(payload, "from", from);
   json_object_set_int_member(payload, "to", to);
   pdfv_markdown_editor_bridge_send(self->bridge, "navigation/reveal-range", NULL,
@@ -1872,7 +1870,7 @@ void pdfv_markdown_editor_reveal_range(PdfvMarkdownEditor *self,
 void pdfv_markdown_editor_reveal_fragment(PdfvMarkdownEditor *self,
                                           const gchar *target) {
   g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
-  JsonObject *payload = json_object_new_owned();
+  JsonObject *payload = json_object_new();
   json_object_set_string_member(payload, "target", target ? target : "");
   pdfv_markdown_editor_bridge_send(self->bridge, "navigation/reveal", NULL,
                                    payload);
