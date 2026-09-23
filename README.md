@@ -19,6 +19,40 @@ meson compile -C _build
 meson install -C _build
 ```
 
+## Using libphi from other applications
+
+The PDF viewer widget is part of libphi, which only needs GLib/GIO, GTK 4 and
+MuPDF. Build just the library, without the application's libadwaita,
+WebKitGTK and JSON-GLib dependencies:
+
+```bash
+meson setup _build-lib -Dapp=false --prefix="$PWD/_install"
+meson install -C _build-lib
+```
+
+This installs `Phi-1.0.typelib`, so PyGObject applications can use libphi
+directly. Point GObject Introspection and the dynamic loader at the prefix
+(`lib` or `lib64`, depending on the platform; on Windows add the `bin`
+directory to `PATH` instead of setting `LD_LIBRARY_PATH`):
+
+```bash
+export GI_TYPELIB_PATH="$PWD/_install/lib64/girepository-1.0"
+export LD_LIBRARY_PATH="$PWD/_install/lib64"
+```
+
+```python
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Phi", "1.0")
+from gi.repository import GLib, Gtk, Phi
+
+# PDF data produced in memory, for example by Typst; no file is needed.
+document = Phi.Document.new_from_bytes(GLib.Bytes.new(pdf_data), None)
+viewer = Phi.DocumentView(document=document)
+window = Gtk.Window(child=Gtk.ScrolledWindow(child=viewer))
+```
+
 ## License and third-party software
 
 Phi is free software under the GNU Affero General Public License, version 3
