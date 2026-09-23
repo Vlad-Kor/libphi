@@ -75,6 +75,7 @@ GListModel *pdfv_workspace_item_get_children(PdfvWorkspaceItem *self) {
 typedef struct {
   GFile *file;
   gchar *name;
+  gchar *sort_key;
   gchar *relative_path;
   gboolean folder;
   GPtrArray *children;
@@ -135,6 +136,7 @@ static void scan_item_free(ScanItem *item) {
     return;
   g_clear_object(&item->file);
   g_free(item->name);
+  g_free(item->sort_key);
   g_free(item->relative_path);
   g_clear_pointer(&item->children, g_ptr_array_unref);
   g_free(item);
@@ -427,12 +429,7 @@ static gint scan_item_compare(gconstpointer a, gconstpointer b) {
   const ScanItem *right = *(ScanItem *const *)b;
   if (left->folder != right->folder)
     return left->folder ? -1 : 1;
-  gchar *left_key = g_utf8_collate_key_for_filename(left->name, -1);
-  gchar *right_key = g_utf8_collate_key_for_filename(right->name, -1);
-  gint result = strcmp(left_key, right_key);
-  g_free(left_key);
-  g_free(right_key);
-  return result;
+  return strcmp(left->sort_key, right->sort_key);
 }
 
 static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
@@ -472,6 +469,7 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
         ScanItem *item = g_new0(ScanItem, 1);
         item->file = g_object_ref(child_file);
         item->name = g_strdup(name);
+        item->sort_key = g_utf8_collate_key_for_filename(name, -1);
         item->relative_path = g_strdup(relative);
         item->folder = TRUE;
         item->children = nested;
@@ -492,6 +490,7 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
       ScanItem *item = g_new0(ScanItem, 1);
       item->file = g_object_ref(child_file);
       item->name = g_strdup(name);
+      item->sort_key = g_utf8_collate_key_for_filename(name, -1);
       item->relative_path = g_strdup(relative);
       item->children =
           g_ptr_array_new_with_free_func((GDestroyNotify)scan_item_free);
