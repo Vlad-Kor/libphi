@@ -978,97 +978,85 @@ static void phi_node_device_end_tile(fz_context* ctx, fz_device* dev) {
 	if (current->state != PHI_RENDER_STATE_TILE)
 		fz_throw(ctx, FZ_ERROR_ARGUMENT, "end_tile called in invalid state");
 	
-	/* A zero step would divide by zero below; there is nothing to repeat. */
-	if (current->children->len == 0 || current->tile.xstep == 0 ||
-		current->tile.ystep == 0) {
+	/* area and view (the pattern cell) are in pattern space, and ctm maps
+	 * pattern space to the device. A zero step or a singular matrix leaves
+	 * nothing sensible to repeat. */
+	fz_rect area = current->tile.area;
+	fz_rect view = current->tile.view;
+	float xstep = current->tile.xstep;
+	float ystep = current->tile.ystep;
+	fz_matrix ctm = current->tile.ctm;
+	fz_matrix inverse;
+	if (current->children->len == 0 || xstep == 0 || ystep == 0 ||
+		fz_is_empty_rect(area) || fz_is_infinite_rect(area) ||
+		fz_try_invert_matrix(&inverse, ctm) != 0) {
 		g_array_remove_index(self->stack, self->stack->len - 1);
 		return;
 	}
 	
-	/* Build tile pattern node */
-	GskRenderNode* tile_content;
+	GskRenderNode* cell;
 	if (current->children->len == 1) {
-		tile_content = gsk_render_node_ref(g_ptr_array_index(current->children, 0));
+		cell = gsk_render_node_ref(g_ptr_array_index(current->children, 0));
 	} else {
-		tile_content = gsk_container_node_new((GskRenderNode**)current->children->pdata, current->children->len);
+		cell = gsk_container_node_new((GskRenderNode**)current->children->pdata, current->children->len);
 	}
 	
-	/* Clip to view bounds */
-	graphene_rect_t view_rect;
-	graphene_rect_init(&view_rect,
-		current->tile.view.x0,
-		current->tile.view.y0,
-		current->tile.view.x1 - current->tile.view.x0,
-		current->tile.view.y1 - current->tile.view.y0
-	);
-	GskRenderNode* clipped = gsk_clip_node_new(tile_content, &view_rect);
-	gsk_render_node_unref(tile_content);
-	tile_content = clipped;
+	/* The interpreter runs the cell's content with ctm already applied.
+	 * Build the repetition in pattern space and apply ctm once at the end,
+	 * so that a rotated or skewed pattern keeps its cell shape. */
+	cell = phi_node_device_transform_child(cell, &inverse);
+	cell = phi_node_device_scissor_clip(cell, &view);
 	
-	/* Calculate tile area in device coordinates */
-	fz_rect area = current->tile.area;
-	float xstep = current->tile.xstep;
-	float ystep = current->tile.ystep;
-	fz_matrix ctm = current->tile.ctm;
+	/* Same cell range as the interpreter's own untiled loop
+	 * (pdf_show_pattern): copies sit at multiples of the step from the
+	 * pattern origin, not from the corner of the filled area. */
+	float fx0 = (area.x0 - view.x0) / xstep;
+	float fy0 = (area.y0 - view.y0) / ystep;
+	float fx1 = (area.x1 - view.x0) / xstep;
+	float fy1 = (area.y1 - view.y0) / ystep;
+	if (fx0 > fx1) {
+		float swap = fx0; fx0 = fx1; fx1 = swap;
+	}
+	if (fy0 > fy1) {
+		float swap = fy0; fy0 = fy1; fy1 = swap;
+	}
+	float first_x = floorf(fx0 + 0.001f);
+	float first_y = floorf(fy0 + 0.001f);
+	float columns = ceilf(fx1 - 0.001f) - first_x;
+	float rows = ceilf(fy1 - 0.001f) - first_y;
+	if (fx1 > fx0 && columns < 1)
+		columns = 1;
+	if (fy1 > fy0 && rows < 1)
+		rows = 1;
 	
-	/* Build container with repeated tiles */
+	/* Very dense patterns would create an unbounded number of nodes. */
+	const float max_tiles = 10000;
+	if (columns * rows > max_tiles) {
+		fz_warn(ctx, "Tile pattern too large (%g x %g), limiting", columns, rows);
+		columns = fminf(columns, 100);
+		rows = fminf(rows, 100);
+	}
+	
 	GPtrArray* tiles = g_ptr_array_new_with_free_func((GDestroyNotify)gsk_render_node_unref);
-	
-	/* Calculate iteration range */
-	float x0 = area.x0;
-	float y0 = area.y0;
-	float x1 = area.x1;
-	float y1 = area.y1;
-	
-	/* Limit iterations for safety (very large patterns can cause issues) */
-	float tiles_x = ceilf((x1 - x0) / fabsf(xstep)) + 1;
-	float tiles_y = ceilf((y1 - y0) / fabsf(ystep)) + 1;
-	int max_tiles = 10000; /* Safety limit */
-	int max_tiles_x = (int)fminf(tiles_x, max_tiles);
-	int max_tiles_y = (int)fminf(tiles_y, max_tiles);
-	
-	if (tiles_x * tiles_y > max_tiles) {
-		fz_warn(ctx, "Tile pattern too large (%d x %d), limiting", max_tiles_x, max_tiles_y);
-		max_tiles_x = (int)sqrtf(max_tiles);
-		max_tiles_y = max_tiles_x;
-	}
-	
-	for (int iy = 0; iy < max_tiles_y; iy++) {
-		for (int ix = 0; ix < max_tiles_x; ix++) {
-			float tx = x0 + ix * xstep;
-			float ty = y0 + iy * ystep;
-			
-			/* Transform tile position */
-			fz_matrix tile_ctm = fz_concat(fz_translate(tx, ty), ctm);
-			GskTransform* transform = phi_node_device_transform_from_matrix(&tile_ctm);
-			
-			GskRenderNode* tile_instance = gsk_transform_node_new(tile_content, transform);
+	for (int row = 0; row < (int)rows; row++) {
+		for (int column = 0; column < (int)columns; column++) {
+			graphene_point_t offset = GRAPHENE_POINT_INIT(
+				(first_x + column) * xstep, (first_y + row) * ystep);
+			GskTransform* transform = gsk_transform_translate(NULL, &offset);
+			g_ptr_array_add(tiles, gsk_transform_node_new(cell, transform));
 			gsk_transform_unref(transform);
-			
-			g_ptr_array_add(tiles, tile_instance);
 		}
 	}
-	
-	gsk_render_node_unref(tile_content);
+	gsk_render_node_unref(cell);
 	
 	GskRenderNode* result = gsk_container_node_new((GskRenderNode**)tiles->pdata, tiles->len);
 	g_ptr_array_unref(tiles);
-	
-	/* Clip to area */
-	graphene_rect_t area_rect;
-	fz_rect transformed_area = fz_transform_rect(area, ctm);
-	graphene_rect_init(&area_rect,
-		transformed_area.x0,
-		transformed_area.y0,
-		transformed_area.x1 - transformed_area.x0,
-		transformed_area.y1 - transformed_area.y0
-	);
-	GskRenderNode* final = gsk_clip_node_new(result, &area_rect);
-	gsk_render_node_unref(result);
+	result = phi_node_device_scissor_clip(result, &area);
+	result = phi_node_device_transform_child(result, &ctm);
 	
 	g_array_remove_index(self->stack, self->stack->len - 1);
 	PhiRenderContext* parent = &g_array_index(self->stack, PhiRenderContext, self->stack->len - 1);
-	g_ptr_array_add(parent->children, final);
+	g_ptr_array_add(parent->children, result);
 }
 
 fz_device* phi_node_device_new(fz_context* ctx, GObject* context_owner) {

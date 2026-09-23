@@ -45,6 +45,13 @@ test_document_view = executable('test-document-view',
 
 test('document-view-test', test_document_view)
 
+test_vector_render = executable('test-vector-render', 'test-vector-render.c',
+	include_directories: inc,
+	dependencies: [phi_dep],
+)
+
+test('vector-render-test', test_vector_render)
+
 # Tests of pdfv application code; these link sources from src/ and need the
 # application's dependencies.
 if get_option('app')
