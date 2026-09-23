@@ -3,7 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { foldedRanges, unfoldEffect, bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorSelection, EditorState, type StateEffect, type Text } from "@codemirror/state";
-import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchKeymap, type SearchQuery } from "@codemirror/search";
+import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchKeymap, searchPanelOpen, type SearchQuery } from "@codemirror/search";
 import { crosshairCursor, drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap, rectangularSelection } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { parseDocument } from "yaml";
@@ -128,6 +128,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   /* Set when the search panel is enhanced. Looking it up with querySelector
    * on every editor update walked the whole editor DOM for each keystroke. */
   private searchCountElement: HTMLElement | null = null;
+  /* Removes the document listener of the enhanced search panel. */
+  private searchPanelCleanup: (() => void) | null = null;
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -370,6 +372,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         themeCompartment.of(EditorView.theme({}, { dark: this.darkTheme })),
         inputPerformanceExtension,
         EditorView.updateListener.of((update) => {
+          if (this.searchPanelCleanup && !searchPanelOpen(update.state))
+            this.releaseSearchPanel();
           if (update.docChanged) this.documentChanged();
           if (update.docChanged || update.selectionSet ||
               !getSearchQuery(update.startState).eq(getSearchQuery(update.state)))
@@ -511,12 +515,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       if (!optionsWrapper.contains(event.target as Node)) setOptionsVisible(false);
     };
     document.addEventListener("pointerdown", outsideOptions, true);
-    const observer = new MutationObserver(() => {
-      if (panel.isConnected) return;
+    this.releaseSearchPanel();
+    this.searchPanelCleanup = () =>
       document.removeEventListener("pointerdown", outsideOptions, true);
-      observer.disconnect();
-    });
-    observer.observe(this.view.dom, { childList: true, subtree: true });
 
     replaceOne.classList.add("phi-replace-one", "phi-replace-row-item");
     replaceAll.classList.add("phi-replace-all", "phi-replace-row-item");
@@ -538,6 +539,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
      * drop focus. Restore it explicitly so Ctrl+F is immediately typable. */
     search.focus({ preventScroll: true });
     this.updateSearchMatchStatus();
+  }
+
+  private releaseSearchPanel(): void {
+    this.searchPanelCleanup?.();
+    this.searchPanelCleanup = null;
   }
 
   private updateSearchMatchStatus(): void {
@@ -836,6 +842,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
 
   openDocument(document: OpenDocument): void {
     this.closeTablePicker();
+    /* The new state starts without the search panel. */
+    this.releaseSearchPanel();
     window.clearTimeout(this.snapshotTimer);
     window.clearTimeout(this.scrollTimer);
     this.documentId = document.documentId;
