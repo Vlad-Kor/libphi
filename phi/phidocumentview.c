@@ -101,6 +101,7 @@ struct _PhiDocumentView {
     
     /* Page links cache */
     GPtrArray* page_links; /* PhiLink* per page */
+    GArray* page_links_loaded; /* gboolean per page; NULL links are valid */
     
     /* Scrolling */
     GtkAdjustment* hadjustment;
@@ -1731,44 +1732,32 @@ on_vadjustment_changed(GtkAdjustment* adj, PhiDocumentView* self)
 static PhiLink*
 find_link_at(PhiDocumentView* self, gdouble x, gdouble y)
 {
-    if (!self->document)
+    /* Link rectangles use the same page space as text, including a
+     * non-zero page origin. */
+    gint page_num;
+    graphene_point_t point;
+    if (!screen_to_page_coords(self, x, y, &page_num, &point))
         return NULL;
-    
-    gint width = gtk_widget_get_width(GTK_WIDGET(self));
-    
-    /* Find which page we're on */
-    gdouble page_offset;
-    gint page_num = get_page_at_offset(self, self->scroll_y + y, &page_offset);
-    
-    PhiPage* page = g_ptr_array_index(self->pages, page_num);
-    if (!page)
-        return NULL;
-    
-    gfloat pw, ph;
-    phi_page_get_size(page, &pw, &ph);
-    gdouble scaled_pw = pw * self->zoom;
-    
-    /* Convert to page coordinates */
-    gdouble page_x = (x + self->scroll_x - (width - scaled_pw) / 2.0) / self->zoom;
-    gdouble page_y = (self->scroll_y + y - page_offset) / self->zoom;
     
     /* Get or cache links */
     PhiLink* links = NULL;
     if (page_num < (gint)self->page_links->len) {
+        gboolean* loaded = &g_array_index(self->page_links_loaded, gboolean,
+                                          page_num);
+        if (!*loaded) {
+            g_ptr_array_index(self->page_links, page_num) = phi_page_get_links(
+                g_ptr_array_index(self->pages, page_num));
+            *loaded = TRUE;
+        }
         links = g_ptr_array_index(self->page_links, page_num);
-    }
-    if (!links) {
-        links = phi_page_get_links(page);
-        if (page_num < (gint)self->page_links->len)
-            g_ptr_array_index(self->page_links, page_num) = links;
     }
     
     /* Check links (linked list) */
     for (PhiLink* link = links; link; link = link->next) {
-        if (page_x >= link->rect.origin.x &&
-            page_x <= link->rect.origin.x + link->rect.size.width &&
-            page_y >= link->rect.origin.y &&
-            page_y <= link->rect.origin.y + link->rect.size.height) {
+        if (point.x >= link->rect.origin.x &&
+            point.x <= link->rect.origin.x + link->rect.size.width &&
+            point.y >= link->rect.origin.y &&
+            point.y <= link->rect.origin.y + link->rect.size.height) {
             return link;
         }
     }
@@ -2467,7 +2456,7 @@ phi_document_view_dispose(GObject* object)
         g_ptr_array_unref(self->page_links);
         self->page_links = NULL;
     }
-
+    g_clear_pointer(&self->page_links_loaded, g_array_unref);
     
     G_OBJECT_CLASS(phi_document_view_parent_class)->dispose(object);
 }
@@ -2594,6 +2583,7 @@ phi_document_view_init(PhiDocumentView* self)
     self->history = g_array_new(FALSE, FALSE, sizeof(HistoryEntry));
     self->history_pos = -1;
     self->page_links = g_ptr_array_new();
+    self->page_links_loaded = g_array_new(FALSE, TRUE, sizeof(gboolean));
     
     /* Click gesture for links */
     self->click_gesture = gtk_gesture_click_new();
@@ -2707,12 +2697,14 @@ phi_document_view_set_document(PhiDocumentView* self, PhiDocument* document)
         phi_link_free(g_ptr_array_index(self->page_links, i));
     }
     g_ptr_array_set_size(self->page_links, 0);
-
+    g_array_set_size(self->page_links_loaded, 0);
+    
     if (document) {
         self->document = g_object_ref(document);
         gint n_pages = phi_document_get_n_pages(document);
         g_ptr_array_set_size(self->pages, n_pages);
         g_ptr_array_set_size(self->page_links, n_pages);
+        g_array_set_size(self->page_links_loaded, n_pages);
         allocate_render_cache(self, n_pages);
         calculate_layout(self);
     }
