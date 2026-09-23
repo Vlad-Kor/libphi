@@ -6,6 +6,7 @@ import {
   type Transaction,
 } from "@codemirror/state";
 import { measurePerformance } from "../performance";
+import { previewSourceRange } from "./source-edit";
 import {
   parseMarkdownNodes,
   selectionTouches,
@@ -165,13 +166,20 @@ function sameNodes(left: readonly MarkdownNode[], right: readonly MarkdownNode[]
   return true;
 }
 
-function shiftNode(node: MarkdownNode, offset: number): MarkdownNode {
+const positionMetaNames = [...positionMeta];
+
+/** Move a node by `offset`. Positional metadata before `threshold` (a
+ * footnote reference's definition elsewhere in the note) stays put. */
+function shiftNode(node: MarkdownNode, offset: number,
+                   threshold = -Infinity): MarkdownNode {
   if (!offset) return node;
-  const meta = node.meta ? { ...node.meta } : undefined;
+  let meta = node.meta;
   if (meta) {
-    for (const [name, value] of Object.entries(meta)) {
-      if (typeof value === "number" && positionMeta.has(name))
-        meta[name] = value + offset;
+    for (const name of positionMetaNames) {
+      const value = meta[name];
+      if (typeof value !== "number" || value < threshold) continue;
+      if (meta === node.meta) meta = { ...meta };
+      meta[name] = value + offset;
     }
   }
   return {
@@ -303,7 +311,8 @@ function regionAnalysis(previous: MarkdownAnalysis, transaction: Transaction,
     ...before.map((node) => typeof node.meta?.definition === "number" &&
       node.meta.definition >= window.from ? mapNode(node, changes) : node),
     ...parsed.map((node) => shiftNode(node, window.from)),
-    ...after.map((node) => mapNode(node, changes)),
+    /* Every change lies inside the window: later text moved uniformly. */
+    ...after.map((node) => shiftNode(node, window.newTo - window.oldTo, window.oldTo)),
   ];
   return {
     text,
@@ -372,4 +381,83 @@ export function mathNodeAt(
       (range.from === range.to && range.from === candidate.to))) return candidate;
   return analysis.math.slice(low).find((node) =>
     node.from < range.to && selectionTouches(node, range));
+}
+
+export interface Region { from: number; to: number }
+
+/** Grow each range to whole lines and whole top-level node groups, then
+ * merge overlapping regions. Nodes are sorted by start. */
+function dirtyRegions(state: EditorState, nodes: readonly MarkdownNode[],
+                      ranges: readonly Region[]): Region[] {
+  const regions: Region[] = [];
+  for (const range of ranges) {
+    let from = state.doc.lineAt(range.from).from;
+    let to = state.doc.lineAt(range.to).to;
+    for (let grown = true; grown;) {
+      grown = false;
+      for (const node of nodes) {
+        if (node.from > to) break;
+        if (node.to < from || (node.from >= from && node.to <= to)) continue;
+        from = Math.min(from, state.doc.lineAt(node.from).from);
+        to = Math.max(to, state.doc.lineAt(node.to).to);
+        grown = true;
+      }
+    }
+    regions.push({ from, to });
+  }
+  regions.sort((a, b) => a.from - b.from);
+  const merged: Region[] = [];
+  for (const region of regions) {
+    const last = merged.at(-1);
+    if (last && region.from <= last.to + 1) last.to = Math.max(last.to, region.to);
+    else merged.push({ ...region });
+  }
+  return merged;
+}
+
+/** Regions of the new document whose preview state may differ after this
+ * transaction, or "all". Whether a node is revealed depends only on the
+ * selection and pinned source that touch it, and everything derived from a
+ * node lies within its own lines. A document edit therefore affects the lines
+ * the analysis reparsed, and a selection change the node groups touching the
+ * old or new selection or pinned range. Consumers map their previous value
+ * and recompute only these regions. */
+const dirtyRegionCache = new WeakMap<Transaction, Region[] | "all">();
+
+export function previewDirtyRegions(transaction: Transaction): Region[] | "all" {
+  let regions = dirtyRegionCache.get(transaction);
+  if (!regions) {
+    regions = computeDirtyRegions(transaction);
+    dirtyRegionCache.set(transaction, regions);
+  }
+  return regions;
+}
+
+function computeDirtyRegions(transaction: Transaction): Region[] | "all" {
+  const state = transaction.state;
+  const analysis = markdownAnalysis(state);
+  if (transaction.docChanged && analysis.updateKind === "full") return "all";
+  const changes = transaction.changes;
+  const ranges: Region[] = [];
+  if (transaction.docChanged) ranges.push(analysis.changed);
+  const oldPin = transaction.startState.field(previewSourceRange, false);
+  const newPin = state.field(previewSourceRange, false);
+  if (transaction.selection || transaction.docChanged || oldPin !== newPin) {
+    for (const range of transaction.startState.selection.ranges)
+      ranges.push({ from: changes.mapPos(range.from, -1), to: changes.mapPos(range.to, 1) });
+    for (const range of state.selection.ranges) ranges.push(range);
+    if (oldPin) ranges.push({ from: changes.mapPos(oldPin.from, -1), to: changes.mapPos(oldPin.to, 1) });
+    if (newPin) ranges.push(newPin);
+  }
+  if (!ranges.length) return [];
+  const regions = dirtyRegions(state, analysis.nodes, ranges);
+  const covered = regions.reduce((sum, region) => sum + region.to - region.from, 0);
+  return covered > state.doc.length / 2 ? "all" : regions;
+}
+
+/** Nodes starting in one of the regions (which contain them completely). */
+export function nodesInRegions(nodes: readonly MarkdownNode[],
+                               regions: readonly Region[]): MarkdownNode[] {
+  return nodes.filter((node) => regions.some((region) =>
+    node.from >= region.from && node.from <= region.to));
 }

@@ -16,7 +16,11 @@ import {
   type DecorationSet,
   type KeyBinding,
 } from "@codemirror/view";
-import { markdownAnalysis } from "./analysis";
+import {
+  markdownAnalysis,
+  nodesInRegions,
+  previewDirtyRegions,
+} from "./analysis";
 import {
   pinPreviewSource,
   previewSourceRange,
@@ -111,12 +115,15 @@ function hasWholePreviewReplacement(node: MarkdownNode): boolean {
     node.kind === "html";
 }
 
-function hardNodes(state: EditorState): MarkdownNode[] {
+function hardNodes(
+  state: EditorState,
+  nodes: readonly MarkdownNode[] = markdownAnalysis(state).nodes,
+): MarkdownNode[] {
   const hard: MarkdownNode[] = [];
   let coveredUntil = -1;
   /* Match Live Preview's outer-replacement precedence so an image nested in
    * a rendered callout/table is not exposed as an invisible atomic range. */
-  for (const node of markdownAnalysis(state).nodes) {
+  for (const node of nodes) {
     if (node.from < coveredUntil) continue;
     if (previewNodeIsActive(node, state) || !hasWholePreviewReplacement(node))
       continue;
@@ -164,19 +171,39 @@ export function selectedHardImagePreview(
     : null;
 }
 
+const atomicMark = Decoration.mark({});
+
+function hardAtomicRanges(state: EditorState,
+                          nodes?: readonly MarkdownNode[]): Range<Decoration>[] {
+  return hardNodes(state, nodes).map((node) =>
+    atomicMark.range(node.from, node.to));
+}
+
 function buildHardAtomicRanges(state: EditorState): DecorationSet {
-  const ranges: Range<Decoration>[] = hardNodes(state).map((node) =>
-    Decoration.mark({}).range(node.from, node.to));
-  return Decoration.set(ranges, true);
+  return Decoration.set(hardAtomicRanges(state), true);
 }
 
 const hardPreviewAtomicRanges = StateField.define<DecorationSet>({
   create: buildHardAtomicRanges,
   update(value, transaction) {
-    return transaction.docChanged || transaction.selection ||
-      transaction.effects.some((effect) => effect.is(pinPreviewSource))
-      ? buildHardAtomicRanges(transaction.state)
-      : value;
+    if (transaction.effects.some((effect) => effect.is(pinPreviewSource)))
+      return buildHardAtomicRanges(transaction.state);
+    if (!transaction.docChanged && !transaction.selection) return value;
+    /* Same incremental scheme as the Live Preview decorations: map the
+     * previous ranges and recompute only the regions the transaction can
+     * affect, instead of scanning every node on each key. */
+    const regions = previewDirtyRegions(transaction);
+    if (regions === "all") return buildHardAtomicRanges(transaction.state);
+    if (!regions.length) return value;
+    const nodes = nodesInRegions(markdownAnalysis(transaction.state).nodes, regions);
+    return value.map(transaction.changes).update({
+      filter: (from, to) => !regions.some((region) =>
+        from >= region.from && to <= region.to),
+      filterFrom: regions[0].from,
+      filterTo: regions.at(-1)!.to,
+      add: hardAtomicRanges(transaction.state, nodes),
+      sort: true,
+    });
   },
   provide: (field) => EditorView.atomicRanges.of((view) =>
     view.state.field(field)),

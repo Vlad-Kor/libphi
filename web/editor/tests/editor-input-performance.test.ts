@@ -378,6 +378,11 @@ describe("incremental live preview decorations", () => {
           selection: state.selection,
           extensions: [markdown({ base: markdownLanguage }), livePreview],
         });
+        const atomic = (current: EditorState) => current.facet(EditorView.atomicRanges)
+          .map((provider) => provider({ state: current } as EditorView));
+        const cleanAtomic = atomic(clean);
+        atomic(state).forEach((set, index) =>
+          expect(RangeSet.eq([set], [cleanAtomic[index]])).toBe(true));
         const incremental = decorations(state);
         const expected = decorations(clean);
         if (!RangeSet.eq([incremental], [expected])) {
@@ -396,4 +401,50 @@ describe("incremental live preview decorations", () => {
     }
     expect(checked).toBeGreaterThan(1000);
   });
+});
+
+describe("incremental LaTeX syntax decorations", () => {
+  it("equal a fresh view after edits and selection moves in math", () => {
+    let seed = 17;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const blocks = ["Prose $a_{1} + (b)$ text.", "$$\n\\frac{a}{b} + \\left(x\\right)\n$$",
+      "$$\n\\begin{aligned}\na &= \\{b\\} \\\\\n\\end{aligned}\n$$", "Plain.", "",
+      "Inline \\(x^2\\) and $[y]$.", "```\n$not math$\n```"];
+    const tokens = ["x", "{", "}", "(", ")", "[", "]", "\\", "$", " ", "\n"];
+    const extensions = [markdown({ base: markdownLanguage }), livePreview,
+      latexEnhancements(false)];
+    const viewDecorations = (view: EditorView) => view.state
+      .facet(EditorView.decorations)
+      .map((value) => typeof value === "function" ? value(view) : value);
+    for (let run = 0; run < 12; run++) {
+      const text = Array.from({ length: 6 + Math.floor(next() * 6) },
+        () => blocks[Math.floor(next() * blocks.length)]).join("\n");
+      const view = makeView(text, [livePreview, latexEnhancements(false)]);
+      for (let step = 0; step < 30; step++) {
+        const length = view.state.doc.length;
+        const at = Math.floor(next() * (length + 1));
+        if (next() < 0.4) {
+          view.dispatch({ selection: { anchor: at } });
+        } else {
+          const insert = tokens[Math.floor(next() * tokens.length)];
+          const typing = next() < 0.8;
+          view.dispatch({
+            changes: typing ? { from: at, insert }
+              : { from: at, to: Math.min(length, at + 1) },
+            selection: { anchor: typing ? at + insert.length : at },
+          });
+        }
+        const fresh = new EditorView({ state: EditorState.create({
+          doc: view.state.doc, selection: view.state.selection, extensions,
+        }) });
+        const expected = viewDecorations(fresh);
+        viewDecorations(view).forEach((set, index) =>
+          expect(RangeSet.eq([set], [expected[index]])).toBe(true));
+        fresh.destroy();
+      }
+    }
+  }, 120_000);
 });

@@ -22,8 +22,11 @@ import {
   markdownAnalysis,
   markdownAnalysisField,
   mathNodeAt,
+  nodesInRegions,
+  previewDirtyRegions,
   type MarkdownAnalysis,
 } from "../markdown/analysis";
+import type { MarkdownNode } from "../markdown/parser";
 import { ConcealPointerGuard, refreshPointerConceal } from "./pointer-conceal";
 import { measurePerformance } from "../performance";
 import {
@@ -596,18 +599,20 @@ function activeBracketOpens(fragment: SyntaxFragment, offset: number,
 }
 
 function syntaxRanges(view: EditorView): Range<Decoration>[] {
-  return measurePerformance("latex/syntax-decorations", () =>
-    syntaxRangesNow(view, markdownAnalysis(view.state)));
+  return measurePerformance("latex/syntax-decorations", () => {
+    const analysis = markdownAnalysis(view.state);
+    return syntaxRangesNow(view, analysis, analysis.math);
+  });
 }
 
-function syntaxRangesNow(view: EditorView,
-                         analysis: MarkdownAnalysis): Range<Decoration>[] {
+function syntaxRangesNow(view: EditorView, analysis: MarkdownAnalysis,
+                         math: readonly MarkdownNode[]): Range<Decoration>[] {
   const document = analysis.text;
   const ranges: Range<Decoration>[] = [];
   const mark = (from: number, to: number, className: string) => {
     if (from < to) ranges.push(Decoration.mark({ class: className }).range(from, to));
   };
-  for (const node of analysis.math) {
+  for (const node of math) {
     if (node.contentFrom == null || node.contentTo == null) continue;
     const openingEnd = Math.min(node.contentFrom, view.state.doc.lineAt(node.from).to);
     mark(node.from, openingEnd, "cm-latex-delimiter");
@@ -738,7 +743,25 @@ const latexSyntaxPlugin = ViewPlugin.fromClass(class {
     /* These ranges cover the document and do not depend on which lines are
      * currently visible. Rebuilding them on every kinetic-scroll viewport
      * update reparses the entire note and stalls WebKit's scroll animation. */
-    if (update.docChanged && !changedMath(update) &&
+    const regions = update.transactions.length === 1
+      ? previewDirtyRegions(update.transactions[0]) : "all";
+    if (regions !== "all" && (update.docChanged || update.selectionSet)) {
+      /* An equation's ranges depend only on its source and on a selection
+       * inside it, which is exactly what the dirty regions cover. Typing in
+       * one equation no longer rebuilds every equation of the note. */
+      this.decorations = measurePerformance("latex/syntax-decorations-region", () => {
+        const analysis = markdownAnalysis(update.state);
+        const math = nodesInRegions(analysis.math, regions);
+        return this.decorations.map(update.changes).update({
+          filter: (from, to) => !regions.some((region) =>
+            from >= region.from && to <= region.to),
+          filterFrom: regions[0]?.from ?? 0,
+          filterTo: regions.at(-1)?.to ?? 0,
+          add: syntaxRangesNow(update.view, analysis, math),
+          sort: true,
+        });
+      });
+    } else if (update.docChanged && !changedMath(update) &&
         !selectionInMath(markdownAnalysis(update.startState), update.startState) &&
         !selectionInMath(markdownAnalysis(update.state), update.state)) {
       this.decorations = this.decorations.map(update.changes);

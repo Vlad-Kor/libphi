@@ -37,6 +37,8 @@ import {
   markdownAnalysis,
   markdownAnalysisField,
   mathNodeAt,
+  nodesInRegions,
+  previewDirtyRegions,
 } from "./analysis";
 import { measurePerformance } from "../performance";
 import {
@@ -580,38 +582,6 @@ function buildMathTooltips(state: EditorState): readonly Tooltip[] {
   }));
 }
 
-interface Region { from: number; to: number }
-
-/** Grow each range to whole lines and whole top-level node groups, then
- * merge overlapping regions. Nodes are sorted by start. */
-function dirtyRegions(state: EditorState, nodes: readonly MarkdownNode[],
-                      ranges: readonly Region[]): Region[] {
-  const regions: Region[] = [];
-  for (const range of ranges) {
-    let from = state.doc.lineAt(range.from).from;
-    let to = state.doc.lineAt(range.to).to;
-    for (let grown = true; grown;) {
-      grown = false;
-      for (const node of nodes) {
-        if (node.from > to) break;
-        if (node.to < from || (node.from >= from && node.to <= to)) continue;
-        from = Math.min(from, state.doc.lineAt(node.from).from);
-        to = Math.max(to, state.doc.lineAt(node.to).to);
-        grown = true;
-      }
-    }
-    regions.push({ from, to });
-  }
-  regions.sort((a, b) => a.from - b.from);
-  const merged: Region[] = [];
-  for (const region of regions) {
-    const last = merged.at(-1);
-    if (last && region.from <= last.to + 1) last.to = Math.max(last.to, region.to);
-    else merged.push({ ...region });
-  }
-  return merged;
-}
-
 /* Whether a node is revealed depends only on the selection and pinned
  * source it touches, and its decorations only on its own lines. A document
  * edit therefore affects the analysis's changed lines, and a selection change
@@ -621,31 +591,14 @@ function dirtyRegions(state: EditorState, nodes: readonly MarkdownNode[],
  * per-keystroke cost after incremental parsing. */
 function updateDecorations(value: DecorationSet,
                            transaction: Transaction): DecorationSet {
+  const regions = previewDirtyRegions(transaction);
+  if (regions === "all") return buildDecorations(transaction.state);
+  if (!regions.length) return value;
   const state = transaction.state;
-  const analysis = markdownAnalysis(state);
-  if (transaction.docChanged && analysis.updateKind === "full")
-    return buildDecorations(state);
-  const changes = transaction.changes;
-  const ranges: Region[] = [];
-  if (transaction.docChanged) ranges.push(analysis.changed);
-  const oldPin = transaction.startState.field(previewSourceRange, false);
-  const newPin = state.field(previewSourceRange, false);
-  if (transaction.selection || transaction.docChanged || oldPin !== newPin) {
-    for (const range of transaction.startState.selection.ranges)
-      ranges.push({ from: changes.mapPos(range.from, -1), to: changes.mapPos(range.to, 1) });
-    for (const range of state.selection.ranges) ranges.push(range);
-    if (oldPin) ranges.push({ from: changes.mapPos(oldPin.from, -1), to: changes.mapPos(oldPin.to, 1) });
-    if (newPin) ranges.push(newPin);
-  }
-  if (!ranges.length) return value;
   return measurePerformance("markdown/preview-decorations-region", () => {
-    const regions = dirtyRegions(state, analysis.nodes, ranges);
-    const covered = regions.reduce((sum, region) => sum + region.to - region.from, 0);
-    if (covered > state.doc.length / 2) return buildDecorations(state);
-    const nodes = analysis.nodes.filter((node) => regions.some((region) =>
-      node.from >= region.from && node.from <= region.to));
+    const nodes = nodesInRegions(markdownAnalysis(state).nodes, regions);
     const added = buildRanges(state, nodes);
-    const mapped = value.map(changes);
+    const mapped = value.map(transaction.changes);
     const outside = (from: number, to: number) => !regions.some((region) =>
       from >= region.from && to <= region.to);
     let stale = false;

@@ -125,6 +125,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   private searchMatchDocument: Text | null = null;
   private searchMatchQuery: SearchQuery | null = null;
   private searchMatches: { from: number; to: number }[] = [];
+  /* Set when the search panel is enhanced. Looking it up with querySelector
+   * on every editor update walked the whole editor DOM for each keystroke. */
+  private searchCountElement: HTMLElement | null = null;
 
   constructor(parent: HTMLElement) {
     updateRuntimeSettings(this.settings);
@@ -438,6 +441,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     searchCount.setAttribute("aria-atomic", "true");
     searchCount.hidden = true;
     searchEntry.append(searchCount);
+    this.searchCountElement = searchCount;
     const replaceEntry = entry(replace, "replace", "Replace");
     replaceEntry.classList.add("phi-replace-field", "phi-replace-row-item");
 
@@ -537,7 +541,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   }
 
   private updateSearchMatchStatus(): void {
-    const status = this.view.dom.querySelector<HTMLElement>(".phi-search-count");
+    const status = this.searchCountElement?.isConnected
+      ? this.searchCountElement : null;
     if (!status) return;
 
     const state = this.view.state;
