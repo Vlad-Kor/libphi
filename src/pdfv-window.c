@@ -433,6 +433,7 @@ static AdwTabPage *add_tab_after_selected(PdfvWindow *self,
 
 static void apply_preferences_to_editor(PdfvWindow *self,
                                         PdfvMarkdownEditor *editor) {
+  pdfv_markdown_editor_freeze_settings(editor);
   AdwStyleManager *style = adw_style_manager_get_default();
   pdfv_markdown_editor_set_theme(
       editor, adw_style_manager_get_dark(style),
@@ -479,6 +480,7 @@ static void apply_preferences_to_editor(PdfvWindow *self,
   }
   pdfv_markdown_editor_set_attachment_folder(editor, attachment_folder);
   g_clear_object(&attachment_folder);
+  pdfv_markdown_editor_thaw_settings(editor);
 }
 
 static void apply_pdf_preferences(PdfvWindow *self) {

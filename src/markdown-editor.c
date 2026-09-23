@@ -71,6 +71,8 @@ struct _PdfvMarkdownEditor {
   gboolean theme_dark;
   gboolean theme_set;
   gboolean settings_set;
+  guint settings_freeze;
+  gboolean settings_pending;
   gboolean allow_remote_images;
   gboolean readable_line_width;
   gboolean latex_conceal;
@@ -331,6 +333,11 @@ static void send_theme(PdfvMarkdownEditor *self) {
 static void send_settings(PdfvMarkdownEditor *self) {
   if (!self->ready || !self->settings_set)
     return;
+  if (self->settings_freeze) {
+    self->settings_pending = TRUE;
+    return;
+  }
+  self->settings_pending = FALSE;
   JsonObject *payload = json_object_new();
   json_object_set_boolean_member(payload, "allowRemoteImages",
                                  self->allow_remote_images);
@@ -353,6 +360,18 @@ static void send_settings(PdfvMarkdownEditor *self) {
   pdfv_markdown_editor_bridge_send(self->bridge, "settings/update", NULL,
                                    payload);
   json_object_unref(payload);
+}
+
+void pdfv_markdown_editor_freeze_settings(PdfvMarkdownEditor *self) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  self->settings_freeze++;
+}
+
+void pdfv_markdown_editor_thaw_settings(PdfvMarkdownEditor *self) {
+  g_return_if_fail(PDFV_IS_MARKDOWN_EDITOR(self));
+  g_return_if_fail(self->settings_freeze > 0);
+  if (--self->settings_freeze == 0 && self->settings_pending)
+    send_settings(self);
 }
 
 static void update_snapshot(PdfvMarkdownEditor *self, JsonObject *payload) {

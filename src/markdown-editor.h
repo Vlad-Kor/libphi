@@ -45,6 +45,10 @@ void pdfv_markdown_editor_reveal_range(PdfvMarkdownEditor *self,
                                        gint64 from, gint64 to);
 void pdfv_markdown_editor_reveal_fragment(PdfvMarkdownEditor *self,
                                           const gchar *target);
+/* Settings changed between freeze and thaw reach the web editor as one
+ * update instead of one per setter. */
+void pdfv_markdown_editor_freeze_settings(PdfvMarkdownEditor *self);
+void pdfv_markdown_editor_thaw_settings(PdfvMarkdownEditor *self);
 void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
                                     gboolean dark, gdouble font_scale);
 void pdfv_markdown_editor_set_remote_images_allowed(
