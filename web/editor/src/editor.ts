@@ -671,6 +671,11 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
     });
   }
 
+  private flushSnapshot(id?: string): DocumentSnapshot {
+    window.clearTimeout(this.snapshotTimer);
+    return this.sendSnapshot("document/flush", id);
+  }
+
   private applyDocumentClasses(text: string): void {
     const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
     const frontmatter = match?.[0] ?? "";
@@ -950,8 +955,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
   focus(): void { this.view.focus(); }
 
   async flush(): Promise<DocumentSnapshot> {
-    window.clearTimeout(this.snapshotTimer);
-    const snapshot = this.sendSnapshot("document/flush");
+    const snapshot = this.flushSnapshot();
     await Promise.resolve();
     return snapshot;
   }
@@ -1001,7 +1005,9 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         String(payload.kind ?? ""),
         Number(payload.index ?? -1),
       ); break;
-      case "document/flush": void this.flush().then((snapshot) => sendNative("document/flush", { ...snapshot }, message.id)); break;
+      /* Native pairs the answer with its request by id. Answering once keeps
+       * the full text from crossing the bridge twice per save. */
+      case "document/flush": this.flushSnapshot(message.id); break;
       default: reportError(new Error(`Unknown native message: ${message.type}`), "bridge", this.documentPath);
     }
   }

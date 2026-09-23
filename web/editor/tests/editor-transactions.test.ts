@@ -184,6 +184,36 @@ describe("CodeMirror document transactions", () => {
     expect(editor.view.state.selection.main.empty).toBe(true);
   });
 
+  it("answers a native flush with one snapshot carrying the request id", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    editor.openDocument({
+      documentId: "flush-once",
+      path: "flush-once.md",
+      text: "before",
+      revision: 1,
+      lineEnding: "LF",
+    });
+    editor.view.dispatch({ changes: { from: 6, insert: " after" } });
+    const flushes: Array<{ id?: string; payload: Record<string, unknown> }> = [];
+    const capture = (event: Event) => {
+      const message = (event as CustomEvent).detail as {
+        id?: string; type: string; payload: Record<string, unknown>;
+      };
+      if (message.type === "document/flush") flushes.push(message);
+    };
+    window.addEventListener("phi-native-message", capture);
+    editor.receive({ protocol: 1, type: "document/flush", id: "native-flush-1" });
+    window.removeEventListener("phi-native-message", capture);
+
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0].id).toBe("native-flush-1");
+    expect(flushes[0].payload.text).toBe("before after");
+    expect(flushes[0].payload.path).toBe("flush-once.md");
+  });
+
   it("safely restores an anchor beyond a shortened document", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
