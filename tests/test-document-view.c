@@ -346,6 +346,96 @@ static void test_stream_document_uses_fallback(void) {
   g_bytes_unref(bytes);
 }
 
+static PhiDocument *open_text_fixture(gint n_pages) {
+  GError *error = NULL;
+  gchar *path = NULL;
+  gint fd = g_file_open_tmp("phi-document-view-XXXXXX.pdf", &path, &error);
+  g_assert_no_error(error);
+  close(fd);
+
+  cairo_surface_t *surface = cairo_pdf_surface_create(path, 300, 400);
+  cairo_t *cr = cairo_create(surface);
+  cairo_set_font_size(cr, 12);
+  for (gint i = 0; i < n_pages; i++) {
+    for (gint line = 0; line < 20; line++) {
+      cairo_move_to(cr, 20, 20 + line * 16);
+      cairo_show_text(cr, "needle in a haystack");
+    }
+    cairo_show_page(cr);
+  }
+  cairo_destroy(cr);
+  cairo_surface_finish(surface);
+  cairo_surface_destroy(surface);
+
+  GFile *file = g_file_new_for_path(path);
+  PhiDocument *document = phi_document_new_from_file(file, &error);
+  g_assert_no_error(error);
+  g_object_unref(file);
+  g_assert_cmpint(g_unlink(path), ==, 0);
+  g_free(path);
+  return document;
+}
+
+static void on_search_completed(PhiDocumentView *view, gint n_matches,
+                                gint *completed) {
+  (void)view;
+  (void)n_matches;
+  (*completed)++;
+}
+
+static void spin_main_context(gint64 duration_us) {
+  gint64 deadline = g_get_monotonic_time() + duration_us;
+  while (g_get_monotonic_time() < deadline) {
+    g_main_context_iteration(NULL, FALSE);
+    g_usleep(1000);
+  }
+}
+
+static void test_search_completes(void) {
+  PhiDocument *document = open_text_fixture(3);
+  PhiDocumentView *view = new_allocated_view(document);
+  gint completed = 0;
+  g_signal_connect(view, "search-completed",
+                   G_CALLBACK(on_search_completed), &completed);
+
+  phi_document_view_search(view, "needle");
+  gint64 deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+  while (completed == 0 && g_get_monotonic_time() < deadline)
+    g_main_context_iteration(NULL, TRUE);
+  g_assert_cmpint(completed, ==, 1);
+  g_assert_cmpint(phi_document_view_get_search_match_count(view), ==, 60);
+
+  phi_document_view_set_document(view, NULL);
+  g_object_unref(view);
+  g_object_unref(document);
+}
+
+/* A running page scan referenced the old page array after the document was
+ * replaced, and the view itself after it was destroyed. */
+static void test_search_cancelled_with_document(void) {
+  PhiDocument *document = open_text_fixture(300);
+  PhiDocument *replacement = open_text_fixture(1);
+  PhiDocumentView *view = new_allocated_view(document);
+  gint completed = 0;
+  g_signal_connect(view, "search-completed",
+                   G_CALLBACK(on_search_completed), &completed);
+
+  /* Past the 250 ms debounce, into the incremental scan. */
+  phi_document_view_search(view, "needle");
+  spin_main_context(300 * 1000);
+  phi_document_view_set_document(view, replacement);
+  spin_main_context(300 * 1000);
+  g_assert_cmpint(completed, ==, 0);
+
+  phi_document_view_search(view, "needle");
+  spin_main_context(260 * 1000);
+  g_object_unref(view);
+  spin_main_context(100 * 1000);
+
+  g_object_unref(replacement);
+  g_object_unref(document);
+}
+
 int main(int argc, char **argv) {
   gtk_test_init(&argc, &argv, NULL);
   g_test_add_func("/document-view/internal-link-history",
@@ -362,5 +452,8 @@ int main(int argc, char **argv) {
                   test_bytes_document_uses_raster_renderer);
   g_test_add_func("/document-view/stream-document-uses-fallback",
                   test_stream_document_uses_fallback);
+  g_test_add_func("/document-view/search-completes", test_search_completes);
+  g_test_add_func("/document-view/search-cancelled-with-document",
+                  test_search_cancelled_with_document);
   return g_test_run();
 }

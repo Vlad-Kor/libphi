@@ -172,6 +172,7 @@ struct _PhiDocumentView {
     gint search_current_match;
     gint search_total_matches;
     guint search_debounce_id;  /* Debounce timeout source */
+    guint search_idle_id;      /* Incremental page scan, owns its state */
 };
 
 enum {
@@ -209,6 +210,8 @@ static void zoom_from_anchor(PhiDocumentView* self, gdouble new_zoom,
                              gdouble focus_x, gdouble focus_y);
 static gboolean screen_to_page_coords(PhiDocumentView* self, gdouble screen_x, gdouble screen_y, gint* page_num, graphene_point_t* page_point);
 static void update_selection_quads(PhiDocumentView* self);
+static void cancel_search(PhiDocumentView* self);
+static void clear_search_results(PhiDocumentView* self);
 static void start_next_page_render(PhiDocumentView* self);
 
 G_DEFINE_TYPE_WITH_CODE(PhiDocumentView, phi_document_view, GTK_TYPE_WIDGET,
@@ -2426,12 +2429,13 @@ phi_document_view_dispose(GObject* object)
 {
     PhiDocumentView* self = PHI_DOCUMENT_VIEW(object);
     
-    /* Cancel any pending search */
-    if (self->search_debounce_id) {
-        g_source_remove(self->search_debounce_id);
-        self->search_debounce_id = 0;
-    }
-    
+    /* The search sources point at this view and its page array. */
+    cancel_search(self);
+    clear_search_results(self);
+    g_clear_pointer(&self->search_text, g_free);
+    g_clear_pointer(&self->selection_quads, g_free);
+    self->selection_quad_count = 0;
+
     cancel_page_render(self, TRUE);
     clear_render_cache(self);
     g_clear_pointer(&self->render_cache, g_hash_table_unref);
@@ -2442,6 +2446,14 @@ phi_document_view_dispose(GObject* object)
     g_clear_pointer(&self->page_heights, g_array_unref);
     g_clear_pointer(&self->page_offsets, g_array_unref);
     g_clear_pointer(&self->history, g_array_unref);
+    /* The enclosing scrolled window owns the adjustments and can outlive
+     * this view. */
+    if (self->hadjustment)
+        g_signal_handlers_disconnect_by_func(self->hadjustment,
+            on_hadjustment_changed, self);
+    if (self->vadjustment)
+        g_signal_handlers_disconnect_by_func(self->vadjustment,
+            on_vadjustment_changed, self);
     g_clear_object(&self->hadjustment);
     g_clear_object(&self->vadjustment);
     g_clear_pointer(&self->hover_link, g_free);
@@ -2455,6 +2467,7 @@ phi_document_view_dispose(GObject* object)
         g_ptr_array_unref(self->page_links);
         self->page_links = NULL;
     }
+
     
     G_OBJECT_CLASS(phi_document_view_parent_class)->dispose(object);
 }
@@ -2668,6 +2681,15 @@ phi_document_view_set_document(PhiDocumentView* self, PhiDocument* document)
     
     cancel_page_render(self, TRUE);
     clear_render_cache(self);
+    /* Search results and the selection index pages of the old document. */
+    cancel_search(self);
+    clear_search_results(self);
+    g_clear_pointer(&self->search_text, g_free);
+    g_clear_pointer(&self->selection_quads, g_free);
+    self->selection_quad_count = 0;
+    self->selection_start_page = -1;
+    self->selection_end_page = -1;
+    self->selecting = FALSE;
     g_clear_object(&self->document);
     g_ptr_array_set_size(self->pages, 0);
     g_array_set_size(self->history, 0);
@@ -2685,7 +2707,7 @@ phi_document_view_set_document(PhiDocumentView* self, PhiDocument* document)
         phi_link_free(g_ptr_array_index(self->page_links, i));
     }
     g_ptr_array_set_size(self->page_links, 0);
-    
+
     if (document) {
         self->document = g_object_ref(document);
         gint n_pages = phi_document_get_n_pages(document);
@@ -3352,7 +3374,8 @@ clear_search_results(PhiDocumentView* self)
     self->search_total_matches = 0;
 }
 
-/* Incremental search state */
+/* Incremental search state. The idle source owns it and is removed by
+ * cancel_search() whenever the query, the document or the view goes away. */
 typedef struct {
     PhiDocumentView* view;
     gchar* search_text;
@@ -3362,9 +3385,14 @@ typedef struct {
     gint total_matches;
 } IncrementalSearchData;
 
+/* Main-thread text extraction per page varies from well under a millisecond
+ * to tens of milliseconds, so scan by time rather than a fixed page count. */
+#define SEARCH_IDLE_BUDGET_US 8000
+
 static void
-incremental_search_data_free(IncrementalSearchData* data)
+incremental_search_data_free(gpointer user_data)
 {
+    IncrementalSearchData* data = user_data;
     g_free(data->search_text);
     if (data->results) {
         for (guint i = 0; i < data->results->len; i++) {
@@ -3373,79 +3401,74 @@ incremental_search_data_free(IncrementalSearchData* data)
         }
         g_array_free(data->results, TRUE);
     }
-    g_slice_free(IncrementalSearchData, data);
+    g_free(data);
 }
 
-/* Idle callback for incremental search - processes a few pages at a time */
+static void
+cancel_search(PhiDocumentView* self)
+{
+    g_clear_handle_id(&self->search_debounce_id, g_source_remove);
+    g_clear_handle_id(&self->search_idle_id, g_source_remove);
+}
+
+/* Idle callback for incremental search - processes pages until its time
+ * budget is spent, at least one per iteration. */
 static gboolean
 search_idle_callback(gpointer user_data)
 {
     IncrementalSearchData* data = user_data;
     PhiDocumentView* self = data->view;
-    
-    /* Check if search was cancelled (text changed) */
-    if (!self->search_text || g_strcmp0(self->search_text, data->search_text) != 0) {
-        incremental_search_data_free(data);
-        return G_SOURCE_REMOVE;
-    }
-    
-    /* Process a batch of pages (5 at a time to keep UI responsive) */
-    gint pages_to_process = MIN(5, data->n_pages - data->current_page);
-    
-    for (gint i = 0; i < pages_to_process; i++) {
-        gint page_idx = data->current_page + i;
-        
+    gint64 deadline = g_get_monotonic_time() + SEARCH_IDLE_BUDGET_US;
+
+    while (data->current_page < data->n_pages) {
+        gint page_idx = data->current_page++;
+
         PhiPage* page = g_ptr_array_index(self->pages, page_idx);
         if (!page) {
             page = phi_document_get_page(self->document, page_idx, NULL);
             g_ptr_array_index(self->pages, page_idx) = page;
         }
-        
-        if (!page)
-            continue;
-        
-        PhiTextQuad quads[100];  /* Max 100 matches per page */
-        gint count = phi_page_search_text(page, data->search_text, quads, 100);
-        
-        if (count > 0) {
-            SearchPageResult pr = {
-                .page = page_idx,
-                .quad_count = count,
-                .quads = g_memdup2(quads, count * sizeof(PhiTextQuad))
-            };
-            g_array_append_val(data->results, pr);
-            data->total_matches += count;
+
+        if (page) {
+            PhiTextQuad quads[100];  /* Max 100 matches per page */
+            gint count = phi_page_search_text(page, data->search_text, quads, 100);
+
+            if (count > 0) {
+                SearchPageResult pr = {
+                    .page = page_idx,
+                    .quad_count = count,
+                    .quads = g_memdup2(quads, count * sizeof(PhiTextQuad))
+                };
+                g_array_append_val(data->results, pr);
+                data->total_matches += count;
+            }
         }
+
+        if (g_get_monotonic_time() >= deadline)
+            break;
     }
-    
-    data->current_page += pages_to_process;
-    
-    /* Check if we're done */
-    if (data->current_page >= data->n_pages) {
-        /* Search complete - transfer results */
-        clear_search_results(self);
-        self->search_results = data->results;
-        self->search_total_matches = data->total_matches;
-        data->results = NULL;  /* Ownership transferred */
-        
-        /* Jump to first match */
-        if (self->search_results && self->search_results->len > 0) {
-            self->search_current_match = 0;
-            SearchPageResult* first = &g_array_index(self->search_results, SearchPageResult, 0);
-            phi_document_view_go_to_page(self, first->page);
-        }
-        
-        /* Emit signal for UI to update status */
-        g_signal_emit(self, signals[SIGNAL_SEARCH_COMPLETED], 0, self->search_total_matches);
-        
-        gtk_widget_queue_draw(GTK_WIDGET(self));
-        g_free(data->search_text);
-        g_slice_free(IncrementalSearchData, data);
-        return G_SOURCE_REMOVE;
+
+    if (data->current_page < data->n_pages)
+        return G_SOURCE_CONTINUE;
+
+    /* Search complete - transfer results */
+    self->search_idle_id = 0;
+    clear_search_results(self);
+    self->search_results = g_steal_pointer(&data->results);
+    self->search_total_matches = data->total_matches;
+
+    /* Jump to first match */
+    if (self->search_results->len > 0) {
+        self->search_current_match = 0;
+        SearchPageResult* first = &g_array_index(self->search_results, SearchPageResult, 0);
+        phi_document_view_go_to_page(self, first->page);
     }
-    
-    /* Continue searching */
-    return G_SOURCE_CONTINUE;
+
+    /* Emit signal for UI to update status */
+    g_signal_emit(self, signals[SIGNAL_SEARCH_COMPLETED], 0, self->search_total_matches);
+
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    return G_SOURCE_REMOVE;
 }
 
 /* Debounce callback - starts incremental search */
@@ -3458,17 +3481,14 @@ search_debounce_callback(gpointer user_data)
     if (!self->document || !self->search_text || !*self->search_text)
         return G_SOURCE_REMOVE;
     
-    /* Set up incremental search */
-    IncrementalSearchData* data = g_slice_new0(IncrementalSearchData);
+    IncrementalSearchData* data = g_new0(IncrementalSearchData, 1);
     data->view = self;
     data->search_text = g_strdup(self->search_text);
-    data->current_page = 0;
     data->n_pages = phi_document_get_n_pages(self->document);
     data->results = g_array_new(FALSE, TRUE, sizeof(SearchPageResult));
-    data->total_matches = 0;
     
-    /* Use high priority idle to process quickly but still allow UI events */
-    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, search_idle_callback, data, NULL);
+    self->search_idle_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
+        search_idle_callback, data, incremental_search_data_free);
     
     return G_SOURCE_REMOVE;
 }
@@ -3486,11 +3506,8 @@ phi_document_view_search(PhiDocumentView* self, const gchar* text)
 {
     g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
-    /* Cancel pending debounce */
-    if (self->search_debounce_id) {
-        g_source_remove(self->search_debounce_id);
-        self->search_debounce_id = 0;
-    }
+    /* Cancel a pending or running search */
+    cancel_search(self);
     
     /* Clear current results */
     clear_search_results(self);
@@ -3575,6 +3592,7 @@ phi_document_view_clear_search(PhiDocumentView* self)
 {
     g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
+    cancel_search(self);
     clear_search_results(self);
     g_free(self->search_text);
     self->search_text = NULL;
