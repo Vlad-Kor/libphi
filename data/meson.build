@@ -32,11 +32,3 @@ install_data(
   'icons/hicolor/256x256/apps/ai.korsakov.Phi.png',
   install_dir: get_option('datadir') / 'icons/hicolor/256x256/apps'
 )
-
-# Keep the application's license and third-party overview available in every
-# installation, including user-local installs without a package manager.
-install_data(
-  '../COPYING',
-  '../THIRD_PARTY_NOTICES.md',
-  install_dir: get_option('datadir') / 'doc' / 'phi'
-)

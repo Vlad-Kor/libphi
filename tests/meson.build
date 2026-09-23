@@ -123,7 +123,10 @@ if is_variable('phi_gir') and python3.found()
 	gi_env = environment()
 	gi_env.prepend('GI_TYPELIB_PATH', meson.project_build_root() / 'phi')
 	if host_machine.system() == 'windows'
-		gi_env.prepend('PATH', meson.project_build_root() / 'phi')
+		# Windows has no RUNPATH: the uninstalled libphi and MuPDF DLLs must
+		# be on PATH for the typelib to load.
+		gi_env.prepend('PATH', meson.project_build_root() / 'phi',
+			meson.project_build_root() / 'subprojects' / 'mupdf' / 'source')
 	else
 		gi_env.prepend('LD_LIBRARY_PATH', meson.project_build_root() / 'phi')
 	endif

@@ -29,6 +29,14 @@ gio_dep = dependency('gio-2.0')
 mupdf_dep = dependency('mupdf', version: '>= 1.27.0')
 m_dep = cc.find_library('m', required: false)
 
+# Keep the license and third-party overview available in every installation,
+# including library-only and user-local installs without a package manager.
+install_data(
+	'COPYING',
+	'THIRD_PARTY_NOTICES.md',
+	install_dir: get_option('datadir') / 'doc' / 'phi'
+)
+
 inc = include_directories('.')
 subdir('phi')
 if get_option('app')
