@@ -530,10 +530,7 @@ static void propagate_markdown_preferences(PdfvWindow *source) {
        at; at = at->next) {
     if (!PDFV_IS_WINDOW(at->data))
       continue;
-    PdfvWindow *window = PDFV_WINDOW(at->data);
-    if (window != source)
-      pdfv_settings_copy(window->settings, source->settings);
-    apply_markdown_preferences(window);
+    apply_markdown_preferences(PDFV_WINDOW(at->data));
   }
   GError *error = NULL;
   if (!pdfv_settings_save(source->settings, &error)) {
@@ -6822,24 +6819,8 @@ static void persist_window_size(PdfvWindow *self) {
     }
   }
 
-  GtkApplication *application =
-      gtk_window_get_application(GTK_WINDOW(self));
-  gboolean updated_self = FALSE;
-  for (GList *at = application ? gtk_application_get_windows(application)
-                               : NULL;
-       at; at = at->next) {
-    if (!PDFV_IS_WINDOW(at->data))
-      continue;
-    PdfvWindow *window = PDFV_WINDOW(at->data);
-    pdfv_settings_set_window_size(window->settings,
-                                  self->normal_window_width,
-                                  self->normal_window_height);
-    updated_self |= window == self;
-  }
-  if (!updated_self)
-    pdfv_settings_set_window_size(self->settings,
-                                  self->normal_window_width,
-                                  self->normal_window_height);
+  pdfv_settings_set_window_size(self->settings, self->normal_window_width,
+                                self->normal_window_height);
 
   GError *error = NULL;
   if (!pdfv_settings_save(self->settings, &error)) {
@@ -6962,7 +6943,7 @@ static void pdfv_window_dispose(GObject *object) {
     }
   }
   g_clear_object(&self->document_history);
-  g_clear_pointer(&self->settings, pdfv_settings_free);
+  g_clear_pointer(&self->settings, pdfv_settings_unref);
 
   if (self->current_outline) {
     phi_outline_item_free(self->current_outline);
@@ -6977,7 +6958,7 @@ static void pdfv_window_init(PdfvWindow *self) {
   self->current_editor = NULL;
   self->current_outline = NULL;
   self->workspace_pending_group = -1;
-  self->settings = pdfv_settings_new();
+  self->settings = pdfv_settings_get_default();
   pdfv_settings_get_window_size(self->settings,
                                 &self->normal_window_width,
                                 &self->normal_window_height);

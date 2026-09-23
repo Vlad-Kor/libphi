@@ -60,7 +60,7 @@ static void test_workspace_attachment_policy(void) {
   GError *error = NULL;
   g_assert_true(pdfv_settings_save(settings, &error));
   g_assert_no_error(error);
-  pdfv_settings_free(settings);
+  pdfv_settings_unref(settings);
 
   settings = pdfv_settings_new();
   g_assert_true(pdfv_settings_get_workspace_attachment_fixed(
@@ -111,12 +111,32 @@ static void test_workspace_attachment_policy(void) {
   g_strfreev(restored_tabs);
   g_free(active_tab);
   g_free(restored);
-  pdfv_settings_free(settings);
+  pdfv_settings_unref(settings);
 
   g_free(folder_uri);
   g_object_unref(folder);
   g_object_unref(workspace_b);
   g_object_unref(workspace_a);
+}
+
+/* Windows share one instance, so a save from one window cannot write back
+ * another window's stale copy of the file. */
+static void test_default_is_shared(void) {
+  PdfvSettings *first = pdfv_settings_get_default();
+  gdouble saved_scale = pdfv_settings_get_markdown_font_scale(first);
+  PdfvSettings *second = pdfv_settings_get_default();
+  g_assert_true(first == second);
+  pdfv_settings_set_markdown_font_scale(first, saved_scale == 1.5 ? 1.25 : 1.5);
+  g_assert_cmpfloat(pdfv_settings_get_markdown_font_scale(second), ==,
+                    pdfv_settings_get_markdown_font_scale(first));
+  pdfv_settings_unref(second);
+  pdfv_settings_unref(first);
+
+  /* Releasing the last reference drops the unsaved change. */
+  PdfvSettings *fresh = pdfv_settings_get_default();
+  g_assert_cmpfloat(pdfv_settings_get_markdown_font_scale(fresh), ==,
+                    saved_scale);
+  pdfv_settings_unref(fresh);
 }
 
 int main(int argc, char **argv) {
@@ -128,6 +148,7 @@ int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add_func("/settings/workspace-attachment-policy",
                   test_workspace_attachment_policy);
+  g_test_add_func("/settings/default-is-shared", test_default_is_shared);
   int result = g_test_run();
 
   gchar *settings_file = g_build_filename(

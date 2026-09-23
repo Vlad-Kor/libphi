@@ -17,7 +17,9 @@ typedef enum {
 } PdfvImagePasteStyle;
 
 PdfvSettings *pdfv_settings_new(void);
-void pdfv_settings_free(PdfvSettings *self);
+PdfvSettings *pdfv_settings_get_default(void);
+PdfvSettings *pdfv_settings_ref(PdfvSettings *self);
+void pdfv_settings_unref(PdfvSettings *self);
 gboolean pdfv_settings_save(PdfvSettings *self, GError **error);
 
 gdouble pdfv_settings_get_markdown_font_scale(PdfvSettings *self);
@@ -76,8 +78,6 @@ gchar **pdfv_settings_dup_workspace_expanded_folders(
 void pdfv_settings_set_workspace_expanded_folders(
     PdfvSettings *self, GFile *workspace,
     const gchar *const *relative_paths, gsize length);
-void pdfv_settings_copy(PdfvSettings *destination,
-                        PdfvSettings *source);
 
 G_END_DECLS
 

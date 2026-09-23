@@ -16,6 +16,7 @@
 #define MAX_WINDOW_SIZE 32768
 
 struct _PdfvSettings {
+  gint ref_count;
   gdouble markdown_font_scale;
   gboolean readable_line_width;
   gboolean allow_remote_images;
@@ -49,6 +50,7 @@ static gchar *settings_filename(void) {
 
 PdfvSettings *pdfv_settings_new(void) {
   PdfvSettings *self = g_new0(PdfvSettings, 1);
+  self->ref_count = 1;
   self->markdown_font_scale = 1.0;
   self->readable_line_width = TRUE;
   self->window_width = DEFAULT_WINDOW_WIDTH;
@@ -129,9 +131,28 @@ PdfvSettings *pdfv_settings_new(void) {
   return self;
 }
 
-void pdfv_settings_free(PdfvSettings *self) {
-  if (!self)
+/* Every window shares one instance. Each save rewrites the whole file, so
+ * separate copies would write back each other's stale workspace groups. */
+static PdfvSettings *default_settings;
+
+PdfvSettings *pdfv_settings_get_default(void) {
+  if (default_settings)
+    return pdfv_settings_ref(default_settings);
+  default_settings = pdfv_settings_new();
+  return default_settings;
+}
+
+PdfvSettings *pdfv_settings_ref(PdfvSettings *self) {
+  g_return_val_if_fail(self != NULL, NULL);
+  g_atomic_int_inc(&self->ref_count);
+  return self;
+}
+
+void pdfv_settings_unref(PdfvSettings *self) {
+  if (!self || !g_atomic_int_dec_and_test(&self->ref_count))
     return;
+  if (self == default_settings)
+    default_settings = NULL;
   g_clear_pointer(&self->file, g_key_file_unref);
   g_free(self->latex_snippets);
   g_free(self->latex_snippet_variables);
@@ -437,35 +458,4 @@ void pdfv_settings_set_workspace_expanded_folders(
     g_key_file_remove_key(self->file, group, "expanded-folders", NULL);
   }
   g_free(group);
-}
-
-void pdfv_settings_copy(PdfvSettings *destination,
-                        PdfvSettings *source) {
-  g_return_if_fail(destination != NULL);
-  g_return_if_fail(source != NULL);
-  destination->markdown_font_scale = source->markdown_font_scale;
-  destination->readable_line_width = source->readable_line_width;
-  destination->allow_remote_images = source->allow_remote_images;
-  destination->latex_conceal = source->latex_conceal;
-  destination->latex_snippets_enabled = source->latex_snippets_enabled;
-  destination->pdf_inverted = source->pdf_inverted;
-  destination->remember_document_positions =
-      source->remember_document_positions;
-  destination->window_width = source->window_width;
-  destination->window_height = source->window_height;
-  destination->image_paste_style = source->image_paste_style;
-  pdfv_settings_set_latex_snippets(destination, source->latex_snippets);
-  pdfv_settings_set_latex_snippet_variables(
-      destination, source->latex_snippet_variables);
-  gsize length = 0;
-  gchar *data = g_key_file_to_data(source->file, &length, NULL);
-  GKeyFile *copy = g_key_file_new();
-  if (data && g_key_file_load_from_data(copy, data, length,
-                                        G_KEY_FILE_KEEP_COMMENTS, NULL)) {
-    g_key_file_unref(destination->file);
-    destination->file = copy;
-  } else {
-    g_key_file_unref(copy);
-  }
-  g_free(data);
 }
