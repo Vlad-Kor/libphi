@@ -33,10 +33,15 @@ struct _PhiDocument {
 	fz_context* ctx;
 	fz_document* document;
 
+	/* Source that worker contexts reopen the document from: a file, or
+	 * immutable bytes that MuPDF streams read in place. Stream-only
+	 * documents have neither. */
+	GFile* source_file;
+	GBytes* source_bytes;
+	gchar* source_magic;
+
 	/* Independent, serialized renderer used only by the thumbnail worker. */
 	GMutex thumbnail_lock;
-	GFile* source_file;
-	gchar* source_magic;
 	fz_context* thumbnail_ctx;
 	fz_document* thumbnail_document;
 

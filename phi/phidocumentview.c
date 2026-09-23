@@ -1199,8 +1199,8 @@ on_page_rendered(GObject* source, GAsyncResult* result, gpointer user_data)
         self->render_generation && self->document == PHI_DOCUMENT(source);
 
     /* Stream-only API users have no independent source to reopen. Preserve
-     * their existing rendering support outside snapshot(); application PDFs
-     * are file-backed and always take the worker path above. */
+     * their existing rendering support outside snapshot(); file- and
+     * bytes-backed documents always take the worker path above. */
     if (current_document && !texture && error &&
         g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)) {
         g_clear_error(&error);

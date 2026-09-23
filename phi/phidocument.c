@@ -44,6 +44,9 @@ static void phi_document_object_finalize(GObject* object) {
 		fz_drop_document(self->ctx, self->document);
 	if (self->ctx)
 		fz_drop_context(self->ctx);
+	/* Memory-backed MuPDF streams point into these bytes, so release them
+	 * only after every document above has been dropped. */
+	g_clear_pointer(&self->source_bytes, g_bytes_unref);
 	g_clear_object(&self->source_file);
 	g_clear_pointer(&self->source_magic, g_free);
 	g_mutex_clear(&self->render_lock);
@@ -83,6 +86,7 @@ static void phi_document_init(PhiDocument* self) {
 	self->ctx = NULL;
 	self->document = NULL;
 	self->source_file = NULL;
+	self->source_bytes = NULL;
 	self->source_magic = NULL;
 	self->thumbnail_ctx = NULL;
 	self->thumbnail_document = NULL;
@@ -148,6 +152,96 @@ static void phi_document_error_handler(void* user, const char* message) {
 	g_debug("MuPDF repair: %s", message);
 }
 
+static PhiDocument* phi_document_new_with_context(void) {
+	PhiDocument* self = g_object_new(PHI_TYPE_DOCUMENT, NULL);
+
+	fz_locks_context locks = {
+		.user = self,
+		.lock = phi_document_ctx_lock_lock,
+		.unlock = phi_document_ctx_lock_unlock
+	};
+	self->ctx = fz_new_context(NULL, &locks, FZ_STORE_DEFAULT);
+	fz_register_document_handlers(self->ctx);
+	
+	/* Route MuPDF diagnostics through GLib instead of raw stderr. */
+	fz_set_error_callback(self->ctx, phi_document_error_handler, NULL);
+	fz_set_warning_callback(self->ctx, phi_document_warn_handler, NULL);
+	return self;
+}
+
+/* MuPDF rejects a NULL magic, but an empty one makes it recognize the
+ * document type from the content. */
+static const gchar* phi_document_magic(const gchar* magic) {
+	return magic ? magic : "";
+}
+
+static gboolean phi_document_finish_open(PhiDocument* self, GError** error) {
+	fz_try(self->ctx) {
+		self->n_pages = fz_count_pages(self->ctx, self->document);
+	} fz_catch(self->ctx) {
+		g_set_error_literal(error, PHI_MU_ERROR, fz_caught(self->ctx),
+			fz_caught_message(self->ctx));
+		return FALSE;
+	}
+
+	self->pages = g_new0(PhiPage*, self->n_pages);
+	g_list_model_items_changed(G_LIST_MODEL(self), 0, 0, self->n_pages);
+	return TRUE;
+}
+
+/* Opens an independent copy of the document in @ctx from its retained source,
+ * so that worker contexts never share MuPDF state with the interactive one.
+ * Every call creates its own stream: memory-backed documents share only the
+ * immutable GBytes data, never a stream position. */
+static fz_document* phi_document_open_source(PhiDocument* self,
+		fz_context* ctx, GCancellable* cancellable, GError** error) {
+	if (!self->source_bytes && !self->source_file) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+			"Document was opened from a stream and cannot be reopened");
+		return NULL;
+	}
+
+	gchar* path = NULL;
+	GFileInputStream* input = NULL;
+	if (!self->source_bytes) {
+		path = g_file_get_path(self->source_file);
+		if (!path) {
+			input = g_file_read(self->source_file, cancellable, error);
+			if (!input)
+				return NULL;
+		}
+	}
+
+	fz_document* document = NULL;
+	fz_stream* stream = NULL;
+	fz_try(ctx) {
+		if (self->source_bytes) {
+			gsize size = 0;
+			const guchar* data = g_bytes_get_data(self->source_bytes, &size);
+			stream = fz_open_memory(ctx, data, size);
+			document = fz_open_document_with_stream(ctx,
+				phi_document_magic(self->source_magic), stream);
+		} else if (path) {
+			document = fz_open_document(ctx, path);
+		} else {
+			stream = phi_gio_stream_wrap(ctx, G_INPUT_STREAM(input));
+			document = fz_open_document_with_stream(ctx,
+				phi_document_magic(self->source_magic), stream);
+		}
+	} fz_always(ctx) {
+		if (stream)
+			fz_drop_stream(ctx, stream);
+	} fz_catch(ctx) {
+		document = NULL;
+		g_set_error_literal(error, PHI_MU_ERROR, fz_caught(ctx),
+			fz_caught_message(ctx));
+	}
+
+	g_clear_object(&input);
+	g_free(path);
+	return document;
+}
+
 /**
  * phi_document_new_from_stream: (constructor)
  * @stream: a seekable input stream holding the document
@@ -164,27 +258,13 @@ static void phi_document_error_handler(void* user, const char* message) {
  * Returns: (transfer full): a new #PhiDocument, or %NULL on error
  */
 PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* magic, GError** error) {
-	PhiDocument* self = g_object_new(PHI_TYPE_DOCUMENT, NULL);
-
-	fz_locks_context locks = {
-		.user = self,
-		.lock = phi_document_ctx_lock_lock,
-		.unlock = phi_document_ctx_lock_unlock
-	};
-	self->ctx = fz_new_context(NULL, &locks, FZ_STORE_DEFAULT);
-	fz_register_document_handlers(self->ctx);
-	
-	/* Route MuPDF diagnostics through GLib instead of raw stderr. */
-	fz_set_error_callback(self->ctx, phi_document_error_handler, NULL);
-	fz_set_warning_callback(self->ctx, phi_document_warn_handler, NULL);
-	
-	// TODO: autodetect magic if it is NULL
+	PhiDocument* self = phi_document_new_with_context();
 
 	fz_stream* wrapped_stream = NULL;
 	fz_try(self->ctx) {
 		wrapped_stream = phi_gio_stream_wrap(self->ctx, stream);
-		self->document = fz_open_document_with_stream(self->ctx, magic, wrapped_stream);
-		self->n_pages = fz_count_pages(self->ctx, self->document);	
+		self->document = fz_open_document_with_stream(self->ctx,
+			phi_document_magic(magic), wrapped_stream);
 	} fz_always(self->ctx) {
 		if (wrapped_stream)
 			fz_drop_stream(self->ctx, wrapped_stream);
@@ -196,8 +276,40 @@ PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* mag
 		return NULL;
 	}
 
-	self->pages = g_new0(PhiPage*, self->n_pages);
-	g_list_model_items_changed(G_LIST_MODEL(self), 0, 0, self->n_pages);
+	if (!phi_document_finish_open(self, error)) {
+		g_object_unref(self);
+		return NULL;
+	}
+	return self;
+}
+
+/**
+ * phi_document_new_from_bytes: (constructor)
+ * @bytes: the complete, immutable document data
+ * @magic: (nullable): a file name, extension or MIME type used to pick the
+ *   document handler, or %NULL to detect it from the content
+ * @error: return location for a #GError
+ *
+ * Opens a document held entirely in memory, for example a PDF generated by
+ * Typst. The document keeps a reference to @bytes for its lifetime and never
+ * copies them or writes them to disk. Background rendering reopens the
+ * document from @bytes, so it uses the same tiled renderer as a file.
+ *
+ * Returns: (transfer full): a new #PhiDocument, or %NULL on error
+ */
+PhiDocument* phi_document_new_from_bytes(GBytes* bytes, const gchar* magic,
+		GError** error) {
+	g_return_val_if_fail(bytes != NULL, NULL);
+
+	PhiDocument* self = phi_document_new_with_context();
+	self->source_bytes = g_bytes_ref(bytes);
+	self->source_magic = g_strdup(magic);
+
+	self->document = phi_document_open_source(self, self->ctx, NULL, error);
+	if (!self->document || !phi_document_finish_open(self, error)) {
+		g_object_unref(self);
+		return NULL;
+	}
 	return self;
 }
 
@@ -346,19 +458,6 @@ cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
 	g_return_val_if_fail(max_width > 0 && max_height > 0, NULL);
 
-	if (!self->source_file) {
-		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
-			"Background thumbnails require a file-backed document");
-		return NULL;
-	}
-
-	gchar* path = g_file_get_path(self->source_file);
-	if (!path) {
-		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
-			"Background thumbnails require a local file");
-		return NULL;
-	}
-
 	cairo_surface_t* surface = NULL;
 	fz_page* page = NULL;
 	fz_pixmap* pixmap = NULL;
@@ -377,10 +476,14 @@ cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 		fz_set_warning_callback(self->thumbnail_ctx, phi_document_warn_handler, NULL);
 	}
 
-	fz_try(self->thumbnail_ctx) {
+	if (!self->thumbnail_document) {
+		self->thumbnail_document = phi_document_open_source(self,
+			self->thumbnail_ctx, NULL, error);
 		if (!self->thumbnail_document)
-			self->thumbnail_document = fz_open_document(self->thumbnail_ctx, path);
+			goto unlock;
+	}
 
+	fz_try(self->thumbnail_ctx) {
 		page = fz_load_page(self->thumbnail_ctx, self->thumbnail_document, pageno);
 		fz_rect bounds = fz_bound_page(self->thumbnail_ctx, page);
 		float width = bounds.x1 - bounds.x0;
@@ -435,7 +538,6 @@ cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 
 unlock:
 	g_mutex_unlock(&self->thumbnail_lock);
-	g_free(path);
 	return surface;
 }
 
@@ -443,9 +545,9 @@ static gboolean phi_document_ensure_render_document(PhiDocument* self,
 		GCancellable* cancellable, GError** error) {
 	if (self->render_document)
 		return TRUE;
-	if (!self->source_file) {
+	if (!self->source_bytes && !self->source_file) {
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
-			"Background page rendering requires a file-backed document");
+			"Background page rendering requires a file or bytes source");
 		return FALSE;
 	}
 
@@ -466,45 +568,13 @@ static gboolean phi_document_ensure_render_document(PhiDocument* self,
 	fz_set_error_callback(self->render_ctx, phi_document_error_handler, NULL);
 	fz_set_warning_callback(self->render_ctx, phi_document_warn_handler, NULL);
 
-	gchar* path = g_file_get_path(self->source_file);
-	GFileInputStream* input = NULL;
-	fz_stream* wrapped = NULL;
-	if (!path) {
-		input = g_file_read(self->source_file, cancellable, error);
-		if (!input)
-			goto fail;
-	}
-
-	fz_try(self->render_ctx) {
-		if (path) {
-			self->render_document = fz_open_document(self->render_ctx, path);
-		} else {
-			wrapped = phi_gio_stream_wrap(self->render_ctx,
-				G_INPUT_STREAM(input));
-			self->render_document = fz_open_document_with_stream(
-				self->render_ctx, self->source_magic, wrapped);
-		}
-	} fz_always(self->render_ctx) {
-		if (wrapped)
-			fz_drop_stream(self->render_ctx, wrapped);
-	} fz_catch(self->render_ctx) {
-		g_set_error_literal(error, PHI_MU_ERROR,
-			fz_caught(self->render_ctx),
-			fz_caught_message(self->render_ctx));
-	}
-
-	g_clear_object(&input);
-	g_clear_pointer(&path, g_free);
+	self->render_document = phi_document_open_source(self, self->render_ctx,
+		cancellable, error);
 	if (self->render_document)
 		return TRUE;
 
-fail:
-	g_clear_object(&input);
-	g_clear_pointer(&path, g_free);
-	if (self->render_ctx) {
-		fz_drop_context(self->render_ctx);
-		self->render_ctx = NULL;
-	}
+	fz_drop_context(self->render_ctx);
+	self->render_ctx = NULL;
 	return FALSE;
 }
 

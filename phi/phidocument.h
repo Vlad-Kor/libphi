@@ -32,6 +32,8 @@ G_DECLARE_FINAL_TYPE(PhiDocument, phi_document, PHI, DOCUMENT, GObject)
 
 PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* magic, GError** error);
 PhiDocument* phi_document_new_from_file(GFile* file, GError** error);
+PhiDocument* phi_document_new_from_bytes(GBytes* bytes, const gchar* magic,
+	GError** error);
 
 gint phi_document_get_n_pages(PhiDocument* self);
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error);
@@ -68,8 +70,10 @@ cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
  * scaled page. Pass non-positive tile dimensions to render the whole page.
  *
  * The immutable texture is safe to hand back to GTK from a worker thread.
- * Calls for one document are serialized and use a file-backed MuPDF context
- * that is independent from the document's interactive context. */
+ * Calls for one document are serialized and use a MuPDF context that is
+ * independent from the document's interactive context, reopened from the
+ * document's file or bytes. Stream-only documents fail with
+ * G_IO_ERROR_NOT_SUPPORTED. */
 GdkTexture* phi_document_render_page_texture(PhiDocument* self, gint pageno,
 	gdouble scale, gint tile_x, gint tile_y, gint tile_width,
 	gint tile_height, GCancellable* cancellable, GError** error);
