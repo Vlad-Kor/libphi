@@ -15,6 +15,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 adw_dep = dependency('libadwaita-1', version: '>= 1.6')
+webkit_dep = dependency('webkitgtk-6.0', version: '>= 2.40')
+json_glib_dep = dependency('json-glib-1.0')
+gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0')
 
 pdfv_sources = [
 	'main.c',

@@ -1,0 +1,6 @@
+option('app', type: 'boolean', value: true,
+	description: 'Build the pdfv application (requires libadwaita, WebKitGTK and JSON-GLib)')
+option('introspection', type: 'feature', value: 'auto',
+	description: 'Generate the Phi-1.0 GObject Introspection data')
+option('tests', type: 'boolean', value: true,
+	description: 'Build the test suite')

@@ -29,62 +29,6 @@ test_text = executable('test-text', 'test-text.c',
 
 test('text-test', test_text)
 
-test_workspace = executable('test-workspace',
-	'test-workspace.c',
-	'../src/pdfv-workspace.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [phi_dep, mupdf_dep],
-	c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
-)
-
-test('workspace-test', test_workspace, timeout: 30)
-
-test_workspace_file_ops = executable('test-workspace-file-ops',
-	'test-workspace-file-ops.c',
-	'../src/workspace-file-ops.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [gio_dep],
-)
-
-test('workspace-file-ops-test', test_workspace_file_ops)
-
-test_workspace_history = executable('test-workspace-history',
-	'test-workspace-history.c',
-	'../src/workspace-history.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [gio_dep],
-)
-
-test('workspace-history-test', test_workspace_history)
-
-test_markdown_vault = executable('test-markdown-vault',
-	'test-markdown-vault.c',
-	'../src/markdown-vault-adapter.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [gio_dep, json_glib_dep],
-	c_args: ['-DTEST_MARKDOWN_FIXTURE_DIR="' + meson.current_source_dir() / 'markdown-fixtures' + '"'],
-)
-
-test('markdown-vault-test', test_markdown_vault)
-
-test_settings = executable('test-settings',
-	'test-settings.c',
-	'../src/pdfv-settings.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [gio_dep],
-)
-
-test('settings-test', test_settings)
-
-test_document_history = executable('test-document-history',
-	'test-document-history.c',
-	'../src/document-history.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [gio_dep],
-)
-
-test('document-history-test', test_document_history)
-
 test_document_view = executable('test-document-view',
 	'test-document-view.c',
 	include_directories: inc,
@@ -94,14 +38,74 @@ test_document_view = executable('test-document-view',
 
 test('document-view-test', test_document_view)
 
-test_window_components = executable('test-window-components',
-	'test-window-components.c',
-	'../src/pdfv-document-properties.c',
-	'../src/pdfv-page-selector.c',
-	'../src/pdfv-thumbnail-list.c',
-	include_directories: [inc, include_directories('../src')],
-	dependencies: [phi_dep, mupdf_dep, adw_dep],
-	c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
-)
+# Tests of pdfv application code; these link sources from src/ and need the
+# application's dependencies.
+if get_option('app')
+	test_workspace = executable('test-workspace',
+		'test-workspace.c',
+		'../src/pdfv-workspace.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [phi_dep, mupdf_dep],
+		c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
+	)
 
-test('window-components-test', test_window_components)
+	test('workspace-test', test_workspace, timeout: 30)
+
+	test_workspace_file_ops = executable('test-workspace-file-ops',
+		'test-workspace-file-ops.c',
+		'../src/workspace-file-ops.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [gio_dep],
+	)
+
+	test('workspace-file-ops-test', test_workspace_file_ops)
+
+	test_workspace_history = executable('test-workspace-history',
+		'test-workspace-history.c',
+		'../src/workspace-history.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [gio_dep],
+	)
+
+	test('workspace-history-test', test_workspace_history)
+
+	test_markdown_vault = executable('test-markdown-vault',
+		'test-markdown-vault.c',
+		'../src/markdown-vault-adapter.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [gio_dep, json_glib_dep],
+		c_args: ['-DTEST_MARKDOWN_FIXTURE_DIR="' + meson.current_source_dir() / 'markdown-fixtures' + '"'],
+	)
+
+	test('markdown-vault-test', test_markdown_vault)
+
+	test_settings = executable('test-settings',
+		'test-settings.c',
+		'../src/pdfv-settings.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [gio_dep],
+	)
+
+	test('settings-test', test_settings)
+
+	test_document_history = executable('test-document-history',
+		'test-document-history.c',
+		'../src/document-history.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [gio_dep],
+	)
+
+	test('document-history-test', test_document_history)
+
+	test_window_components = executable('test-window-components',
+		'test-window-components.c',
+		'../src/pdfv-document-properties.c',
+		'../src/pdfv-page-selector.c',
+		'../src/pdfv-thumbnail-list.c',
+		include_directories: [inc, include_directories('../src')],
+		dependencies: [phi_dep, mupdf_dep, adw_dep],
+		c_args: ['-DTEST_DATA_DIR="' + meson.current_source_dir() / 'data' + '"'],
+	)
+
+	test('window-components-test', test_window_components)
+endif

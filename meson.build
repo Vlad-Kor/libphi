@@ -21,16 +21,20 @@ project('phi', 'c',
 
 cc = meson.get_compiler('c')
 
+# The reusable library only needs GLib/GIO, GTK4 and MuPDF. Dependencies of
+# the pdfv application (libadwaita, WebKitGTK, JSON-GLib, ...) are resolved in
+# src/ so that `-Dapp=false` builds libphi without them.
 gtk_dep = dependency('gtk4', version: '>= 4.19.4')
 gio_dep = dependency('gio-2.0')
 mupdf_dep = dependency('mupdf', version: '>= 1.27.0')
-webkit_dep = dependency('webkitgtk-6.0', version: '>= 2.40')
-json_glib_dep = dependency('json-glib-1.0')
-gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0')
 m_dep = cc.find_library('m', required: false)
 
 inc = include_directories('.')
 subdir('phi')
-subdir('src')
-subdir('data')
-subdir('tests')
+if get_option('app')
+	subdir('src')
+	subdir('data')
+endif
+if get_option('tests')
+	subdir('tests')
+endif
