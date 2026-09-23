@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  */
 
-#include "pdfv-document-view.h"
+#include <phi/phidocumentview.h>
 #include <cairo-pdf.h>
 #include <glib/gstdio.h>
 #include <unistd.h>
@@ -50,34 +50,34 @@ static PhiDocument *open_two_page_fixture(void) {
 
 static void test_internal_link_history(void) {
   PhiDocument *document = open_fixture();
-  PdfvDocumentView *view = pdfv_document_view_new();
+  PhiDocumentView *view = phi_document_view_new();
   g_object_ref_sink(view);
   GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
                NULL);
-  pdfv_document_view_set_document(view, document);
+  phi_document_view_set_document(view, document);
 
   PhiLinkDest destination;
   g_assert_true(phi_document_resolve_link(document, "#page=1",
                                           &destination));
   gtk_adjustment_set_value(vertical, 250);
-  pdfv_document_view_activate_link(view, "#page=1");
+  phi_document_view_activate_link(view, "#page=1");
 
-  g_assert_true(pdfv_document_view_can_go_back(view));
-  g_assert_false(pdfv_document_view_can_go_forward(view));
+  g_assert_true(phi_document_view_can_go_back(view));
+  g_assert_false(phi_document_view_can_go_forward(view));
   g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 0, 0.01);
 
   /* History uses a location within the page, so it remains accurate if the
    * zoom changes after following the link. */
-  pdfv_document_view_set_zoom(view, 2.0);
-  pdfv_document_view_go_back(view);
+  phi_document_view_set_zoom(view, 2.0);
+  phi_document_view_go_back(view);
   g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 500,
                                  0.01);
-  g_assert_false(pdfv_document_view_can_go_back(view));
-  g_assert_true(pdfv_document_view_can_go_forward(view));
+  g_assert_false(phi_document_view_can_go_back(view));
+  g_assert_true(phi_document_view_can_go_forward(view));
 
-  pdfv_document_view_go_forward(view);
+  phi_document_view_go_forward(view);
   g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 0, 0.01);
 
   g_object_unref(horizontal);
@@ -88,25 +88,25 @@ static void test_internal_link_history(void) {
 
 static void test_presentation_zoom_floor(void) {
   PhiDocument *document = open_fixture();
-  PdfvDocumentView *view = pdfv_document_view_new();
+  PhiDocumentView *view = phi_document_view_new();
   g_object_ref_sink(view);
   GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
                NULL);
-  pdfv_document_view_set_document(view, document);
+  phi_document_view_set_document(view, document);
 
-  g_assert_false(pdfv_document_view_get_presentation_mode(view));
-  pdfv_document_view_set_presentation_mode(view, TRUE);
-  g_assert_true(pdfv_document_view_get_presentation_mode(view));
+  g_assert_false(phi_document_view_get_presentation_mode(view));
+  phi_document_view_set_presentation_mode(view, TRUE);
+  g_assert_true(phi_document_view_get_presentation_mode(view));
 
   g_assert_cmpfloat_with_epsilon(
-      pdfv_document_view_get_minimum_zoom(view), 0.1, 0.001);
-  pdfv_document_view_set_minimum_zoom(view, 1.5);
-  g_assert_cmpfloat_with_epsilon(pdfv_document_view_get_zoom(view), 1.5,
+      phi_document_view_get_minimum_zoom(view), 0.1, 0.001);
+  phi_document_view_set_minimum_zoom(view, 1.5);
+  g_assert_cmpfloat_with_epsilon(phi_document_view_get_zoom(view), 1.5,
                                  0.001);
-  pdfv_document_view_zoom_out(view);
-  g_assert_cmpfloat_with_epsilon(pdfv_document_view_get_zoom(view), 1.5,
+  phi_document_view_zoom_out(view);
+  g_assert_cmpfloat_with_epsilon(phi_document_view_get_zoom(view), 1.5,
                                  0.001);
   gtk_adjustment_set_value(horizontal, 100);
   gtk_adjustment_set_value(vertical, 100);
@@ -115,12 +115,12 @@ static void test_presentation_zoom_floor(void) {
   g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 0,
                                  0.001);
 
-  pdfv_document_view_set_minimum_zoom(view, 0.1);
-  pdfv_document_view_zoom_out(view);
-  g_assert_cmpfloat(pdfv_document_view_get_zoom(view), <, 1.5);
+  phi_document_view_set_minimum_zoom(view, 0.1);
+  phi_document_view_zoom_out(view);
+  g_assert_cmpfloat(phi_document_view_get_zoom(view), <, 1.5);
 
-  pdfv_document_view_set_presentation_mode(view, FALSE);
-  g_assert_false(pdfv_document_view_get_presentation_mode(view));
+  phi_document_view_set_presentation_mode(view, FALSE);
+  g_assert_false(phi_document_view_get_presentation_mode(view));
 
   g_object_unref(horizontal);
   g_object_unref(vertical);
@@ -130,25 +130,25 @@ static void test_presentation_zoom_floor(void) {
 
 static void test_scroll_state_survives_zoom(void) {
   PhiDocument *document = open_fixture();
-  PdfvDocumentView *view = pdfv_document_view_new();
+  PhiDocumentView *view = phi_document_view_new();
   g_object_ref_sink(view);
   GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
                NULL);
-  pdfv_document_view_set_document(view, document);
+  phi_document_view_set_document(view, document);
 
   gtk_adjustment_set_value(vertical, 250);
   gint page = -1;
   gdouble fraction = -1;
   gdouble center = -1;
-  pdfv_document_view_get_scroll_state(view, &page, &fraction, &center);
+  phi_document_view_get_scroll_state(view, &page, &fraction, &center);
   g_assert_cmpint(page, ==, 0);
   g_assert_cmpfloat(fraction, >, 0);
 
-  pdfv_document_view_set_zoom(view, 2.0);
-  pdfv_document_view_go_to_page(view, 0);
-  pdfv_document_view_restore_scroll_state(view, page, fraction, center);
+  phi_document_view_set_zoom(view, 2.0);
+  phi_document_view_go_to_page(view, 0);
+  phi_document_view_restore_scroll_state(view, page, fraction, center);
   g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_value(vertical), 500,
                                  0.01);
 
@@ -160,22 +160,22 @@ static void test_scroll_state_survives_zoom(void) {
 
 static void test_fit_width_after_restoring_later_page(void) {
   PhiDocument *document = open_two_page_fixture();
-  PdfvDocumentView *view = pdfv_document_view_new();
+  PhiDocumentView *view = phi_document_view_new();
   g_object_ref_sink(view);
   GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
                NULL);
-  pdfv_document_view_set_document(view, document);
+  phi_document_view_set_document(view, document);
   gtk_widget_allocate(GTK_WIDGET(view), 1000, 700, -1, NULL);
 
   /* Only page zero enters the view's page cache during initial layout. A
    * restored position moves to page two before the initial fit-width pass. */
-  pdfv_document_view_go_to_page(view, 1);
-  g_assert_cmpfloat_with_epsilon(pdfv_document_view_get_zoom(view), 1.0,
+  phi_document_view_go_to_page(view, 1);
+  g_assert_cmpfloat_with_epsilon(phi_document_view_get_zoom(view), 1.0,
                                  0.001);
-  pdfv_document_view_zoom_fit_width(view);
-  g_assert_cmpfloat_with_epsilon(pdfv_document_view_get_zoom(view), 1.6,
+  phi_document_view_zoom_fit_width(view);
+  g_assert_cmpfloat_with_epsilon(phi_document_view_get_zoom(view), 1.6,
                                  0.001);
 
   g_object_unref(horizontal);
@@ -186,13 +186,13 @@ static void test_fit_width_after_restoring_later_page(void) {
 
 static void test_page_shadow_margins(void) {
   PhiDocument *document = open_two_page_fixture();
-  PdfvDocumentView *view = pdfv_document_view_new();
+  PhiDocumentView *view = phi_document_view_new();
   g_object_ref_sink(view);
   GtkAdjustment *horizontal = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   GtkAdjustment *vertical = gtk_adjustment_new(0, 0, 0, 1, 10, 0);
   g_object_set(view, "hadjustment", horizontal, "vadjustment", vertical,
                NULL);
-  pdfv_document_view_set_document(view, document);
+  phi_document_view_set_document(view, document);
 
   gtk_widget_allocate(GTK_WIDGET(view), 1000, 700, -1, NULL);
   g_assert_cmpfloat_with_epsilon(gtk_adjustment_get_upper(vertical), 1622,

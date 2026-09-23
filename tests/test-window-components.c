@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "pdfv-document-view.h"
+#include <phi/phidocumentview.h>
 #include "pdfv-document-properties.h"
 #include "pdfv-page-selector.h"
 #include "pdfv-thumbnail-list.h"
@@ -20,9 +20,9 @@ static PhiDocument *open_fixture(void) {
 
 static void test_page_selector_tracks_view(void) {
   PhiDocument *document = open_fixture();
-  PdfvDocumentView *view = pdfv_document_view_new();
+  PhiDocumentView *view = phi_document_view_new();
   g_object_ref_sink(view);
-  pdfv_document_view_set_document(view, document);
+  phi_document_view_set_document(view, document);
 
   PdfvPageSelector *selector = pdfv_page_selector_new();
   g_object_ref_sink(selector);
@@ -39,14 +39,14 @@ static void test_page_selector_tracks_view(void) {
 
   gtk_editable_set_text(GTK_EDITABLE(entry), "999");
   g_signal_emit_by_name(entry, "activate");
-  g_assert_cmpint(pdfv_document_view_get_current_page(view), ==, 0);
+  g_assert_cmpint(phi_document_view_get_current_page(view), ==, 0);
   g_assert_cmpstr(gtk_editable_get_text(GTK_EDITABLE(entry)), ==, "1");
 
   pdfv_page_selector_set_view(selector, NULL);
   g_assert_false(gtk_widget_get_visible(GTK_WIDGET(selector)));
   g_object_unref(selector);
   /* The selector must have disconnected before the surviving view emits. */
-  pdfv_document_view_set_document(view, NULL);
+  phi_document_view_set_document(view, NULL);
   g_object_unref(view);
   g_object_unref(document);
 }

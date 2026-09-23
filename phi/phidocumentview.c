@@ -1,5 +1,5 @@
 /*
- * Phi PDF Viewer - High performance PDF viewer using libphi
+ * libphi - High performance document renderer for GTK
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -8,7 +8,7 @@
  * (at your option) any later version.
  */
 
-#include "pdfv-document-view.h"
+#include "phi/phidocumentview.h"
 #include <phi/phipage.h>
 #include <phi/phidocument.h>
 #include <math.h>
@@ -71,7 +71,7 @@ typedef struct {
     guint64 age;
 } RenderCacheEntry;
 
-struct _PdfvDocumentView {
+struct _PhiDocumentView {
     GtkWidget parent_instance;
     
     PhiDocument* document;
@@ -201,18 +201,18 @@ enum {
 static GParamSpec* props[N_PROPS];
 static guint signals[N_SIGNALS];
 
-static void pdfv_document_view_scrollable_init(GtkScrollableInterface* iface);
-static void zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y);
-static void zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom,
+static void phi_document_view_scrollable_init(GtkScrollableInterface* iface);
+static void zoom_at_point(PhiDocumentView* self, gdouble new_zoom, gdouble focus_x, gdouble focus_y);
+static void zoom_from_anchor(PhiDocumentView* self, gdouble new_zoom,
                              gdouble anchor_x,
                              const VerticalAnchor* anchor_y,
                              gdouble focus_x, gdouble focus_y);
-static gboolean screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y, gint* page_num, graphene_point_t* page_point);
-static void update_selection_quads(PdfvDocumentView* self);
-static void start_next_page_render(PdfvDocumentView* self);
+static gboolean screen_to_page_coords(PhiDocumentView* self, gdouble screen_x, gdouble screen_y, gint* page_num, graphene_point_t* page_point);
+static void update_selection_quads(PhiDocumentView* self);
+static void start_next_page_render(PhiDocumentView* self);
 
-G_DEFINE_TYPE_WITH_CODE(PdfvDocumentView, pdfv_document_view, GTK_TYPE_WIDGET,
-    G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, pdfv_document_view_scrollable_init))
+G_DEFINE_TYPE_WITH_CODE(PhiDocumentView, phi_document_view, GTK_TYPE_WIDGET,
+    G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, phi_document_view_scrollable_init))
 
 static void
 render_cache_entry_free(RenderCacheEntry* entry)
@@ -248,7 +248,7 @@ render_key_equal(gconstpointer a, gconstpointer b)
 }
 
 static void
-clear_render_cache(PdfvDocumentView* self)
+clear_render_cache(PhiDocumentView* self)
 {
     if (self->render_cache)
         g_hash_table_remove_all(self->render_cache);
@@ -266,7 +266,7 @@ clear_render_cache(PdfvDocumentView* self)
 }
 
 static void
-allocate_render_cache(PdfvDocumentView* self, gint n_pages)
+allocate_render_cache(PhiDocumentView* self, gint n_pages)
 {
     clear_render_cache(self);
     if (n_pages <= 0)
@@ -276,7 +276,7 @@ allocate_render_cache(PdfvDocumentView* self, gint n_pages)
 }
 
 static void
-cancel_page_render(PdfvDocumentView* self, gboolean invalidate_generation)
+cancel_page_render(PhiDocumentView* self, gboolean invalidate_generation)
 {
     if (invalidate_generation)
         self->render_generation++;
@@ -290,7 +290,7 @@ cancel_page_render(PdfvDocumentView* self, gboolean invalidate_generation)
 }
 
 static void
-calculate_layout(PdfvDocumentView* self)
+calculate_layout(PhiDocumentView* self)
 {
     if (!self->document)
         return;
@@ -349,20 +349,20 @@ calculate_layout(PdfvDocumentView* self)
 }
 
 static gboolean
-is_fitted_presentation(PdfvDocumentView* self)
+is_fitted_presentation(PhiDocumentView* self)
 {
     return self->presentation_mode &&
         self->zoom <= self->minimum_zoom * 1.0001 + 0.000001;
 }
 
 static gdouble
-get_page_top_margin(PdfvDocumentView* self, gint viewport_height)
+get_page_top_margin(PhiDocumentView* self, gint viewport_height)
 {
     return self->total_height > viewport_height ? PAGE_TOP_MARGIN : 0;
 }
 
 static gdouble
-get_page_display_offset(PdfvDocumentView* self, gint page)
+get_page_display_offset(PhiDocumentView* self, gint page)
 {
     gint viewport_height = gtk_widget_get_height(GTK_WIDGET(self));
     gdouble top_margin = get_page_top_margin(self, viewport_height);
@@ -377,7 +377,7 @@ get_page_display_offset(PdfvDocumentView* self, gint page)
 }
 
 static gdouble
-get_max_scroll_y(PdfvDocumentView* self, gint viewport_height)
+get_max_scroll_y(PhiDocumentView* self, gint viewport_height)
 {
     if (self->total_height <= viewport_height)
         return 0;
@@ -389,7 +389,7 @@ get_max_scroll_y(PdfvDocumentView* self, gint viewport_height)
 }
 
 static void
-update_adjustments(PdfvDocumentView* self)
+update_adjustments(PhiDocumentView* self)
 {
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
@@ -440,7 +440,7 @@ update_adjustments(PdfvDocumentView* self)
 }
 
 static gint
-get_page_at_offset(PdfvDocumentView* self, gdouble y, gdouble* page_offset)
+get_page_at_offset(PhiDocumentView* self, gdouble y, gdouble* page_offset)
 {
     if (page_offset)
         *page_offset = 0;
@@ -481,7 +481,7 @@ get_page_at_offset(PdfvDocumentView* self, gdouble y, gdouble* page_offset)
 }
 
 static gdouble
-get_page_offset(PdfvDocumentView* self, gint page)
+get_page_offset(PhiDocumentView* self, gint page)
 {
     if (!self->document || page < 0)
         return 0;
@@ -500,7 +500,7 @@ get_page_offset(PdfvDocumentView* self, gint page)
 }
 
 static VerticalAnchor
-vertical_anchor_at(PdfvDocumentView* self, gdouble document_y)
+vertical_anchor_at(PhiDocumentView* self, gdouble document_y)
 {
     VerticalAnchor anchor = { 0 };
     if (!self->document || self->page_offsets->len == 0)
@@ -526,7 +526,7 @@ vertical_anchor_at(PdfvDocumentView* self, gdouble document_y)
 }
 
 static gdouble
-vertical_anchor_position(PdfvDocumentView* self,
+vertical_anchor_position(PhiDocumentView* self,
                          const VerticalAnchor* anchor)
 {
     if (!self->document || self->page_offsets->len == 0)
@@ -544,7 +544,7 @@ vertical_anchor_position(PdfvDocumentView* self,
 }
 
 static HistoryEntry
-current_history_entry(PdfvDocumentView* self)
+current_history_entry(PhiDocumentView* self)
 {
     HistoryEntry entry = {
         .top = vertical_anchor_at(self, self->scroll_y),
@@ -554,14 +554,14 @@ current_history_entry(PdfvDocumentView* self)
 }
 
 static void
-notify_history_changed(PdfvDocumentView* self)
+notify_history_changed(PhiDocumentView* self)
 {
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_BACK]);
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CAN_GO_FORWARD]);
 }
 
 static void
-save_current_history_entry(PdfvDocumentView* self)
+save_current_history_entry(PhiDocumentView* self)
 {
     if (self->history_pos < 0 ||
         self->history_pos >= (gint)self->history->len)
@@ -571,7 +571,7 @@ save_current_history_entry(PdfvDocumentView* self)
 }
 
 static void
-append_current_history_entry(PdfvDocumentView* self)
+append_current_history_entry(PhiDocumentView* self)
 {
     HistoryEntry entry = current_history_entry(self);
     g_array_append_val(self->history, entry);
@@ -579,7 +579,7 @@ append_current_history_entry(PdfvDocumentView* self)
 }
 
 static void
-navigate_to_page_with_history(PdfvDocumentView* self, gint page)
+navigate_to_page_with_history(PhiDocumentView* self, gint page)
 {
     if (self->history_pos < 0)
         append_current_history_entry(self);
@@ -589,7 +589,7 @@ navigate_to_page_with_history(PdfvDocumentView* self, gint page)
     if (self->history_pos < (gint)self->history->len - 1)
         g_array_set_size(self->history, self->history_pos + 1);
 
-    pdfv_document_view_go_to_page(self, page);
+    phi_document_view_go_to_page(self, page);
     append_current_history_entry(self);
 
     while (self->history->len > MAX_HISTORY) {
@@ -600,7 +600,7 @@ navigate_to_page_with_history(PdfvDocumentView* self, gint page)
 }
 
 static void
-restore_history_entry(PdfvDocumentView* self, const HistoryEntry* entry)
+restore_history_entry(PhiDocumentView* self, const HistoryEntry* entry)
 {
     self->scroll_y = vertical_anchor_position(self, &entry->top);
     self->scroll_x = entry->center_x * self->zoom;
@@ -609,7 +609,7 @@ restore_history_entry(PdfvDocumentView* self, const HistoryEntry* entry)
 }
 
 static PhiPage*
-ensure_page_loaded_and_update_layout(PdfvDocumentView* self, gint page_num)
+ensure_page_loaded_and_update_layout(PhiDocumentView* self, gint page_num)
 {
     if (!self->document || page_num < 0 ||
         page_num >= (gint)self->pages->len)
@@ -705,7 +705,7 @@ typedef struct {
 } PageRenderRequest;
 
 static guint
-current_render_scale_key(PdfvDocumentView* self)
+current_render_scale_key(PhiDocumentView* self)
 {
     gint widget_scale = MAX(1,
         gtk_widget_get_scale_factor(GTK_WIDGET(self)));
@@ -720,7 +720,7 @@ render_scale_from_key(guint scale_key)
 }
 
 static void
-page_base_size(PdfvDocumentView* self, gint page, gdouble* width,
+page_base_size(PhiDocumentView* self, gint page, gdouble* width,
                gdouble* height)
 {
     gdouble zoom = MAX(self->zoom, MIN_ZOOM);
@@ -729,7 +729,7 @@ page_base_size(PdfvDocumentView* self, gint page, gdouble* width,
 }
 
 static RasterPlan
-raster_plan_for_page(PdfvDocumentView* self, gint page)
+raster_plan_for_page(PhiDocumentView* self, gint page)
 {
     RasterPlan plan = {0};
     gdouble page_width = 1;
@@ -746,7 +746,7 @@ raster_plan_for_page(PdfvDocumentView* self, gint page)
 }
 
 static gboolean
-raster_fallback_for_page(PdfvDocumentView* self, gint page,
+raster_fallback_for_page(PhiDocumentView* self, gint page,
                          RenderKey* key, gdouble* scale)
 {
     RasterPlan target = raster_plan_for_page(self, page);
@@ -772,7 +772,7 @@ raster_fallback_for_page(PdfvDocumentView* self, gint page,
 }
 
 static void
-page_display_geometry(PdfvDocumentView* self, gint page, gdouble* x,
+page_display_geometry(PhiDocumentView* self, gint page, gdouble* x,
                       gdouble* y, gdouble* width, gdouble* height)
 {
     gint view_width = gtk_widget_get_width(GTK_WIDGET(self));
@@ -783,7 +783,7 @@ page_display_geometry(PdfvDocumentView* self, gint page, gdouble* x,
 }
 
 static TileRange
-tile_range_for_page(PdfvDocumentView* self, gint page,
+tile_range_for_page(PhiDocumentView* self, gint page,
                     const RasterPlan* plan, PageRenderScope scope)
 {
     TileRange range = {0};
@@ -837,32 +837,32 @@ tile_range_for_page(PdfvDocumentView* self, gint page,
 }
 
 static RenderCacheEntry*
-render_cache_lookup(PdfvDocumentView* self, const RenderKey* key)
+render_cache_lookup(PhiDocumentView* self, const RenderKey* key)
 {
     return g_hash_table_lookup(self->render_cache, key);
 }
 
 static gboolean
-render_key_failed(PdfvDocumentView* self, const RenderKey* key)
+render_key_failed(PhiDocumentView* self, const RenderKey* key)
 {
     return g_hash_table_contains(self->render_failed, key);
 }
 
 static void
-render_key_mark_failed(PdfvDocumentView* self, const RenderKey* key)
+render_key_mark_failed(PhiDocumentView* self, const RenderKey* key)
 {
     RenderKey* copy = g_memdup2(key, sizeof(*copy));
     g_hash_table_add(self->render_failed, copy);
 }
 
 static void
-render_cache_touch(RenderCacheEntry* entry, PdfvDocumentView* self)
+render_cache_touch(RenderCacheEntry* entry, PhiDocumentView* self)
 {
     entry->age = ++self->render_cache_clock;
 }
 
 static guint
-render_cache_best_whole_scale(PdfvDocumentView* self, gint page,
+render_cache_best_whole_scale(PhiDocumentView* self, gint page,
                               guint target_scale)
 {
     GHashTableIter iter;
@@ -898,7 +898,7 @@ render_key_in_tile_range(const RenderKey* key, const TileRange* range)
 }
 
 static gboolean
-render_cache_entry_is_visible_fallback(PdfvDocumentView* self,
+render_cache_entry_is_visible_fallback(PhiDocumentView* self,
                                        const RenderCacheEntry* entry)
 {
     if (entry->key.page < self->render_visible_first ||
@@ -912,7 +912,7 @@ render_cache_entry_is_visible_fallback(PdfvDocumentView* self,
 }
 
 static gboolean
-render_cache_entry_protected(PdfvDocumentView* self,
+render_cache_entry_protected(PhiDocumentView* self,
                              const RenderCacheEntry* entry)
 {
     if (entry->key.page < self->render_visible_first ||
@@ -933,7 +933,7 @@ render_cache_entry_protected(PdfvDocumentView* self,
 }
 
 static gboolean
-render_cache_evict_oldest(PdfvDocumentView* self, gboolean allow_protected)
+render_cache_evict_oldest(PhiDocumentView* self, gboolean allow_protected)
 {
     GHashTableIter iter;
     gpointer value = NULL;
@@ -960,7 +960,7 @@ render_cache_evict_oldest(PdfvDocumentView* self, gboolean allow_protected)
 }
 
 static void
-render_cache_store(PdfvDocumentView* self,
+render_cache_store(PhiDocumentView* self,
                    const PageRenderRequest* request, GdkTexture* texture)
 {
     if (!texture)
@@ -1013,17 +1013,17 @@ typedef struct {
 } PageRenderCallback;
 
 static PageRenderCallback*
-page_render_callback_new(PdfvDocumentView* self)
+page_render_callback_new(PhiDocumentView* self)
 {
     PageRenderCallback* callback = g_new0(PageRenderCallback, 1);
     g_weak_ref_init(&callback->view, self);
     return callback;
 }
 
-static PdfvDocumentView*
+static PhiDocumentView*
 page_render_callback_take_view(PageRenderCallback* callback)
 {
-    PdfvDocumentView* self = g_weak_ref_get(&callback->view);
+    PhiDocumentView* self = g_weak_ref_get(&callback->view);
     g_weak_ref_clear(&callback->view);
     g_free(callback);
     return self;
@@ -1053,7 +1053,7 @@ render_page_worker(GTask* task, gpointer source_object, gpointer task_data,
 }
 
 static gboolean
-render_key_matches_page(PdfvDocumentView* self, const RenderKey* key,
+render_key_matches_page(PhiDocumentView* self, const RenderKey* key,
                         PageRenderScope scope)
 {
     if (scope == PAGE_RENDER_FALLBACK) {
@@ -1076,7 +1076,7 @@ render_key_matches_page(PdfvDocumentView* self, const RenderKey* key,
 }
 
 static gboolean
-find_missing_for_page(PdfvDocumentView* self, gint page,
+find_missing_for_page(PhiDocumentView* self, gint page,
                       PageRenderScope scope, PageRenderRequest* request)
 {
     if (page < 0 || page >= self->fallback_length ||
@@ -1158,7 +1158,7 @@ find_missing_for_page(PdfvDocumentView* self, gint page,
 }
 
 static gboolean
-visible_page_is_missing(PdfvDocumentView* self)
+visible_page_is_missing(PhiDocumentView* self)
 {
     PageRenderRequest request;
     for (gint page = self->render_visible_first;
@@ -1171,7 +1171,7 @@ visible_page_is_missing(PdfvDocumentView* self)
 }
 
 static gboolean
-page_is_wanted(PdfvDocumentView* self, gint page)
+page_is_wanted(PhiDocumentView* self, gint page)
 {
     if (page >= self->render_visible_first &&
         page <= self->render_visible_last)
@@ -1187,7 +1187,7 @@ page_is_wanted(PdfvDocumentView* self, gint page)
 static void
 on_page_rendered(GObject* source, GAsyncResult* result, gpointer user_data)
 {
-    PdfvDocumentView* self = page_render_callback_take_view(user_data);
+    PhiDocumentView* self = page_render_callback_take_view(user_data);
     if (!self)
         return;
     GTask* task = G_TASK(result);
@@ -1243,7 +1243,7 @@ on_page_rendered(GObject* source, GAsyncResult* result, gpointer user_data)
 }
 
 static gboolean
-find_next_page_to_render(PdfvDocumentView* self,
+find_next_page_to_render(PhiDocumentView* self,
                          PageRenderRequest* request)
 {
     /* A tiled page needs one complete coarse texture beneath its tiles.
@@ -1307,7 +1307,7 @@ find_next_page_to_render(PdfvDocumentView* self,
 }
 
 static void
-start_next_page_render(PdfvDocumentView* self)
+start_next_page_render(PhiDocumentView* self)
 {
     if (!self->document || self->render_job_page >= 0 ||
         !self->render_cache || self->render_visible_first < 0)
@@ -1338,7 +1338,7 @@ start_next_page_render(PdfvDocumentView* self)
 }
 
 static void
-update_render_range(PdfvDocumentView* self, gint first_page, gint last_page)
+update_render_range(PhiDocumentView* self, gint first_page, gint last_page)
 {
     gint n_pages = self->document
         ? phi_document_get_n_pages(self->document) : 0;
@@ -1368,7 +1368,7 @@ update_render_range(PdfvDocumentView* self, gint first_page, gint last_page)
 }
 
 static guint
-render_cache_best_stale_scale(PdfvDocumentView* self, gint page,
+render_cache_best_stale_scale(PhiDocumentView* self, gint page,
                               guint target_scale)
 {
     GHashTableIter iter;
@@ -1393,7 +1393,7 @@ render_cache_best_stale_scale(PdfvDocumentView* self, gint page,
 }
 
 static void
-snapshot_cached_scale(PdfvDocumentView* self, GtkSnapshot* snapshot,
+snapshot_cached_scale(PhiDocumentView* self, GtkSnapshot* snapshot,
                       gint page, guint scale_key,
                       const graphene_rect_t* visible_rect)
 {
@@ -1442,9 +1442,9 @@ snapshot_page_shadow(GtkSnapshot* snapshot, gdouble x, gdouble y,
 }
 
 static void
-pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
+phi_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
 {
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(widget);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(widget);
     
     if (!self->document)
         return;
@@ -1481,8 +1481,13 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
      * presentation deliberately uses a pitch-black screen surround. */
     GdkRGBA background = {0, 0, 0, 1};
     if (!self->presentation_mode) {
-        AdwStyleManager* style_manager = adw_style_manager_get_default();
-        gboolean is_dark = adw_style_manager_get_dark(style_manager);
+        /* The resolved foreground is light exactly when the theme is dark.
+         * This follows libadwaita's style manager in hosts that use it
+         * without making the reusable widget depend on libadwaita. */
+        GdkRGBA foreground;
+        gtk_widget_get_color(widget, &foreground);
+        gboolean is_dark = 0.2126 * foreground.red +
+            0.7152 * foreground.green + 0.0722 * foreground.blue > 0.5;
         G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         gboolean found = gtk_style_context_lookup_color(
             gtk_widget_get_style_context(widget), "window_bg_color",
@@ -1656,12 +1661,12 @@ pdfv_document_view_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
 }
 
 static void
-pdfv_document_view_measure(GtkWidget* widget, GtkOrientation orientation,
+phi_document_view_measure(GtkWidget* widget, GtkOrientation orientation,
                            int for_size, int* minimum, int* natural,
                            int* minimum_baseline, int* natural_baseline)
 {
     (void)for_size;
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(widget);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(widget);
     
     if (orientation == GTK_ORIENTATION_HORIZONTAL) {
         *minimum = 200;
@@ -1676,17 +1681,17 @@ pdfv_document_view_measure(GtkWidget* widget, GtkOrientation orientation,
 }
 
 static void
-pdfv_document_view_size_allocate(GtkWidget* widget, int width, int height, int baseline)
+phi_document_view_size_allocate(GtkWidget* widget, int width, int height, int baseline)
 {
     (void)width;
     (void)height;
     (void)baseline;
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(widget);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(widget);
     update_adjustments(self);
 }
 
 static void
-on_hadjustment_changed(GtkAdjustment* adj, PdfvDocumentView* self)
+on_hadjustment_changed(GtkAdjustment* adj, PhiDocumentView* self)
 {
     gdouble value = gtk_adjustment_get_value(adj);
     if (is_fitted_presentation(self)) {
@@ -1703,7 +1708,7 @@ on_hadjustment_changed(GtkAdjustment* adj, PdfvDocumentView* self)
 }
 
 static void
-on_vadjustment_changed(GtkAdjustment* adj, PdfvDocumentView* self)
+on_vadjustment_changed(GtkAdjustment* adj, PhiDocumentView* self)
 {
     gdouble value = gtk_adjustment_get_value(adj);
     if (is_fitted_presentation(self)) {
@@ -1721,7 +1726,7 @@ on_vadjustment_changed(GtkAdjustment* adj, PdfvDocumentView* self)
 }
 
 static PhiLink*
-find_link_at(PdfvDocumentView* self, gdouble x, gdouble y)
+find_link_at(PhiDocumentView* self, gdouble x, gdouble y)
 {
     if (!self->document)
         return NULL;
@@ -1770,7 +1775,7 @@ find_link_at(PdfvDocumentView* self, gdouble x, gdouble y)
 
 static void
 on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y, 
-                 PdfvDocumentView* self)
+                 PhiDocumentView* self)
 {
     (void)gesture;
     gtk_widget_grab_focus(GTK_WIDGET(self));
@@ -1799,7 +1804,7 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
                     gtk_widget_queue_draw(GTK_WIDGET(self));
                     
                     /* Copy to clipboard */
-                    gchar* text = pdfv_document_view_get_selected_text(self);
+                    gchar* text = phi_document_view_get_selected_text(self);
                     if (text && *text) {
                         GdkClipboard* clipboard = gtk_widget_get_clipboard(GTK_WIDGET(self));
                         gdk_clipboard_set_text(clipboard, text);
@@ -1816,7 +1821,7 @@ on_click_pressed(GtkGestureClick* gesture, gint n_press, gdouble x, gdouble y,
     
     PhiLink* link = find_link_at(self, x, y);
     if (link && link->uri) {
-        pdfv_document_view_activate_link(self, link->uri);
+        phi_document_view_activate_link(self, link->uri);
     } else {
         /* Single click not on link - clear selection */
         if (self->selection_quad_count > 0) {
@@ -1845,7 +1850,7 @@ scroll_adjustment(GtkAdjustment* adjustment, gdouble delta)
 
 static gboolean
 on_key_pressed(GtkEventControllerKey* controller, guint keyval, guint keycode,
-               GdkModifierType state, PdfvDocumentView* self)
+               GdkModifierType state, PhiDocumentView* self)
 {
     (void)controller;
     (void)keycode;
@@ -1868,14 +1873,14 @@ on_key_pressed(GtkEventControllerKey* controller, guint keyval, guint keycode,
         return GDK_EVENT_STOP;
     case GDK_KEY_Left:
     case GDK_KEY_KP_Left:
-        pdfv_document_view_go_to_page(self, self->current_page - 1);
+        phi_document_view_go_to_page(self, self->current_page - 1);
         return GDK_EVENT_STOP;
     case GDK_KEY_Right:
     case GDK_KEY_KP_Right:
-        pdfv_document_view_go_to_page(self, self->current_page + 1);
+        phi_document_view_go_to_page(self, self->current_page + 1);
         return GDK_EVENT_STOP;
     case GDK_KEY_space:
-        pdfv_document_view_go_to_page(self, self->current_page + 1);
+        phi_document_view_go_to_page(self, self->current_page + 1);
         return GDK_EVENT_STOP;
     default:
         return GDK_EVENT_PROPAGATE;
@@ -1884,7 +1889,7 @@ on_key_pressed(GtkEventControllerKey* controller, guint keyval, guint keycode,
 
 static void
 on_motion(GtkEventControllerMotion* controller, gdouble x, gdouble y,
-          PdfvDocumentView* self)
+          PhiDocumentView* self)
 {
     (void)controller;
 
@@ -1918,13 +1923,13 @@ on_motion(GtkEventControllerMotion* controller, gdouble x, gdouble y,
 
 static void
 on_motion_enter(GtkEventControllerMotion* controller, gdouble x, gdouble y,
-                PdfvDocumentView* self)
+                PhiDocumentView* self)
 {
     on_motion(controller, x, y, self);
 }
 
 static void
-on_motion_leave(GtkEventControllerMotion* controller, PdfvDocumentView* self)
+on_motion_leave(GtkEventControllerMotion* controller, PhiDocumentView* self)
 {
     (void)controller;
 
@@ -1934,7 +1939,7 @@ on_motion_leave(GtkEventControllerMotion* controller, PdfvDocumentView* self)
 }
 
 static void
-cancel_scroll_momentum(PdfvDocumentView* self)
+cancel_scroll_momentum(PhiDocumentView* self)
 {
     GtkWidget* parent = gtk_widget_get_parent(GTK_WIDGET(self));
     while (parent && !GTK_IS_SCROLLED_WINDOW(parent))
@@ -1955,7 +1960,7 @@ cancel_scroll_momentum(PdfvDocumentView* self)
 
 static void
 on_zoom_begin(GtkGestureZoom* gesture, GdkEventSequence* sequence,
-              PdfvDocumentView* self)
+              PhiDocumentView* self)
 {
     (void)sequence;
     cancel_scroll_momentum(self);
@@ -1987,7 +1992,7 @@ on_zoom_begin(GtkGestureZoom* gesture, GdkEventSequence* sequence,
 
 static void
 on_zoom_scale_changed(GtkGestureZoom* gesture, gdouble scale,
-                      PdfvDocumentView* self)
+                      PhiDocumentView* self)
 {
     GdkEvent* event = gtk_event_controller_get_current_event(
         GTK_EVENT_CONTROLLER(gesture));
@@ -2016,7 +2021,7 @@ on_zoom_scale_changed(GtkGestureZoom* gesture, gdouble scale,
 
 static gboolean
 on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
-          PdfvDocumentView* self)
+          PhiDocumentView* self)
 {
     (void)dx;
     if (!self->document)
@@ -2067,7 +2072,7 @@ on_scroll(GtkEventControllerScroll* controller, gdouble dx, gdouble dy,
 }
 
 static void
-on_scroll_begin(GtkEventControllerScroll* controller, PdfvDocumentView* self)
+on_scroll_begin(GtkEventControllerScroll* controller, PhiDocumentView* self)
 {
     GdkModifierType state = gtk_event_controller_get_current_event_state(
         GTK_EVENT_CONTROLLER(controller));
@@ -2076,10 +2081,10 @@ on_scroll_begin(GtkEventControllerScroll* controller, PdfvDocumentView* self)
 }
 
 void
-pdfv_document_view_capture_zoom_scroll(PdfvDocumentView* self,
+phi_document_view_capture_zoom_scroll(PhiDocumentView* self,
                                        GtkWidget* ancestor)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     g_return_if_fail(GTK_IS_WIDGET(ancestor));
 
     /* GtkScrolledWindow consumes smooth scroll in its capture phase.  Some
@@ -2099,7 +2104,7 @@ pdfv_document_view_capture_zoom_scroll(PdfvDocumentView* self,
 
 /* Helper to convert screen coordinates to page coordinates */
 static gboolean
-screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y,
+screen_to_page_coords(PhiDocumentView* self, gdouble screen_x, gdouble screen_y,
                       gint* page_num, graphene_point_t* page_point)
 {
     if (!self->document)
@@ -2138,7 +2143,7 @@ screen_to_page_coords(PdfvDocumentView* self, gdouble screen_x, gdouble screen_y
 }
 
 static void
-update_selection_quads(PdfvDocumentView* self)
+update_selection_quads(PhiDocumentView* self)
 {
     g_free(self->selection_quads);
     self->selection_quads = NULL;
@@ -2168,7 +2173,7 @@ update_selection_quads(PdfvDocumentView* self)
 
 /* Middle-click pan handlers */
 static void
-on_pan_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* self)
+on_pan_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PhiDocumentView* self)
 {
     (void)gesture;
     (void)x;
@@ -2180,7 +2185,7 @@ on_pan_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* se
 }
 
 static void
-on_pan_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+on_pan_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PhiDocumentView* self)
 {
     (void)gesture;
     
@@ -2195,7 +2200,7 @@ on_pan_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvD
 }
 
 static void
-on_pan_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+on_pan_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PhiDocumentView* self)
 {
     (void)gesture;
     (void)offset_x;
@@ -2208,7 +2213,7 @@ on_pan_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocu
 }
 
 static void
-on_drag_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* self)
+on_drag_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PhiDocumentView* self)
 {
     (void)gesture;
     
@@ -2234,7 +2239,7 @@ on_drag_begin(GtkGestureDrag* gesture, gdouble x, gdouble y, PdfvDocumentView* s
 }
 
 static void
-on_drag_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+on_drag_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PhiDocumentView* self)
 {
     if (!self->selecting)
         return;
@@ -2257,7 +2262,7 @@ on_drag_update(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, Pdfv
 }
 
 static void
-on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDocumentView* self)
+on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PhiDocumentView* self)
 {
     (void)gesture;
     
@@ -2296,7 +2301,7 @@ on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDoc
     update_selection_quads(self);
     gtk_widget_queue_draw(GTK_WIDGET(self));
     
-    gchar* text = pdfv_document_view_get_selected_text(self);
+    gchar* text = phi_document_view_get_selected_text(self);
     if (text && *text) {
         GdkClipboard* clipboard = gtk_widget_get_clipboard(GTK_WIDGET(self));
         gdk_clipboard_set_text(clipboard, text);
@@ -2305,10 +2310,10 @@ on_drag_end(GtkGestureDrag* gesture, gdouble offset_x, gdouble offset_y, PdfvDoc
 }
 
 static void
-pdfv_document_view_get_property(GObject* object, guint prop_id,
+phi_document_view_get_property(GObject* object, guint prop_id,
                                 GValue* value, GParamSpec* pspec)
 {
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(object);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(object);
     
     switch (prop_id) {
     case PROP_DOCUMENT:
@@ -2330,10 +2335,10 @@ pdfv_document_view_get_property(GObject* object, guint prop_id,
         g_value_set_int(value, self->current_page);
         break;
     case PROP_CAN_GO_BACK:
-        g_value_set_boolean(value, pdfv_document_view_can_go_back(self));
+        g_value_set_boolean(value, phi_document_view_can_go_back(self));
         break;
     case PROP_CAN_GO_FORWARD:
-        g_value_set_boolean(value, pdfv_document_view_can_go_forward(self));
+        g_value_set_boolean(value, phi_document_view_can_go_forward(self));
         break;
     case PROP_HADJUSTMENT:
         g_value_set_object(value, self->hadjustment);
@@ -2353,26 +2358,26 @@ pdfv_document_view_get_property(GObject* object, guint prop_id,
 }
 
 static void
-pdfv_document_view_set_property(GObject* object, guint prop_id,
+phi_document_view_set_property(GObject* object, guint prop_id,
                                 const GValue* value, GParamSpec* pspec)
 {
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(object);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(object);
     
     switch (prop_id) {
     case PROP_DOCUMENT:
-        pdfv_document_view_set_document(self, g_value_get_object(value));
+        phi_document_view_set_document(self, g_value_get_object(value));
         break;
     case PROP_ZOOM:
-        pdfv_document_view_set_zoom(self, g_value_get_double(value));
+        phi_document_view_set_zoom(self, g_value_get_double(value));
         break;
     case PROP_CONTINUOUS:
-        pdfv_document_view_set_continuous(self, g_value_get_boolean(value));
+        phi_document_view_set_continuous(self, g_value_get_boolean(value));
         break;
     case PROP_DUAL_PAGE:
-        pdfv_document_view_set_dual_page(self, g_value_get_boolean(value));
+        phi_document_view_set_dual_page(self, g_value_get_boolean(value));
         break;
     case PROP_INVERTED:
-        pdfv_document_view_set_inverted(self, g_value_get_boolean(value));
+        phi_document_view_set_inverted(self, g_value_get_boolean(value));
         break;
     case PROP_HADJUSTMENT:
         if (self->hadjustment)
@@ -2408,9 +2413,9 @@ pdfv_document_view_set_property(GObject* object, guint prop_id,
 }
 
 static void
-pdfv_document_view_dispose(GObject* object)
+phi_document_view_dispose(GObject* object)
 {
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(object);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(object);
     
     /* Cancel any pending search */
     if (self->search_debounce_id) {
@@ -2442,22 +2447,22 @@ pdfv_document_view_dispose(GObject* object)
         self->page_links = NULL;
     }
     
-    G_OBJECT_CLASS(pdfv_document_view_parent_class)->dispose(object);
+    G_OBJECT_CLASS(phi_document_view_parent_class)->dispose(object);
 }
 
 static void
-pdfv_document_view_class_init(PdfvDocumentViewClass* klass)
+phi_document_view_class_init(PhiDocumentViewClass* klass)
 {
     GObjectClass* object_class = G_OBJECT_CLASS(klass);
     GtkWidgetClass* widget_class = GTK_WIDGET_CLASS(klass);
     
-    object_class->get_property = pdfv_document_view_get_property;
-    object_class->set_property = pdfv_document_view_set_property;
-    object_class->dispose = pdfv_document_view_dispose;
+    object_class->get_property = phi_document_view_get_property;
+    object_class->set_property = phi_document_view_set_property;
+    object_class->dispose = phi_document_view_dispose;
     
-    widget_class->snapshot = pdfv_document_view_snapshot;
-    widget_class->measure = pdfv_document_view_measure;
-    widget_class->size_allocate = pdfv_document_view_size_allocate;
+    widget_class->snapshot = phi_document_view_snapshot;
+    widget_class->measure = phi_document_view_measure;
+    widget_class->size_allocate = phi_document_view_size_allocate;
     
     props[PROP_DOCUMENT] = g_param_spec_object("document", NULL, NULL,
         PHI_TYPE_DOCUMENT,
@@ -2508,14 +2513,14 @@ pdfv_document_view_class_init(PdfvDocumentViewClass* klass)
 }
 
 static void
-pdfv_document_view_scrollable_init(GtkScrollableInterface* iface)
+phi_document_view_scrollable_init(GtkScrollableInterface* iface)
 {
     (void)iface;
     /* Use default implementation */
 }
 
 static void
-pdfv_document_view_init(PdfvDocumentView* self)
+phi_document_view_init(PhiDocumentView* self)
 {
     self->zoom = 1.0;
     self->minimum_zoom = MIN_ZOOM;
@@ -2599,16 +2604,16 @@ pdfv_document_view_init(PdfvDocumentView* self)
     gtk_widget_set_focusable(GTK_WIDGET(self), TRUE);
 }
 
-PdfvDocumentView*
-pdfv_document_view_new(void)
+PhiDocumentView*
+phi_document_view_new(void)
 {
-    return g_object_new(PDFV_TYPE_DOCUMENT_VIEW, NULL);
+    return g_object_new(PHI_TYPE_DOCUMENT_VIEW, NULL);
 }
 
 void
-pdfv_document_view_set_document(PdfvDocumentView* self, PhiDocument* document)
+phi_document_view_set_document(PhiDocumentView* self, PhiDocument* document)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (self->document == document)
         return;
@@ -2649,16 +2654,16 @@ pdfv_document_view_set_document(PdfvDocumentView* self, PhiDocument* document)
 }
 
 PhiDocument*
-pdfv_document_view_get_document(PdfvDocumentView* self)
+phi_document_view_get_document(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), NULL);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), NULL);
     return self->document;
 }
 
 void
-pdfv_document_view_go_to_page(PdfvDocumentView* self, gint page)
+phi_document_view_go_to_page(PhiDocumentView* self, gint page)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (!self->document)
         return;
@@ -2694,19 +2699,19 @@ pdfv_document_view_go_to_page(PdfvDocumentView* self, gint page)
 }
 
 gint
-pdfv_document_view_get_current_page(PdfvDocumentView* self)
+phi_document_view_get_current_page(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), 0);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), 0);
     return self->current_page;
 }
 
 void
-pdfv_document_view_get_scroll_state(PdfvDocumentView* self,
+phi_document_view_get_scroll_state(PhiDocumentView* self,
                                     gint* page,
                                     gdouble* page_fraction,
                                     gdouble* horizontal_center)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     VerticalAnchor anchor = vertical_anchor_at(self, self->scroll_y);
     if (page)
         *page = anchor.page;
@@ -2718,18 +2723,18 @@ pdfv_document_view_get_scroll_state(PdfvDocumentView* self,
 }
 
 void
-pdfv_document_view_restore_scroll_state(PdfvDocumentView* self,
+phi_document_view_restore_scroll_state(PhiDocumentView* self,
                                         gint page,
                                         gdouble page_fraction,
                                         gdouble horizontal_center)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     if (!self->document || self->page_offsets->len == 0)
         return;
 
     gint n_pages = phi_document_get_n_pages(self->document);
     page = CLAMP(page, 0, n_pages - 1);
-    pdfv_document_view_go_to_page(self, page);
+    phi_document_view_go_to_page(self, page);
     VerticalAnchor anchor = {
         .page = page,
         .page_fraction = CLAMP(page_fraction, 0.0, 1.0),
@@ -2741,9 +2746,9 @@ pdfv_document_view_restore_scroll_state(PdfvDocumentView* self,
 }
 
 void
-pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
+phi_document_view_set_zoom(PhiDocumentView* self, gdouble zoom)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     zoom_at_point(self, zoom,
                   gtk_widget_get_width(GTK_WIDGET(self)) / 2.0,
@@ -2751,11 +2756,11 @@ pdfv_document_view_set_zoom(PdfvDocumentView* self, gdouble zoom)
 }
 
 static void
-zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom, gdouble anchor_x,
+zoom_from_anchor(PhiDocumentView* self, gdouble new_zoom, gdouble anchor_x,
                  const VerticalAnchor* anchor_y, gdouble focus_x,
                  gdouble focus_y)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     new_zoom = CLAMP(new_zoom, self->minimum_zoom, MAX_ZOOM);
     if (!isfinite(new_zoom) || new_zoom == self->zoom)
@@ -2790,10 +2795,10 @@ zoom_from_anchor(PdfvDocumentView* self, gdouble new_zoom, gdouble anchor_x,
 
 /* Zoom towards a specific point in widget coordinates. */
 static void
-zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x,
+zoom_at_point(PhiDocumentView* self, gdouble new_zoom, gdouble focus_x,
               gdouble focus_y)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gdouble anchor_x = self->zoom > 0
@@ -2805,28 +2810,28 @@ zoom_at_point(PdfvDocumentView* self, gdouble new_zoom, gdouble focus_x,
 }
 
 gdouble
-pdfv_document_view_get_zoom(PdfvDocumentView* self)
+phi_document_view_get_zoom(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), 1.0);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), 1.0);
     return self->zoom;
 }
 
 void
-pdfv_document_view_zoom_in(PdfvDocumentView* self)
+phi_document_view_zoom_in(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
-    pdfv_document_view_set_zoom(self, self->zoom * ZOOM_STEP);
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
+    phi_document_view_set_zoom(self, self->zoom * ZOOM_STEP);
 }
 
 void
-pdfv_document_view_zoom_out(PdfvDocumentView* self)
+phi_document_view_zoom_out(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
-    pdfv_document_view_set_zoom(self, self->zoom / ZOOM_STEP);
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
+    phi_document_view_set_zoom(self, self->zoom / ZOOM_STEP);
 }
 
 static gboolean
-get_current_page_size_for_fit(PdfvDocumentView* self, gdouble* width,
+get_current_page_size_for_fit(PhiDocumentView* self, gdouble* width,
                               gdouble* height)
 {
     if (!self->document || self->current_page < 0 ||
@@ -2880,9 +2885,9 @@ get_current_page_size_for_fit(PdfvDocumentView* self, gdouble* width,
 }
 
 void
-pdfv_document_view_zoom_fit_width(PdfvDocumentView* self)
+phi_document_view_zoom_fit_width(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     gdouble page_width = 0;
     if (!get_current_page_size_for_fit(self, &page_width, NULL))
@@ -2892,13 +2897,13 @@ pdfv_document_view_zoom_fit_width(PdfvDocumentView* self)
     gdouble new_zoom =
         (width - 40) / page_width; /* 20px padding on each side */
 
-    pdfv_document_view_set_zoom(self, new_zoom);
+    phi_document_view_set_zoom(self, new_zoom);
 }
 
 void
-pdfv_document_view_zoom_fit_page(PdfvDocumentView* self)
+phi_document_view_zoom_fit_page(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     gdouble page_width = 0;
     gdouble page_height = 0;
@@ -2912,13 +2917,13 @@ pdfv_document_view_zoom_fit_page(PdfvDocumentView* self)
     gdouble zoom_w = (width - 40) / page_width;
     gdouble zoom_h = (height - 40) / page_height;
 
-    pdfv_document_view_set_zoom(self, MIN(zoom_w, zoom_h));
+    phi_document_view_set_zoom(self, MIN(zoom_w, zoom_h));
 }
 
 void
-pdfv_document_view_zoom_fit_page_full(PdfvDocumentView* self)
+phi_document_view_zoom_fit_page_full(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     gdouble page_width = 0;
     gdouble page_height = 0;
@@ -2928,34 +2933,34 @@ pdfv_document_view_zoom_fit_page_full(PdfvDocumentView* self)
 
     gint width = gtk_widget_get_width(GTK_WIDGET(self));
     gint height = gtk_widget_get_height(GTK_WIDGET(self));
-    pdfv_document_view_set_zoom(
+    phi_document_view_set_zoom(
         self, MIN(width / page_width, height / page_height));
 }
 
 void
-pdfv_document_view_set_minimum_zoom(PdfvDocumentView* self, gdouble zoom)
+phi_document_view_set_minimum_zoom(PhiDocumentView* self, gdouble zoom)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     self->minimum_zoom = CLAMP(zoom, MIN_ZOOM, MAX_ZOOM);
     if (self->zoom < self->minimum_zoom)
-        pdfv_document_view_set_zoom(self, self->minimum_zoom);
+        phi_document_view_set_zoom(self, self->minimum_zoom);
     else if (self->presentation_mode)
         update_adjustments(self);
 }
 
 gdouble
-pdfv_document_view_get_minimum_zoom(PdfvDocumentView* self)
+phi_document_view_get_minimum_zoom(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), MIN_ZOOM);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), MIN_ZOOM);
     return self->minimum_zoom;
 }
 
 void
-pdfv_document_view_set_presentation_mode(PdfvDocumentView* self,
+phi_document_view_set_presentation_mode(PhiDocumentView* self,
                                          gboolean presentation)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
 
     presentation = !!presentation;
     if (self->presentation_mode == presentation)
@@ -2969,16 +2974,16 @@ pdfv_document_view_set_presentation_mode(PdfvDocumentView* self,
 }
 
 gboolean
-pdfv_document_view_get_presentation_mode(PdfvDocumentView* self)
+phi_document_view_get_presentation_mode(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), FALSE);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), FALSE);
     return self->presentation_mode;
 }
 
 void
-pdfv_document_view_set_continuous(PdfvDocumentView* self, gboolean continuous)
+phi_document_view_set_continuous(PhiDocumentView* self, gboolean continuous)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (self->continuous == continuous)
         return;
@@ -2992,16 +2997,16 @@ pdfv_document_view_set_continuous(PdfvDocumentView* self, gboolean continuous)
 }
 
 gboolean
-pdfv_document_view_get_continuous(PdfvDocumentView* self)
+phi_document_view_get_continuous(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), TRUE);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), TRUE);
     return self->continuous;
 }
 
 void
-pdfv_document_view_set_dual_page(PdfvDocumentView* self, gboolean dual)
+phi_document_view_set_dual_page(PhiDocumentView* self, gboolean dual)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (self->dual_page == dual)
         return;
@@ -3013,16 +3018,16 @@ pdfv_document_view_set_dual_page(PdfvDocumentView* self, gboolean dual)
 }
 
 gboolean
-pdfv_document_view_get_dual_page(PdfvDocumentView* self)
+phi_document_view_get_dual_page(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), FALSE);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), FALSE);
     return self->dual_page;
 }
 
 void
-pdfv_document_view_set_inverted(PdfvDocumentView* self, gboolean inverted)
+phi_document_view_set_inverted(PhiDocumentView* self, gboolean inverted)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (self->inverted == inverted)
         return;
@@ -3033,32 +3038,32 @@ pdfv_document_view_set_inverted(PdfvDocumentView* self, gboolean inverted)
 }
 
 gboolean
-pdfv_document_view_get_inverted(PdfvDocumentView* self)
+phi_document_view_get_inverted(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), FALSE);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), FALSE);
     return self->inverted;
 }
 
 gboolean
-pdfv_document_view_can_go_back(PdfvDocumentView* self)
+phi_document_view_can_go_back(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), FALSE);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), FALSE);
     return self->history_pos > 0;
 }
 
 gboolean
-pdfv_document_view_can_go_forward(PdfvDocumentView* self)
+phi_document_view_can_go_forward(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), FALSE);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), FALSE);
     return self->history_pos < (gint)self->history->len - 1;
 }
 
 void
-pdfv_document_view_go_back(PdfvDocumentView* self)
+phi_document_view_go_back(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
-    if (!pdfv_document_view_can_go_back(self))
+    if (!phi_document_view_can_go_back(self))
         return;
 
     save_current_history_entry(self);
@@ -3070,11 +3075,11 @@ pdfv_document_view_go_back(PdfvDocumentView* self)
 }
 
 void
-pdfv_document_view_go_forward(PdfvDocumentView* self)
+phi_document_view_go_forward(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
-    if (!pdfv_document_view_can_go_forward(self))
+    if (!phi_document_view_can_go_forward(self))
         return;
 
     save_current_history_entry(self);
@@ -3086,9 +3091,9 @@ pdfv_document_view_go_forward(PdfvDocumentView* self)
 }
 
 void
-pdfv_document_view_activate_link(PdfvDocumentView* self, const gchar* uri)
+phi_document_view_activate_link(PhiDocumentView* self, const gchar* uri)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     g_return_if_fail(uri != NULL);
     g_return_if_fail(self->document != NULL);
     
@@ -3105,7 +3110,7 @@ pdfv_document_view_activate_link(PdfvDocumentView* self, const gchar* uri)
 
 /* Clear search results */
 static void
-clear_search_results(PdfvDocumentView* self)
+clear_search_results(PhiDocumentView* self)
 {
     if (self->search_results) {
         for (guint i = 0; i < self->search_results->len; i++) {
@@ -3121,7 +3126,7 @@ clear_search_results(PdfvDocumentView* self)
 
 /* Incremental search state */
 typedef struct {
-    PdfvDocumentView* view;
+    PhiDocumentView* view;
     gchar* search_text;
     gint current_page;
     gint n_pages;
@@ -3148,7 +3153,7 @@ static gboolean
 search_idle_callback(gpointer user_data)
 {
     IncrementalSearchData* data = user_data;
-    PdfvDocumentView* self = data->view;
+    PhiDocumentView* self = data->view;
     
     /* Check if search was cancelled (text changed) */
     if (!self->search_text || g_strcmp0(self->search_text, data->search_text) != 0) {
@@ -3199,7 +3204,7 @@ search_idle_callback(gpointer user_data)
         if (self->search_results && self->search_results->len > 0) {
             self->search_current_match = 0;
             SearchPageResult* first = &g_array_index(self->search_results, SearchPageResult, 0);
-            pdfv_document_view_go_to_page(self, first->page);
+            phi_document_view_go_to_page(self, first->page);
         }
         
         /* Emit signal for UI to update status */
@@ -3219,7 +3224,7 @@ search_idle_callback(gpointer user_data)
 static gboolean
 search_debounce_callback(gpointer user_data)
 {
-    PdfvDocumentView* self = PDFV_DOCUMENT_VIEW(user_data);
+    PhiDocumentView* self = PHI_DOCUMENT_VIEW(user_data);
     self->search_debounce_id = 0;
     
     if (!self->document || !self->search_text || !*self->search_text)
@@ -3241,9 +3246,9 @@ search_debounce_callback(gpointer user_data)
 }
 
 void
-pdfv_document_view_search(PdfvDocumentView* self, const gchar* text)
+phi_document_view_search(PhiDocumentView* self, const gchar* text)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     /* Cancel pending debounce */
     if (self->search_debounce_id) {
@@ -3276,9 +3281,9 @@ pdfv_document_view_search(PdfvDocumentView* self, const gchar* text)
 }
 
 void
-pdfv_document_view_search_next(PdfvDocumentView* self)
+phi_document_view_search_next(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (!self->search_results || self->search_results->len == 0)
         return;
@@ -3289,14 +3294,14 @@ pdfv_document_view_search_next(PdfvDocumentView* self)
     
     SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, 
                                                self->search_current_match);
-    pdfv_document_view_go_to_page(self, result->page);
+    phi_document_view_go_to_page(self, result->page);
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
 void
-pdfv_document_view_search_prev(PdfvDocumentView* self)
+phi_document_view_search_prev(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     if (!self->search_results || self->search_results->len == 0)
         return;
@@ -3307,14 +3312,14 @@ pdfv_document_view_search_prev(PdfvDocumentView* self)
     
     SearchPageResult* result = &g_array_index(self->search_results, SearchPageResult, 
                                                self->search_current_match);
-    pdfv_document_view_go_to_page(self, result->page);
+    phi_document_view_go_to_page(self, result->page);
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
 void
-pdfv_document_view_clear_search(PdfvDocumentView* self)
+phi_document_view_clear_search(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     clear_search_results(self);
     g_free(self->search_text);
@@ -3324,23 +3329,23 @@ pdfv_document_view_clear_search(PdfvDocumentView* self)
 }
 
 gint
-pdfv_document_view_get_search_match_count(PdfvDocumentView* self)
+phi_document_view_get_search_match_count(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), 0);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), 0);
     return self->search_total_matches;
 }
 
 gint
-pdfv_document_view_get_search_current_match(PdfvDocumentView* self)
+phi_document_view_get_search_current_match(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), -1);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), -1);
     return self->search_current_match;
 }
 
 gchar*
-pdfv_document_view_get_selected_text(PdfvDocumentView* self)
+phi_document_view_get_selected_text(PhiDocumentView* self)
 {
-    g_return_val_if_fail(PDFV_IS_DOCUMENT_VIEW(self), NULL);
+    g_return_val_if_fail(PHI_IS_DOCUMENT_VIEW(self), NULL);
     
     if (self->selection_start_page < 0 || self->selection_end_page < 0)
         return NULL;
@@ -3357,9 +3362,9 @@ pdfv_document_view_get_selected_text(PdfvDocumentView* self)
 }
 
 void
-pdfv_document_view_clear_selection(PdfvDocumentView* self)
+phi_document_view_clear_selection(PhiDocumentView* self)
 {
-    g_return_if_fail(PDFV_IS_DOCUMENT_VIEW(self));
+    g_return_if_fail(PHI_IS_DOCUMENT_VIEW(self));
     
     g_free(self->selection_quads);
     self->selection_quads = NULL;

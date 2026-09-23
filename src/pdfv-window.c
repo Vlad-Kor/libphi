@@ -10,7 +10,7 @@
 
 #include "pdfv-window.h"
 #include "document-history.h"
-#include "pdfv-document-view.h"
+#include <phi/phidocumentview.h>
 #include "pdfv-document-properties.h"
 #include "pdfv-page-selector.h"
 #include "pdfv-settings.h"
@@ -146,7 +146,7 @@ struct _PdfvWindow {
   GtkLabel *search_status;
 
   /* Current view (active tab) */
-  PdfvDocumentView *current_view;
+  PhiDocumentView *current_view;
   PdfvMarkdownEditor *current_editor;
   AdwTabPage *window_title_page;
   gboolean closing_window;
@@ -159,7 +159,7 @@ struct _PdfvWindow {
   gboolean presentation_mode_active;
   gboolean fullscreen_sidebar_was_visible;
   guint fullscreen_hide_timeout_id;
-  PdfvDocumentView *fullscreen_document_view;
+  PhiDocumentView *fullscreen_document_view;
   GtkScrolledWindow *fullscreen_scrolled_window;
   gboolean fullscreen_document_was_continuous;
   gboolean fullscreen_document_was_presentation;
@@ -207,7 +207,7 @@ static void workspace_search_close(PdfvWindow *self, gboolean commit);
 static void workspace_search_schedule(PdfvWindow *self, guint delay_ms);
 static void workspace_preview_cancel_load(PdfvWindow *self);
 static void fullscreen_schedule_fit_page(PdfvWindow *self,
-                                         PdfvDocumentView *view);
+                                         PhiDocumentView *view);
 static void fullscreen_refresh_document_mode(PdfvWindow *self);
 static void fullscreen_restore_document_mode(PdfvWindow *self);
 static gboolean presentation_is_active(PdfvWindow *self);
@@ -298,10 +298,10 @@ static ClosedTab *closed_tab_snapshot(AdwTabPage *page) {
   ClosedTab *tab = g_new0(ClosedTab, 1);
   tab->file = file ? g_object_ref(file) : NULL;
   tab->empty = empty;
-  PdfvDocumentView *view = g_object_get_data(
+  PhiDocumentView *view = g_object_get_data(
       G_OBJECT(stack), "document-view");
-  if (file && view && pdfv_document_view_get_document(view))
-    tab->page_number = pdfv_document_view_get_current_page(view);
+  if (file && view && phi_document_view_get_document(view))
+    tab->page_number = phi_document_view_get_current_page(view);
   return tab;
 }
 
@@ -340,9 +340,9 @@ static void remember_tab_position_ordered(PdfvWindow *self,
     return;
   }
 
-  PdfvDocumentView *view =
+  PhiDocumentView *view =
       g_object_get_data(G_OBJECT(stack), "document-view");
-  if (!view || !pdfv_document_view_get_document(view) ||
+  if (!view || !phi_document_view_get_document(view) ||
       g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(stack)),
                 "document") != 0)
     return;
@@ -350,7 +350,7 @@ static void remember_tab_position_ordered(PdfvWindow *self,
       .kind = PDFV_DOCUMENT_POSITION_PDF,
   };
   gint page_number = 0;
-  pdfv_document_view_get_scroll_state(
+  phi_document_view_get_scroll_state(
       view, &page_number, &position.offset, &position.horizontal);
   position.anchor = page_number;
   pdfv_document_history_remember_ordered(
@@ -489,10 +489,10 @@ static void apply_pdf_preferences(PdfvWindow *self) {
   for (guint i = 0; i < pages; i++) {
     AdwTabPage *page = adw_tab_view_get_nth_page(self->tab_view, i);
     GtkWidget *stack = adw_tab_page_get_child(page);
-    PdfvDocumentView *view = GTK_IS_STACK(stack)
+    PhiDocumentView *view = GTK_IS_STACK(stack)
         ? g_object_get_data(G_OBJECT(stack), "document-view") : NULL;
     if (view)
-      pdfv_document_view_set_inverted(view, inverted);
+      phi_document_view_set_inverted(view, inverted);
   }
 }
 
@@ -563,8 +563,8 @@ static void update_navigation_buttons(PdfvWindow *self) {
   gboolean can_forward = FALSE;
 
   if (self->current_view) {
-    can_back = pdfv_document_view_can_go_back(self->current_view);
-    can_forward = pdfv_document_view_can_go_forward(self->current_view);
+    can_back = phi_document_view_can_go_back(self->current_view);
+    can_forward = phi_document_view_can_go_forward(self->current_view);
   }
 
   /* Hide buttons when not usable */
@@ -579,7 +579,7 @@ static void update_zoom_info(PdfvWindow *self) {
     return;
   }
 
-  gdouble zoom = pdfv_document_view_get_zoom(self->current_view);
+  gdouble zoom = phi_document_view_get_zoom(self->current_view);
   gchar *text = g_strdup_printf("%.0f%%", zoom * 100);
   gtk_label_set_text(self->zoom_label, text);
   g_free(text);
@@ -589,7 +589,7 @@ static void update_sidebar_button(PdfvWindow *self) {
   gboolean has_document = FALSE;
 
   if (self->current_view) {
-    PhiDocument *doc = pdfv_document_view_get_document(self->current_view);
+    PhiDocument *doc = phi_document_view_get_document(self->current_view);
     has_document = (doc != NULL);
   }
 
@@ -694,7 +694,7 @@ static void rebuild_main_menu(PdfvWindow *self) {
     return;
 
   gboolean has_pdf = self->current_view &&
-      pdfv_document_view_get_document(self->current_view) != NULL;
+      phi_document_view_get_document(self->current_view) != NULL;
   rebuild_open_workspace_menu(self);
 
   g_menu_remove_all(self->file_menu_section);
@@ -755,7 +755,7 @@ static void rebuild_application_main_menus(PdfvWindow *source) {
   }
 }
 
-static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
+static void on_view_notify(PhiDocumentView *view, GParamSpec *pspec,
                            PdfvWindow *self) {
   const gchar *name = g_param_spec_get_name(pspec);
 
@@ -772,7 +772,7 @@ static void on_view_notify(PdfvDocumentView *view, GParamSpec *pspec,
   }
 }
 
-static void on_link_activated(PdfvDocumentView *view, const gchar *uri,
+static void on_link_activated(PhiDocumentView *view, const gchar *uri,
                               PdfvWindow *self) {
   (void)view;
   GtkUriLauncher *launcher = gtk_uri_launcher_new(uri);
@@ -780,7 +780,7 @@ static void on_link_activated(PdfvDocumentView *view, const gchar *uri,
   g_object_unref(launcher);
 }
 
-static void on_search_completed(PdfvDocumentView *view, gint match_count,
+static void on_search_completed(PhiDocumentView *view, gint match_count,
                                 PdfvWindow *self) {
   (void)view;
   gchar *status;
@@ -794,7 +794,7 @@ static void on_search_completed(PdfvDocumentView *view, gint match_count,
 }
 
 static void setup_document_view_signals(PdfvWindow *self,
-                                        PdfvDocumentView *view) {
+                                        PhiDocumentView *view) {
   g_signal_connect(view, "notify", G_CALLBACK(on_view_notify), self);
   g_signal_connect(view, "link-activated", G_CALLBACK(on_link_activated), self);
   g_signal_connect(view, "search-completed", G_CALLBACK(on_search_completed),
@@ -1107,7 +1107,7 @@ static void on_thumbnail_activated(PdfvThumbnailList *list, guint position,
                                    PdfvWindow *self) {
   (void)list;
   if (self->current_view && position != GTK_INVALID_LIST_POSITION)
-    pdfv_document_view_go_to_page(self->current_view, (gint)position);
+    phi_document_view_go_to_page(self->current_view, (gint)position);
 }
 
 static GListModel *workspace_create_children(gpointer item,
@@ -1694,10 +1694,10 @@ static gboolean workspace_preview_show_loaded(PdfvWindow *self, GFile *file,
     return FALSE;
   GtkWidget *stack = adw_tab_page_get_child(self->workspace_preview_tab);
   GFile *loaded_file = g_object_get_data(G_OBJECT(stack), "document-file");
-  PdfvDocumentView *view =
+  PhiDocumentView *view =
       g_object_get_data(G_OBJECT(stack), "document-view");
   if (!loaded_file || !g_file_equal(loaded_file, file) ||
-      !pdfv_document_view_get_document(view))
+      !phi_document_view_get_document(view))
     return FALSE;
 
   /* A request for another file may have hidden this already-loaded document.
@@ -1708,7 +1708,7 @@ static gboolean workspace_preview_show_loaded(PdfvWindow *self, GFile *file,
     g_cancellable_cancel(opening);
   g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
-  pdfv_document_view_go_to_page(view, page);
+  phi_document_view_go_to_page(view, page);
   adw_tab_view_set_selected_page(self->tab_view, self->workspace_preview_tab);
   self->current_view = view;
   update_navigation_buttons(self);
@@ -1772,12 +1772,12 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
       workspace_document_cache_lookup(self, group->file);
   if (cached) {
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
-    PdfvDocumentView *view =
+    PhiDocumentView *view =
         g_object_get_data(G_OBJECT(stack), "document-view");
-    pdfv_document_view_set_document(view, cached);
-    pdfv_document_view_go_to_page(view, match->page);
+    phi_document_view_set_document(view, cached);
+    phi_document_view_go_to_page(view, match->page);
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
-    pdfv_document_view_zoom_fit_width(view);
+    phi_document_view_zoom_fit_width(view);
     g_object_set_data_full(G_OBJECT(stack), "document-file",
                            g_object_ref(group->file), g_object_unref);
     gchar *basename = g_file_get_basename(group->file);
@@ -2742,8 +2742,8 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   gtk_stack_add_named(GTK_STACK(stack), loading, "loading");
 
   /* Document view */
-  PdfvDocumentView *view = pdfv_document_view_new();
-  pdfv_document_view_set_inverted(
+  PhiDocumentView *view = phi_document_view_new();
+  phi_document_view_set_inverted(
       view, pdfv_settings_get_pdf_inverted(self->settings));
   setup_document_view_signals(self, view);
 
@@ -2753,7 +2753,7 @@ static GtkWidget *create_tab_content(PdfvWindow *self) {
   gtk_widget_set_hexpand(scrolled, TRUE);
   gtk_widget_set_vexpand(scrolled, TRUE);
   gtk_stack_add_named(GTK_STACK(stack), scrolled, "document");
-  pdfv_document_view_capture_zoom_scroll(view, stack);
+  phi_document_view_capture_zoom_scroll(view, stack);
 
   /* Start with empty state */
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "empty");
@@ -2842,11 +2842,11 @@ static gboolean fit_width_after_allocate(GtkWidget *widget,
   if (request->settled_frames++ == 0)
     return G_SOURCE_CONTINUE;
 
-  PdfvDocumentView *view = PDFV_DOCUMENT_VIEW(widget);
-  if (pdfv_document_view_get_document(view)) {
-    pdfv_document_view_zoom_fit_width(view);
+  PhiDocumentView *view = PHI_DOCUMENT_VIEW(widget);
+  if (phi_document_view_get_document(view)) {
+    phi_document_view_zoom_fit_width(view);
     if (request->has_position)
-      pdfv_document_view_restore_scroll_state(
+      phi_document_view_restore_scroll_state(
           view, (gint)request->position.anchor, request->position.offset,
           request->position.horizontal);
   }
@@ -2889,15 +2889,15 @@ static gboolean finish_document_load_idle(gpointer user_data) {
         self->workspace_preview_cancellable == request->cancellable)
       g_clear_object(&self->workspace_preview_cancellable);
     g_object_set_data(G_OBJECT(stack), "open-cancellable", NULL);
-    PdfvDocumentView *view =
+    PhiDocumentView *view =
         g_object_get_data(G_OBJECT(stack), "document-view");
-    pdfv_document_view_set_document(view, document);
+    phi_document_view_set_document(view, document);
     gpointer target_page_data =
         g_object_get_data(G_OBJECT(stack), "open-target-page");
     gint target_page = target_page_data
                            ? GPOINTER_TO_INT(target_page_data) - 1
                            : request->target_page;
-    pdfv_document_view_go_to_page(view, target_page);
+    phi_document_view_go_to_page(view, target_page);
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "document");
     if (request->fit_width) {
       FitWidthRequest *fit_request = g_new0(FitWidthRequest, 1);
@@ -2906,7 +2906,7 @@ static gboolean finish_document_load_idle(gpointer user_data) {
       gtk_widget_add_tick_callback(GTK_WIDGET(view), fit_width_after_allocate,
                                    fit_request, g_free);
     } else if (request->has_position) {
-      pdfv_document_view_restore_scroll_state(
+      phi_document_view_restore_scroll_state(
           view, (gint)request->position.anchor, request->position.offset,
           request->position.horizontal);
     }
@@ -3271,7 +3271,7 @@ static void on_tab_selected(AdwTabView *tab_view, GParamSpec *pspec,
   update_markdown_actions(self);
 
   if (self->current_view) {
-    PhiDocument *doc = pdfv_document_view_get_document(self->current_view);
+    PhiDocument *doc = phi_document_view_get_document(self->current_view);
     if (doc) {
       populate_thumbnails(self, doc);
       if (!gtk_widget_get_visible(self->workspace_search_overlay) &&
@@ -3395,7 +3395,7 @@ static gboolean on_tab_close_page(AdwTabView *tab_view, AdwTabPage *page,
       g_object_get_data(G_OBJECT(stack), "open-cancellable");
   if (open_cancellable)
     g_cancellable_cancel(open_cancellable);
-  PdfvDocumentView *view = g_object_get_data(G_OBJECT(stack), "document-view");
+  PhiDocumentView *view = g_object_get_data(G_OBJECT(stack), "document-view");
   PdfvMarkdownEditor *editor =
       g_object_get_data(G_OBJECT(stack), "markdown-editor");
   gboolean restore_return_page =
@@ -3668,7 +3668,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
 
   gboolean has_document =
       self->current_view &&
-      pdfv_document_view_get_document(self->current_view) != NULL;
+      phi_document_view_get_document(self->current_view) != NULL;
   if (!has_document)
     adw_overlay_split_view_set_show_sidebar(self->split_view, FALSE);
   update_sidebar_button(self);
@@ -4102,10 +4102,10 @@ static void collect_workspace_move_tabs(WorkspaceMoveRequest *request) {
       tab->editor = g_object_get_data(G_OBJECT(stack), "markdown-editor");
       if (tab->editor)
         g_object_ref(tab->editor);
-      PdfvDocumentView *view = g_object_get_data(
+      PhiDocumentView *view = g_object_get_data(
           G_OBJECT(stack), "document-view");
-      tab->page_number = view && pdfv_document_view_get_document(view)
-          ? pdfv_document_view_get_current_page(view) : 0;
+      tab->page_number = view && phi_document_view_get_document(view)
+          ? phi_document_view_get_current_page(view) : 0;
       g_ptr_array_add(request->tabs, tab);
     }
   }
@@ -4960,7 +4960,7 @@ static void rebind_transferred_tab(PdfvWindow *source,
                                    PdfvWindow *destination,
                                    AdwTabPage *page) {
   GtkWidget *stack = adw_tab_page_get_child(page);
-  PdfvDocumentView *view = GTK_IS_STACK(stack)
+  PhiDocumentView *view = GTK_IS_STACK(stack)
       ? g_object_get_data(G_OBJECT(stack), "document-view") : NULL;
   PdfvMarkdownEditor *editor = GTK_IS_STACK(stack)
       ? g_object_get_data(G_OBJECT(stack), "markdown-editor") : NULL;
@@ -6056,7 +6056,7 @@ static void action_document_properties(GSimpleAction *action,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   PhiDocument *document = self->current_view
-      ? pdfv_document_view_get_document(self->current_view) : NULL;
+      ? phi_document_view_get_document(self->current_view) : NULL;
   if (!document)
     return;
   GFile *file = workspace_active_file(self);
@@ -6064,7 +6064,7 @@ static void action_document_properties(GSimpleAction *action,
     return;
   pdfv_document_properties_present(
       GTK_WIDGET(self), file, document,
-      pdfv_document_view_get_current_page(self->current_view));
+      phi_document_view_get_current_page(self->current_view));
   g_object_unref(file);
 }
 
@@ -6074,7 +6074,7 @@ static void action_go_back(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_go_back(self->current_view);
+    phi_document_view_go_back(self->current_view);
 }
 
 static void action_go_forward(GSimpleAction *action, GVariant *parameter,
@@ -6083,7 +6083,7 @@ static void action_go_forward(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_go_forward(self->current_view);
+    phi_document_view_go_forward(self->current_view);
 }
 
 static void action_zoom_in(GSimpleAction *action, GVariant *parameter,
@@ -6092,7 +6092,7 @@ static void action_zoom_in(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_zoom_in(self->current_view);
+    phi_document_view_zoom_in(self->current_view);
 }
 
 static void action_zoom_out(GSimpleAction *action, GVariant *parameter,
@@ -6101,7 +6101,7 @@ static void action_zoom_out(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_zoom_out(self->current_view);
+    phi_document_view_zoom_out(self->current_view);
 }
 
 static void action_zoom_reset(GSimpleAction *action, GVariant *parameter,
@@ -6110,7 +6110,7 @@ static void action_zoom_reset(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_set_zoom(self->current_view, 1.0);
+    phi_document_view_set_zoom(self->current_view, 1.0);
 }
 
 static void action_zoom_fit_width(GSimpleAction *action, GVariant *parameter,
@@ -6119,7 +6119,7 @@ static void action_zoom_fit_width(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_zoom_fit_width(self->current_view);
+    phi_document_view_zoom_fit_width(self->current_view);
 }
 
 static void action_zoom_fit_page(GSimpleAction *action, GVariant *parameter,
@@ -6128,7 +6128,7 @@ static void action_zoom_fit_page(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (self->current_view)
-    pdfv_document_view_zoom_fit_page(self->current_view);
+    phi_document_view_zoom_fit_page(self->current_view);
 }
 
 typedef struct {
@@ -6159,18 +6159,18 @@ static gboolean fullscreen_fit_page_after_allocate(
   }
   if (request->settled_frames++ == 0)
     return G_SOURCE_CONTINUE;
-  PdfvDocumentView *view = PDFV_DOCUMENT_VIEW(widget);
-  pdfv_document_view_zoom_fit_page_full(view);
-  pdfv_document_view_set_minimum_zoom(
-      view, pdfv_document_view_get_zoom(view));
+  PhiDocumentView *view = PHI_DOCUMENT_VIEW(widget);
+  phi_document_view_zoom_fit_page_full(view);
+  phi_document_view_set_minimum_zoom(
+      view, phi_document_view_get_zoom(view));
   return G_SOURCE_REMOVE;
 }
 
 static void fullscreen_schedule_fit_page(PdfvWindow *self,
-                                         PdfvDocumentView *view) {
+                                         PhiDocumentView *view) {
   if (!view || view != self->fullscreen_document_view)
     return;
-  pdfv_document_view_set_minimum_zoom(view, 0.0);
+  phi_document_view_set_minimum_zoom(view, 0.0);
   FullscreenFitRequest *request = g_new0(FullscreenFitRequest, 1);
   request->generation = ++self->fullscreen_fit_generation;
   g_object_set_data(G_OBJECT(view), "fullscreen-fit-generation",
@@ -6183,15 +6183,15 @@ static void fullscreen_schedule_fit_page(PdfvWindow *self,
 static void fullscreen_restore_document_mode(PdfvWindow *self) {
   if (!self->fullscreen_document_view)
     return;
-  PdfvDocumentView *view = self->fullscreen_document_view;
+  PhiDocumentView *view = self->fullscreen_document_view;
   g_object_set_data(G_OBJECT(view), "fullscreen-fit-generation",
                     GUINT_TO_POINTER(++self->fullscreen_fit_generation));
-  pdfv_document_view_set_minimum_zoom(
+  phi_document_view_set_minimum_zoom(
       view, self->fullscreen_document_minimum_zoom);
-  pdfv_document_view_set_continuous(
+  phi_document_view_set_continuous(
       view, self->fullscreen_document_was_continuous);
-  pdfv_document_view_set_zoom(view, self->fullscreen_document_zoom);
-  pdfv_document_view_set_presentation_mode(
+  phi_document_view_set_zoom(view, self->fullscreen_document_zoom);
+  phi_document_view_set_presentation_mode(
       view, self->fullscreen_document_was_presentation);
   if (self->fullscreen_scrolled_window) {
     gtk_scrolled_window_set_policy(
@@ -6209,18 +6209,18 @@ static void fullscreen_refresh_document_mode(PdfvWindow *self) {
   if (!self->fullscreen_chrome_active ||
       !self->presentation_mode_active ||
       !self->current_view ||
-      !pdfv_document_view_get_document(self->current_view))
+      !phi_document_view_get_document(self->current_view))
     return;
 
   self->fullscreen_document_view = g_object_ref(self->current_view);
   self->fullscreen_document_was_continuous =
-      pdfv_document_view_get_continuous(self->current_view);
+      phi_document_view_get_continuous(self->current_view);
   self->fullscreen_document_was_presentation =
-      pdfv_document_view_get_presentation_mode(self->current_view);
+      phi_document_view_get_presentation_mode(self->current_view);
   self->fullscreen_document_zoom =
-      pdfv_document_view_get_zoom(self->current_view);
+      phi_document_view_get_zoom(self->current_view);
   self->fullscreen_document_minimum_zoom =
-      pdfv_document_view_get_minimum_zoom(self->current_view);
+      phi_document_view_get_minimum_zoom(self->current_view);
   GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(self->current_view));
   while (parent && !GTK_IS_SCROLLED_WINDOW(parent))
     parent = gtk_widget_get_parent(parent);
@@ -6234,9 +6234,9 @@ static void fullscreen_refresh_document_mode(PdfvWindow *self) {
     gtk_scrolled_window_set_policy(self->fullscreen_scrolled_window,
                                    GTK_POLICY_NEVER, GTK_POLICY_NEVER);
   }
-  pdfv_document_view_set_presentation_mode(self->current_view, TRUE);
-  pdfv_document_view_set_minimum_zoom(self->current_view, 0.0);
-  pdfv_document_view_set_continuous(self->current_view, FALSE);
+  phi_document_view_set_presentation_mode(self->current_view, TRUE);
+  phi_document_view_set_minimum_zoom(self->current_view, 0.0);
+  phi_document_view_set_continuous(self->current_view, FALSE);
   fullscreen_schedule_fit_page(self, self->current_view);
 }
 
@@ -6245,7 +6245,7 @@ static gboolean presentation_is_active(PdfvWindow *self) {
       self->presentation_mode_active &&
       self->current_view &&
       self->current_view == self->fullscreen_document_view &&
-      pdfv_document_view_get_document(self->current_view);
+      phi_document_view_get_document(self->current_view);
 }
 
 static void presentation_set_end_visible(PdfvWindow *self,
@@ -6264,13 +6264,13 @@ static void presentation_next(PdfvWindow *self) {
   if (gtk_widget_get_visible(self->presentation_end_overlay))
     return;
   PhiDocument *document =
-      pdfv_document_view_get_document(self->current_view);
-  gint page = pdfv_document_view_get_current_page(self->current_view);
+      phi_document_view_get_document(self->current_view);
+  gint page = phi_document_view_get_current_page(self->current_view);
   if (page + 1 >= phi_document_get_n_pages(document)) {
     presentation_set_end_visible(self, TRUE);
     return;
   }
-  pdfv_document_view_go_to_page(self->current_view, page + 1);
+  phi_document_view_go_to_page(self->current_view, page + 1);
 }
 
 static void presentation_previous(PdfvWindow *self) {
@@ -6280,8 +6280,8 @@ static void presentation_previous(PdfvWindow *self) {
     presentation_set_end_visible(self, FALSE);
     return;
   }
-  gint page = pdfv_document_view_get_current_page(self->current_view);
-  pdfv_document_view_go_to_page(self->current_view, page - 1);
+  gint page = phi_document_view_get_current_page(self->current_view);
+  phi_document_view_go_to_page(self->current_view, page - 1);
 }
 
 static gboolean on_presentation_key_pressed(
@@ -6429,7 +6429,7 @@ static void set_fullscreen_chrome(PdfvWindow *self, gboolean fullscreen) {
   gtk_widget_set_visible(GTK_WIDGET(self->presentation_exit_button), FALSE);
   if (self->fullscreen_sidebar_was_visible &&
       (self->workspace || (self->current_view &&
-       pdfv_document_view_get_document(self->current_view))))
+       phi_document_view_get_document(self->current_view))))
     adw_overlay_split_view_set_show_sidebar(self->split_view, TRUE);
   update_sidebar_button(self);
 }
@@ -6485,7 +6485,7 @@ static void action_present(GSimpleAction *action, GVariant *parameter,
   (void)parameter;
   PdfvWindow *self = PDFV_WINDOW(user_data);
   if (!self->current_view ||
-      !pdfv_document_view_get_document(self->current_view))
+      !phi_document_view_get_document(self->current_view))
     return;
 
   if (self->fullscreen_chrome_active ||
@@ -6527,7 +6527,7 @@ static void action_toggle_sidebar(GSimpleAction *action, GVariant *parameter,
   /* Workspaces also have useful sidebar content without an open document. */
   if (self->workspace ||
       (self->current_view &&
-       pdfv_document_view_get_document(self->current_view))) {
+       phi_document_view_get_document(self->current_view))) {
     gboolean visible =
         adw_overlay_split_view_get_show_sidebar(self->split_view);
     adw_overlay_split_view_set_show_sidebar(self->split_view, !visible);
@@ -6556,8 +6556,8 @@ static void action_page_next(GSimpleAction *action, GVariant *parameter,
     return;
   }
   if (self->current_view) {
-    gint page = pdfv_document_view_get_current_page(self->current_view);
-    pdfv_document_view_go_to_page(self->current_view, page + 1);
+    gint page = phi_document_view_get_current_page(self->current_view);
+    phi_document_view_go_to_page(self->current_view, page + 1);
   }
 }
 
@@ -6571,8 +6571,8 @@ static void action_page_prev(GSimpleAction *action, GVariant *parameter,
     return;
   }
   if (self->current_view) {
-    gint page = pdfv_document_view_get_current_page(self->current_view);
-    pdfv_document_view_go_to_page(self->current_view, page - 1);
+    gint page = phi_document_view_get_current_page(self->current_view);
+    phi_document_view_go_to_page(self->current_view, page - 1);
   }
 }
 
@@ -6603,7 +6603,7 @@ static void action_find_next(GSimpleAction *action, GVariant *parameter,
     return;
   }
   if (self->current_view)
-    pdfv_document_view_search_next(self->current_view);
+    phi_document_view_search_next(self->current_view);
 }
 
 static void action_find_prev(GSimpleAction *action, GVariant *parameter,
@@ -6617,7 +6617,7 @@ static void action_find_prev(GSimpleAction *action, GVariant *parameter,
     return;
   }
   if (self->current_view)
-    pdfv_document_view_search_prev(self->current_view);
+    phi_document_view_search_prev(self->current_view);
 }
 
 static GActionEntry win_actions[] = {
@@ -6700,7 +6700,7 @@ static void on_search_changed(GtkSearchEntry *entry, PdfvWindow *self) {
   const gchar *text = gtk_editable_get_text(GTK_EDITABLE(entry));
 
   if (self->current_view) {
-    pdfv_document_view_search(self->current_view, text);
+    phi_document_view_search(self->current_view, text);
 
     /* Update status label - show immediate feedback */
     if (!text || !*text) {
@@ -6716,20 +6716,20 @@ static void on_search_changed(GtkSearchEntry *entry, PdfvWindow *self) {
 static void on_search_next_match(GtkSearchEntry *entry, PdfvWindow *self) {
   (void)entry;
   if (self->current_view)
-    pdfv_document_view_search_next(self->current_view);
+    phi_document_view_search_next(self->current_view);
 }
 
 static void on_search_prev_match(GtkSearchEntry *entry, PdfvWindow *self) {
   (void)entry;
   if (self->current_view)
-    pdfv_document_view_search_prev(self->current_view);
+    phi_document_view_search_prev(self->current_view);
 }
 
 static void on_search_stop(GtkSearchEntry *entry, PdfvWindow *self) {
   (void)entry;
   gtk_search_bar_set_search_mode(self->search_bar, FALSE);
   if (self->current_view)
-    pdfv_document_view_clear_search(self->current_view);
+    phi_document_view_clear_search(self->current_view);
   gtk_label_set_text(self->search_status, "");
 }
 
@@ -6761,13 +6761,13 @@ static AdwTabPage *on_tab_overview_create_tab(AdwTabOverview *overview,
 static void on_zoom_in_clicked(GtkButton *button, PdfvWindow *self) {
   (void)button;
   if (self->current_view)
-    pdfv_document_view_zoom_in(self->current_view);
+    phi_document_view_zoom_in(self->current_view);
 }
 
 static void on_zoom_out_clicked(GtkButton *button, PdfvWindow *self) {
   (void)button;
   if (self->current_view)
-    pdfv_document_view_zoom_out(self->current_view);
+    phi_document_view_zoom_out(self->current_view);
 }
 
 static void on_zoom_label_clicked(GtkGestureClick *gesture, gint n_press,
@@ -6777,7 +6777,7 @@ static void on_zoom_label_clicked(GtkGestureClick *gesture, gint n_press,
   (void)x;
   (void)y;
   if (self->current_view)
-    pdfv_document_view_zoom_fit_width(self->current_view);
+    phi_document_view_zoom_fit_width(self->current_view);
 }
 
 static void on_sidebar_show_changed(AdwOverlaySplitView *split_view,
@@ -7753,7 +7753,7 @@ void pdfv_window_new_tab(PdfvWindow *self) {
   adw_tab_view_set_selected_page(self->tab_view, page);
 }
 
-PdfvDocumentView *pdfv_window_get_current_view(PdfvWindow *self) {
+PhiDocumentView *pdfv_window_get_current_view(PdfvWindow *self) {
   g_return_val_if_fail(PDFV_IS_WINDOW(self), NULL);
   return self->current_view;
 }

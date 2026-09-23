@@ -20,7 +20,6 @@ pdfv_sources = [
 	'main.c',
 	'pdfv-application.c',
 	'pdfv-window.c',
-	'pdfv-document-view.c',
 	'document-history.c',
 	'pdfv-document-properties.c',
 	'pdfv-page-selector.c',

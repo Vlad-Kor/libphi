@@ -5,7 +5,7 @@
 #ifndef PDFV_PAGE_SELECTOR_H
 #define PDFV_PAGE_SELECTOR_H
 
-#include "pdfv-document-view.h"
+#include <phi/phidocumentview.h>
 
 G_BEGIN_DECLS
 
@@ -15,7 +15,7 @@ G_DECLARE_FINAL_TYPE(PdfvPageSelector, pdfv_page_selector, PDFV,
 
 PdfvPageSelector *pdfv_page_selector_new(void);
 void pdfv_page_selector_set_view(PdfvPageSelector *self,
-                                 PdfvDocumentView *view);
+                                 PhiDocumentView *view);
 
 G_END_DECLS
 

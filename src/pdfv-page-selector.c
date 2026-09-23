@@ -12,19 +12,19 @@ struct _PdfvPageSelector {
 
   GtkEntry *entry;
   GtkLabel *count_label;
-  PdfvDocumentView *view;
+  PhiDocumentView *view;
 };
 
 G_DEFINE_TYPE(PdfvPageSelector, pdfv_page_selector, GTK_TYPE_BOX)
 
 static void pdfv_page_selector_update(PdfvPageSelector *self) {
   PhiDocument *document = self->view
-      ? pdfv_document_view_get_document(self->view) : NULL;
+      ? phi_document_view_get_document(self->view) : NULL;
   gtk_widget_set_visible(GTK_WIDGET(self), document != NULL);
   if (!document)
     return;
 
-  gint page = pdfv_document_view_get_current_page(self->view);
+  gint page = phi_document_view_get_current_page(self->view);
   gint pages = phi_document_get_n_pages(document);
   gchar *page_text = g_strdup_printf("%d", page + 1);
   gchar *count_text = g_strdup_printf("of %d", pages);
@@ -55,7 +55,7 @@ static void pdfv_page_selector_update(PdfvPageSelector *self) {
   g_free(page_text);
 }
 
-static void on_view_changed(PdfvDocumentView *view, GParamSpec *pspec,
+static void on_view_changed(PhiDocumentView *view, GParamSpec *pspec,
                             PdfvPageSelector *self) {
   (void)view;
   (void)pspec;
@@ -65,7 +65,7 @@ static void on_view_changed(PdfvDocumentView *view, GParamSpec *pspec,
 static void on_entry_activated(GtkEntry *entry, PdfvPageSelector *self) {
   if (!self->view)
     return;
-  PhiDocument *document = pdfv_document_view_get_document(self->view);
+  PhiDocument *document = phi_document_view_get_document(self->view);
   if (!document)
     return;
 
@@ -78,7 +78,7 @@ static void on_entry_activated(GtkEntry *entry, PdfvPageSelector *self) {
   gint pages = phi_document_get_n_pages(document);
   if (normalized && end && end != normalized && *end == '\0' &&
       requested >= 1 && requested <= pages)
-    pdfv_document_view_go_to_page(self->view, (gint)requested - 1);
+    phi_document_view_go_to_page(self->view, (gint)requested - 1);
   pdfv_page_selector_update(self);
   g_free(normalized);
 }
@@ -96,15 +96,15 @@ static gboolean on_entry_scroll(GtkEventControllerScroll *controller,
   (void)dx;
   if (!self->view || dy == 0)
     return GDK_EVENT_PROPAGATE;
-  gint page = pdfv_document_view_get_current_page(self->view);
-  pdfv_document_view_go_to_page(self->view, page + (dy > 0 ? 1 : -1));
+  gint page = phi_document_view_get_current_page(self->view);
+  phi_document_view_go_to_page(self->view, page + (dy > 0 ? 1 : -1));
   return GDK_EVENT_STOP;
 }
 
 void pdfv_page_selector_set_view(PdfvPageSelector *self,
-                                 PdfvDocumentView *view) {
+                                 PhiDocumentView *view) {
   g_return_if_fail(PDFV_IS_PAGE_SELECTOR(self));
-  g_return_if_fail(view == NULL || PDFV_IS_DOCUMENT_VIEW(view));
+  g_return_if_fail(view == NULL || PHI_IS_DOCUMENT_VIEW(view));
 
   if (self->view == view) {
     pdfv_page_selector_update(self);
