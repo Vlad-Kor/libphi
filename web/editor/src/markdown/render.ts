@@ -265,7 +265,7 @@ export function wireRenderedLinks(root: HTMLElement): void {
   root.querySelectorAll<HTMLElement>("[data-wikilink]").forEach((element) => {
     element.addEventListener("click", (event) => {
       event.preventDefault();
-      sendNative(element.classList.contains("internal-embed") ? "link/open" : "link/open", {
+      sendNative("link/open", {
         target: element.dataset.wikilink ?? "",
         ctrl: (event as MouseEvent).ctrlKey,
         shift: (event as MouseEvent).shiftKey,

@@ -469,26 +469,13 @@ static void handle_completion(PdfvMarkdownEditor *self, const gchar *type,
   g_clear_error(&error);
 }
 
-static void handle_link(PdfvMarkdownEditor *self, const gchar *type,
-                        const gchar *id, JsonObject *payload) {
+static void handle_link_open(PdfvMarkdownEditor *self, JsonObject *payload) {
   const gchar *target = payload ? json_object_get_string_member_with_default(
                                       payload, "target", "")
                                : "";
   GError *error = NULL;
   GFile *file = resolve_target_note(self, target, &error);
-  if (g_str_equal(type, "link/resolve")) {
-    JsonObject *value = json_object_new_owned();
-    json_object_set_boolean_member(value, "exists", file != NULL);
-    if (file) {
-      gchar *relative = pdfv_markdown_vault_adapter_relative_path(self->vault,
-                                                                  file);
-      json_object_set_string_member(value, "path", relative);
-      g_free(relative);
-    }
-    JsonNode *node = json_node_new(JSON_NODE_OBJECT);
-    json_node_take_object(node, value);
-    send_response_node(self, id, node, NULL);
-  } else if (file) {
+  if (file) {
     g_object_set_data(G_OBJECT(file), "markdown-link-target",
                       (gpointer)target);
     g_signal_emit(self, editor_signals[SIGNAL_OPEN_FILE], 0, file);
@@ -827,31 +814,11 @@ static void handle_attachment_action(PdfvMarkdownEditor *self,
       send_response_error(self, id, error);
     else
       emit_error(self, error ? error->message : "Attachment was not found");
-  } else if (g_str_equal(type, "attachment/open")) {
+  } else {
     g_object_set_data(G_OBJECT(file), "markdown-link-target",
                       (gpointer)target);
     g_signal_emit(self, editor_signals[SIGNAL_OPEN_FILE], 0, file);
     g_object_set_data(G_OBJECT(file), "markdown-link-target", NULL);
-  } else {
-    gchar *relative_path = pdfv_markdown_vault_adapter_relative_path(
-        self->vault, file);
-    JsonObject *value = json_object_new_owned();
-    json_object_set_string_member(value, "path", relative_path);
-    gchar *local_path = g_file_get_path(file);
-    if (local_path) {
-      gint width = 0;
-      gint height = 0;
-      if (gdk_pixbuf_get_file_info(local_path, &width, &height) &&
-          width > 0 && height > 0) {
-        json_object_set_int_member(value, "width", width);
-        json_object_set_int_member(value, "height", height);
-      }
-    }
-    JsonNode *node = json_node_new(JSON_NODE_OBJECT);
-    json_node_take_object(node, value);
-    send_response_node(self, id, node, NULL);
-    g_free(local_path);
-    g_free(relative_path);
   }
   g_clear_error(&error);
   g_clear_object(&file);
@@ -952,10 +919,9 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
     }
   } else if (g_str_has_prefix(type, "completion/")) {
     handle_completion(self, type, id, payload);
-  } else if (g_str_has_prefix(type, "link/")) {
-    handle_link(self, type, id, payload);
-  } else if (g_str_equal(type, "embed/read") ||
-             g_str_equal(type, "embed/resolve")) {
+  } else if (g_str_equal(type, "link/open")) {
+    handle_link_open(self, payload);
+  } else if (g_str_equal(type, "embed/read")) {
     handle_embed_read(self, id, payload);
   } else if (g_str_equal(type, "attachment/create")) {
     handle_attachment_create(self, id, payload);
@@ -969,12 +935,6 @@ static void on_bridge_message(PdfvMarkdownEditorBridge *bridge,
                                      payload, "uri", "")
                                : "";
     g_signal_emit(self, editor_signals[SIGNAL_OPEN_EXTERNAL_URI], 0, uri);
-  } else if (g_str_equal(type, "renderer/ready")) {
-    const gchar *renderer = payload
-                                ? json_object_get_string_member_with_default(
-                                      payload, "renderer", "unknown")
-                                : "unknown";
-    g_debug("Markdown renderer ready: %s", renderer);
   } else if (g_str_equal(type, "table/context")) {
     self->table_context_inside = payload &&
         json_object_get_boolean_member_with_default(payload, "inside", FALSE);

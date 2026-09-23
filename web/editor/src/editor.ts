@@ -1002,7 +1002,6 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
         Number(payload.index ?? -1),
       ); break;
       case "document/flush": void this.flush().then((snapshot) => sendNative("document/flush", { ...snapshot }, message.id)); break;
-      case "vault/files-changed": break;
       default: reportError(new Error(`Unknown native message: ${message.type}`), "bridge", this.documentPath);
     }
   }
