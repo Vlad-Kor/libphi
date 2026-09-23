@@ -131,7 +131,6 @@ struct _PdfvWindow {
   GFile *workspace_preview_file;
   GCancellable *workspace_preview_cancellable;
   guint workspace_preview_delay_id;
-  gint workspace_preview_page;
   guint workspace_preview_generation;
 
   /* Floating zoom controls */
@@ -179,9 +178,6 @@ struct _PdfvWindow {
   PdfvSettings *settings;
   PdfvDocumentHistory *document_history;
   guint settings_update_timeout_id;
-
-  /* Outline data for current document */
-  PhiOutlineItem *current_outline;
 };
 
 G_DEFINE_TYPE(PdfvWindow, pdfv_window, ADW_TYPE_APPLICATION_WINDOW)
@@ -1731,7 +1727,6 @@ static void workspace_preview_selected_now(PdfvWindow *self) {
                       "skip-document-position-history",
                       GINT_TO_POINTER(1));
   }
-  self->workspace_preview_page = match->page;
 
   if (file_is_markdown(group->file)) {
     workspace_preview_cancel_load(self);
@@ -1833,7 +1828,6 @@ static void workspace_preview_selected(PdfvWindow *self) {
     return;
   }
 
-  self->workspace_preview_page = match->page;
   gboolean target_changed =
       !self->workspace_preview_file ||
       !g_file_equal(self->workspace_preview_file, group->file);
@@ -6947,18 +6941,12 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->document_history);
   g_clear_pointer(&self->settings, pdfv_settings_unref);
 
-  if (self->current_outline) {
-    phi_outline_item_free(self->current_outline);
-    self->current_outline = NULL;
-  }
-
   G_OBJECT_CLASS(pdfv_window_parent_class)->dispose(object);
 }
 
 static void pdfv_window_init(PdfvWindow *self) {
   self->current_view = NULL;
   self->current_editor = NULL;
-  self->current_outline = NULL;
   self->workspace_pending_group = -1;
   self->settings = pdfv_settings_get_default();
   pdfv_settings_get_window_size(self->settings,
