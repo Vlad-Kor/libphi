@@ -675,28 +675,30 @@ PdfvMarkdownPreview *pdfv_markdown_vault_adapter_preview_finish(
   return g_task_propagate_pointer(G_TASK(result), error);
 }
 
-GBytes *pdfv_markdown_vault_adapter_read_bytes(
+/* Opens a vault file for streaming. Only the type sniffing reads data here;
+ * the caller reads the rest, which WebKit does asynchronously. */
+GInputStream *pdfv_markdown_vault_adapter_open_read(
     PdfvMarkdownVaultAdapter *self, const gchar *relative_path,
-    gchar **content_type, GError **error) {
+    gint64 *size, gchar **content_type, GError **error) {
   GFile *file = pdfv_markdown_vault_adapter_resolve(self, relative_path, error);
   if (!file)
     return NULL;
-  gchar *contents = NULL;
-  gsize length = 0;
-  if (!g_file_load_contents(file, NULL, &contents, &length, NULL, error)) {
-    g_object_unref(file);
-    return NULL;
+  GFileInfo *info = g_file_query_info(
+      file, G_FILE_ATTRIBUTE_STANDARD_SIZE ","
+            G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE,
+      G_FILE_QUERY_INFO_NONE, NULL, error);
+  GFileInputStream *stream = info ? g_file_read(file, NULL, error) : NULL;
+  if (stream) {
+    if (size)
+      *size = g_file_info_get_size(info);
+    if (content_type) {
+      const gchar *type = g_file_info_get_content_type(info);
+      *content_type = type ? g_content_type_get_mime_type(type) : NULL;
+    }
   }
-  if (content_type) {
-    gboolean uncertain = FALSE;
-    gchar *guessed = g_content_type_guess(relative_path,
-                                          (const guchar *)contents,
-                                          MIN(length, 512), &uncertain);
-    *content_type = g_content_type_get_mime_type(guessed);
-    g_free(guessed);
-  }
+  g_clear_object(&info);
   g_object_unref(file);
-  return g_bytes_new_take(contents, length);
+  return stream ? G_INPUT_STREAM(stream) : NULL;
 }
 
 static GPtrArray *extract_matches(PdfvMarkdownVaultAdapter *self, GFile *file,

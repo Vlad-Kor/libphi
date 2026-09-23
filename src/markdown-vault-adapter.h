@@ -57,9 +57,9 @@ void pdfv_markdown_vault_adapter_preview_async(
 PdfvMarkdownPreview *pdfv_markdown_vault_adapter_preview_finish(
     PdfvMarkdownVaultAdapter *self, GAsyncResult *result, GError **error);
 
-GBytes *pdfv_markdown_vault_adapter_read_bytes(
+GInputStream *pdfv_markdown_vault_adapter_open_read(
     PdfvMarkdownVaultAdapter *self, const gchar *relative_path,
-    gchar **content_type, GError **error);
+    gint64 *size, gchar **content_type, GError **error);
 
 GPtrArray *pdfv_markdown_vault_adapter_list_notes(
     PdfvMarkdownVaultAdapter *self, const gchar *query, GError **error);

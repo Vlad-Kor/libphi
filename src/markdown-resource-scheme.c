@@ -174,18 +174,15 @@ static void vault_scheme_request(WebKitURISchemeRequest *request,
   while (uri_path && *uri_path == '/')
     uri_path++;
   gchar *content_type = NULL;
-  GBytes *bytes = pdfv_markdown_vault_adapter_read_bytes(
-      vault, uri_path ? uri_path : "", &content_type, &error);
-  if (!bytes) {
+  gint64 size = -1;
+  GInputStream *stream = pdfv_markdown_vault_adapter_open_read(
+      vault, uri_path ? uri_path : "", &size, &content_type, &error);
+  if (!stream) {
     webkit_uri_scheme_request_finish_error(request, error);
     g_clear_error(&error);
   } else {
-    GInputStream *stream = g_memory_input_stream_new_from_bytes(bytes);
-    webkit_uri_scheme_request_finish(request, stream,
-                                     (gint64)g_bytes_get_size(bytes),
-                                     content_type);
+    webkit_uri_scheme_request_finish(request, stream, size, content_type);
     g_object_unref(stream);
-    g_bytes_unref(bytes);
   }
   g_free(content_type);
   g_uri_unref(parsed);

@@ -353,6 +353,39 @@ static void test_async_preview(VaultFixture *fixture, gconstpointer data) {
   }
 }
 
+static void test_open_read(VaultFixture *fixture, gconstpointer data) {
+  (void)data;
+  GError *error = NULL;
+  gint64 size = -1;
+  gchar *content_type = NULL;
+  GInputStream *stream = pdfv_markdown_vault_adapter_open_read(
+      fixture->vault, "~Images/Diagram.png", &size, &content_type, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(stream);
+  g_assert_cmpint(size, ==, strlen("not-a-real-png"));
+  g_assert_nonnull(content_type);
+  gchar buffer[32] = {0};
+  gsize read = 0;
+  g_assert_true(g_input_stream_read_all(stream, buffer, sizeof buffer - 1,
+                                        &read, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_cmpstr(buffer, ==, "not-a-real-png");
+  g_object_unref(stream);
+  g_free(content_type);
+
+  stream = pdfv_markdown_vault_adapter_open_read(
+      fixture->vault, "%2e%2e/secret.png", &size, &content_type, &error);
+  g_assert_null(stream);
+  g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_clear_error(&error);
+
+  stream = pdfv_markdown_vault_adapter_open_read(
+      fixture->vault, "~Images/Missing.png", &size, &content_type, &error);
+  g_assert_null(stream);
+  g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error(&error);
+}
+
 int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add("/markdown-vault/safe-resolution", VaultFixture, NULL,
@@ -366,5 +399,7 @@ int main(int argc, char **argv) {
              vault_fixture_teardown);
   g_test_add("/markdown-vault/async-preview", VaultFixture, NULL,
              vault_fixture_setup, test_async_preview, vault_fixture_teardown);
+  g_test_add("/markdown-vault/open-read", VaultFixture, NULL,
+             vault_fixture_setup, test_open_read, vault_fixture_teardown);
   return g_test_run();
 }
