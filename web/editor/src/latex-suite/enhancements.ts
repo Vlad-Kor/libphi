@@ -4,7 +4,6 @@
 
 import {
   RangeSet,
-  RangeSetBuilder,
   RangeValue,
   type EditorState,
   type Extension,

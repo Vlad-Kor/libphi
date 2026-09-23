@@ -801,10 +801,6 @@ export function selectionTouches(
   return selection.from < node.to && selection.to > node.from;
 }
 
-export function inMath(text: string, position: number): boolean {
-  return mathModeAt(text, position) !== "none";
-}
-
 export type MathMode = "none" | "inline" | "display";
 
 function isEscaped(text: string, position: number): boolean {
