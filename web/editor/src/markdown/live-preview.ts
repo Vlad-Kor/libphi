@@ -39,6 +39,7 @@ import {
 import { measurePerformance } from "../performance";
 import {
   clearPreviewGeometry,
+  geometryWidgetKey,
   lineGeometryKey,
   measuredPreviewGeometry,
   previewGeometry,
@@ -277,9 +278,8 @@ function buildDecorationsNow(state: EditorState,
          * disappear as the caret moves between adjacent blank lines. */
         const widget = replacement.spec.widget;
         if (widget) withMeasuredGeometry(widget,
-          JSON.stringify([
-            "widget", node.kind, node.text, node.meta, node.from, node.to,
-          ]),
+          geometryWidgetKey(node, Boolean(replacement.spec.block),
+            state.doc.lineAt(node.from)),
           state.field(previewGeometry, false) ?? new Map());
         builder.add(node.from, node.to, replacement);
         coveredUntil = node.to;

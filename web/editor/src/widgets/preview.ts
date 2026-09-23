@@ -14,6 +14,7 @@ import {
 import { remoteImagesAllowed } from "../settings";
 import { calloutIcon } from "../markdown/callout-icons";
 import { pinPreviewSource } from "../markdown/source-edit";
+import { markdownAnalysis } from "../markdown/analysis";
 import {
   chooseHardPreview,
   makeHardPreviewImageDraggable,
@@ -89,6 +90,39 @@ function ensureMermaidReady(): Promise<MermaidApi> {
     });
   }
   return mermaidReady;
+}
+
+/** A rendered widget's source range, resolved whenever it is read.
+ *
+ * Widget equality ignores absolute document positions, so CodeMirror keeps
+ * an unchanged preview's DOM while text above it is edited. Rebuilding every
+ * later widget on each keystroke (re-rendering Markdown, Prism, and MathJax
+ * output) dominated typing latency. Handlers created by `toDOM` must therefore
+ * never use the position captured at construction; they read it from here. */
+export interface SourceAnchor {
+  readonly from: number;
+  readonly to: number;
+}
+
+/** Current start of mounted widget DOM, or null outside this view's content
+ * (tooltips, measurement probes, nested table-cell editors, detached DOM). */
+export function mountedWidgetFrom(view: EditorView, element: Element): number | null {
+  if (!element.isConnected || element.closest(".cm-content") !== view.contentDOM)
+    return null;
+  return view.posAtDOM(element);
+}
+
+function sourceAnchor(
+  view: EditorView,
+  element: Element,
+  from: number,
+  to = from,
+): SourceAnchor {
+  const length = to - from;
+  return {
+    get from() { return mountedWidgetFrom(view, element) ?? from; },
+    get to() { return this.from + length; },
+  };
 }
 
 function reveal(
@@ -188,14 +222,17 @@ function markHardRenderedItem(
   draggableImage = false,
 ): HTMLElement {
   element.classList.add("cm-hard-rendered-item");
+  /* Construction-time range. Mounted DOM is resolved with posAtDOM instead,
+   * because it is reused after edits above it (see SourceAnchor). */
   element.dataset.hardPreviewFrom = String(from);
   element.dataset.hardPreviewTo = String(to);
   element.setAttribute("aria-selected", "false");
+  const anchor = sourceAnchor(view, element, from, to);
   if (clickSelects) {
     element.addEventListener("pointerdown", (event) => {
       if (!draggableImage) event.preventDefault();
       event.stopPropagation();
-      chooseHardPreview(view, { from, to });
+      chooseHardPreview(view, { from: anchor.from, to: anchor.to });
     });
     if (draggableImage) {
       /* Allow the browser's native drag gesture, but keep the compatibility
@@ -210,7 +247,7 @@ function markHardRenderedItem(
     });
   }
   if (draggableImage)
-    makeHardPreviewImageDraggable(view, element, from, to);
+    makeHardPreviewImageDraggable(view, element, anchor);
   return element;
 }
 
@@ -579,6 +616,10 @@ export class EmptyInlineCodeWidget extends WidgetType {
 export class BulletWidget extends WidgetType {
   constructor(readonly label = "•", readonly ordered = false) { super(); }
 
+  eq(other: BulletWidget): boolean {
+    return other.label === this.label && other.ordered === this.ordered;
+  }
+
   toDOM(): HTMLElement {
     const bullet = document.createElement("span");
     bullet.className = this.ordered
@@ -593,16 +634,17 @@ export class BulletWidget extends WidgetType {
 export class HorizontalRuleWidget extends WidgetType {
   constructor(readonly from: number, readonly to: number) { super(); }
   eq(other: HorizontalRuleWidget): boolean {
-    return other.from === this.from && other.to === this.to;
+    return other.to - other.from === this.to - this.from;
   }
   toDOM(view: EditorView): HTMLElement {
     const rule = document.createElement("hr");
     rule.className = "horizontal-rule-widget";
     rule.setAttribute("aria-label", "Horizontal rule");
+    const anchor = sourceAnchor(view, rule, this.from, this.to);
     const revealRule = (event: MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      revealAt(view, this.from);
+      revealAt(view, anchor.from);
     };
     rule.addEventListener("pointerdown", revealRule);
     rule.addEventListener("click", revealRule);
@@ -625,7 +667,7 @@ export class MathWidget extends WidgetType {
 
   eq(other: MathWidget): boolean {
     return other.latex === this.latex && other.display === this.display &&
-      other.from === this.from && other.mathRevision === this.mathRevision &&
+      other.mathRevision === this.mathRevision &&
       other.editing === this.editing &&
       other.geometryContext.key === this.geometryContext.key;
   }
@@ -655,11 +697,12 @@ export class MathWidget extends WidgetType {
     if (this.editing) element.classList.add("math-edit-preview");
     element.tabIndex = 0;
     element.setAttribute("aria-label", `LaTeX: ${this.latex}`);
+    const anchor = sourceAnchor(view, element, this.from);
     const revealMath = (event: Event) => {
       if (isMathScrollbarEvent(element, event)) return;
       event.preventDefault();
       event.stopPropagation();
-      reveal(view, this.from);
+      reveal(view, anchor.from);
     };
     element.addEventListener("pointerdown", revealMath);
     element.addEventListener("click", revealMath);
@@ -737,10 +780,12 @@ function sourceEditButton(
   source.setAttribute("aria-label", label);
   source.append(imageCodeIcon());
   source.addEventListener("pointerdown", (event) => event.stopPropagation());
+  const anchor = sourceAnchor(view, source, from, to);
   source.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    reveal(view, from, { from, to });
+    const range = { from: anchor.from, to: anchor.to };
+    reveal(view, range.from, range);
   });
   return source;
 }
@@ -803,7 +848,9 @@ function interactiveImage(
   handle.setAttribute("role", "separator");
   handle.setAttribute("aria-label", "Resize image");
   handle.title = "Drag to resize";
+  const anchor = sourceAnchor(view, container, from, to);
   const commit = (width: number) => {
+    const { from, to } = anchor;
     const current = view.state.sliceDoc(from, to);
     const replacement = resizeImageMarkdown(current, width);
     if (replacement !== current)
@@ -874,7 +921,7 @@ export class LinkWidget extends WidgetType {
 
   eq(other: LinkWidget): boolean {
     return other.target === this.target && other.label === this.label &&
-      other.from === this.from && other.to === this.to &&
+      other.to - other.from === this.to - this.from &&
       other.embed === this.embed && other.block === this.block &&
       other.geometryContext.key === this.geometryContext.key;
   }
@@ -910,7 +957,8 @@ export class LinkWidget extends WidgetType {
         middle: event.button === 1,
       });
     });
-    link.addEventListener("dblclick", () => reveal(view, this.from));
+    const anchor = sourceAnchor(view, link, this.from, this.to);
+    link.addEventListener("dblclick", () => reveal(view, anchor.from));
     return link;
   }
 
@@ -1048,8 +1096,9 @@ export class MarkdownLinkWidget extends WidgetType {
 
   eq(other: MarkdownLinkWidget): boolean {
     return other.target === this.target && other.label === this.label &&
-      other.from === this.from && other.image === this.image &&
-      other.to === this.to && other.block === this.block &&
+      other.image === this.image &&
+      other.to - other.from === this.to - this.from &&
+      other.block === this.block &&
       other.geometryContext.key === this.geometryContext.key;
   }
 
@@ -1058,7 +1107,7 @@ export class MarkdownLinkWidget extends WidgetType {
   }
 
   private get imageCacheKey(): string {
-    if (/^data:/i.test(this.target)) return `data:${this.from}:${this.to}`;
+    if (/^data:/i.test(this.target)) return `data:${this.target}`;
     if (/^https?:/i.test(this.target)) return `remote:${this.target}`;
     return `local:${this.target}`;
   }
@@ -1126,7 +1175,8 @@ export class MarkdownLinkWidget extends WidgetType {
       else if (this.target.startsWith("#")) sendNative("link/open", { target: this.target });
       else sendNative("attachment/open", { target: this.target, relative: true });
     });
-    link.addEventListener("dblclick", () => reveal(view, this.from));
+    const anchor = sourceAnchor(view, link, this.from, this.to);
+    link.addEventListener("dblclick", () => reveal(view, anchor.from));
     if (this.linkedImage) {
       const container = document.createElement("span");
       container.className = "image-widget image-widget-inline linked-image-widget";
@@ -1154,7 +1204,7 @@ function imageError(error: unknown): HTMLElement {
 export class TaskWidget extends WidgetType {
   constructor(readonly status: string, readonly from: number) { super(); }
   eq(other: TaskWidget): boolean {
-    return other.status === this.status && other.from === this.from;
+    return other.status === this.status;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -1164,6 +1214,7 @@ export class TaskWidget extends WidgetType {
     checkbox.checked = this.status.toLowerCase() === "x";
     checkbox.indeterminate = this.status !== " " && this.status.toLowerCase() !== "x";
     checkbox.setAttribute("aria-label", `Task status ${this.status === " " ? "not done" : this.status}`);
+    const anchor = sourceAnchor(view, checkbox, this.from);
     checkbox.addEventListener("pointerdown", (event) => event.stopPropagation());
     checkbox.addEventListener("click", (event) => {
       event.preventDefault();
@@ -1174,7 +1225,8 @@ export class TaskWidget extends WidgetType {
         return;
       }
       const next = this.status.toLowerCase() === "x" ? " " : "x";
-      view.dispatch({ changes: { from: this.from + 1, to: this.from + 2, insert: next }, userEvent: "input" });
+      const from = anchor.from;
+      view.dispatch({ changes: { from: from + 1, to: from + 2, insert: next }, userEvent: "input" });
       view.focus();
     });
     return checkbox;
@@ -1192,7 +1244,8 @@ export class TagWidget extends WidgetType {
     button.className = "cm-live-tag";
     button.textContent = `#${this.tag}`;
     button.addEventListener("click", () => sendNative("tag/open", { tag: this.tag }));
-    button.addEventListener("dblclick", () => reveal(view, this.from));
+    const anchor = sourceAnchor(view, button, this.from);
+    button.addEventListener("dblclick", () => reveal(view, anchor.from));
     return button;
   }
   ignoreEvent(): boolean { return true; }
@@ -1207,9 +1260,16 @@ export class FootnoteWidget extends WidgetType {
     readonly label = text,
   ) { super(); }
 
+  /* A reference's target is its definition's position, which moves with
+   * unrelated edits; compare only whether one exists and look it up on use. */
+  private get resolvesDefinition(): boolean {
+    return !this.definition && this.target !== this.from;
+  }
+
   eq(other: FootnoteWidget): boolean {
     return other.text === this.text && other.definition === this.definition &&
-      other.target === this.target && other.label === this.label;
+      other.resolvesDefinition === this.resolvesDefinition &&
+      other.label === this.label;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -1219,7 +1279,14 @@ export class FootnoteWidget extends WidgetType {
       reference.className = "footnote-reference";
       reference.textContent = this.label;
       reference.setAttribute("aria-label", `Footnote ${this.label}`);
-      reference.addEventListener("click", () => reveal(view, this.target));
+      const anchor = sourceAnchor(view, reference, this.from);
+      reference.addEventListener("click", () => {
+        const definition = this.resolvesDefinition
+          ? markdownAnalysis(view.state).nodes.find((node) =>
+            node.kind === "footnote-definition" && node.meta?.id === this.text)
+          : undefined;
+        reveal(view, definition?.from ?? anchor.from);
+      });
       return reference;
     }
     const definition = document.createElement("aside");
@@ -1230,13 +1297,14 @@ export class FootnoteWidget extends WidgetType {
     content.innerHTML = renderMarkdown(this.text);
     wireRenderedContent(content);
     definition.append(label, content);
+    const anchor = sourceAnchor(view, definition, this.from);
     definition.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      reveal(view, this.from);
+      reveal(view, anchor.from);
     });
-    definition.addEventListener("click", () => reveal(view, this.from));
-    definition.addEventListener("dblclick", () => reveal(view, this.from));
+    definition.addEventListener("click", () => reveal(view, anchor.from));
+    definition.addEventListener("dblclick", () => reveal(view, anchor.from));
     return definition;
   }
 
@@ -1253,7 +1321,7 @@ export class HtmlPreviewWidget extends WidgetType {
   ) { super(); }
   eq(other: HtmlPreviewWidget): boolean {
     return other.source === this.source && other.className === this.className &&
-      other.from === this.from && other.to === this.to &&
+      other.to - other.from === this.to - this.from &&
       other.hard === this.hard;
   }
 
@@ -1262,6 +1330,7 @@ export class HtmlPreviewWidget extends WidgetType {
     container.className = this.className;
     container.innerHTML = renderMarkdown(this.source);
     wireRenderedContent(container);
+    const anchor = sourceAnchor(view, container, this.from, this.to);
     if (this.hard)
       return markHardRenderedItem(
         view, container, this.from, this.to, false,
@@ -1276,7 +1345,7 @@ export class HtmlPreviewWidget extends WidgetType {
         (selected ?? -1) < fallback
         ? fallback
         : selected ?? fallback;
-      revealAt(view, this.from + offset);
+      revealAt(view, anchor.from + offset);
     };
     addSourceRevealListeners(container, revealClick);
     return container;
@@ -1343,19 +1412,20 @@ export class CalloutWidget extends WidgetType {
       updateToggle();
       view.requestMeasure();
     });
+    const anchor = sourceAnchor(view, details, this.from);
     const revealClick = (event: MouseEvent) => {
       if (event.target instanceof Node && toggle.contains(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (!this.body || event.target instanceof Node && title.contains(event.target)) {
-        const header = view.state.doc.lineAt(this.from);
+        const header = view.state.doc.lineAt(anchor.from);
         const prefix = /^ {0,3}>[ \t]*\[![^\]]+\][+-]?[ \t]*/.exec(header.text)?.[0].length ?? 0;
         const selected = clickedSourceOffset(title, this.title, event) ?? 0;
         revealAt(view, Math.min(header.to, header.from + prefix + selected));
         return;
       }
       const selected = clickedSourceOffset(body, this.body, event) ?? 0;
-      revealAt(view, calloutBodyPosition(view, this.from, this.body, selected));
+      revealAt(view, calloutBodyPosition(view, anchor.from, this.body, selected));
     };
     addSourceRevealListeners(details, revealClick);
     return details;
@@ -1368,7 +1438,7 @@ export class MermaidWidget extends WidgetType {
   readonly geometryContext = previewGeometryContext;
   constructor(readonly source: string, readonly from: number) { super(); }
   eq(other: MermaidWidget): boolean {
-    return other.source === this.source && other.from === this.from &&
+    return other.source === this.source &&
       other.geometryContext.key === this.geometryContext.key;
   }
 
@@ -1376,10 +1446,11 @@ export class MermaidWidget extends WidgetType {
     const container = document.createElement("div");
     container.className = "mermaid-widget";
     container.tabIndex = 0;
+    const anchor = sourceAnchor(view, container, this.from);
     const revealMermaid = (event: MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      reveal(view, this.from);
+      reveal(view, anchor.from);
     };
     container.addEventListener("pointerdown", revealMermaid);
     container.addEventListener("click", revealMermaid);
@@ -1531,7 +1602,7 @@ export class RawHtmlWidget extends WidgetType {
   }
   eq(other: RawHtmlWidget): boolean {
     return other.source === this.source &&
-      other.from === this.from && other.to === this.to &&
+      other.to - other.from === this.to - this.from &&
       other.remoteAllowed === this.remoteAllowed;
   }
   toDOM(view: EditorView): HTMLElement {
@@ -1549,6 +1620,7 @@ export class RawHtmlWidget extends WidgetType {
         view, container, this.from, this.to, false,
       );
     }
+    const anchor = sourceAnchor(view, container, this.from, this.to);
     container.querySelectorAll("details").forEach(details => {
       details.addEventListener("toggle", () => view.requestMeasure());
     });
@@ -1558,7 +1630,7 @@ export class RawHtmlWidget extends WidgetType {
       event.preventDefault();
       event.stopPropagation();
       const offset = clickedSourceOffset(container, this.source, event) ?? 0;
-      revealAt(view, this.from + offset);
+      revealAt(view, anchor.from + offset);
     };
     container.addEventListener("pointerdown", revealHtml);
     container.addEventListener("click", revealHtml);

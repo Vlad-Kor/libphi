@@ -85,6 +85,37 @@ describe("editor input performance invariants", () => {
     expect(markdownAnalysis(view.state).updateKind).toBe("mapped");
   });
 
+  it("keeps widget DOM below an edit and reveals at the shifted source", () => {
+    const text = [
+      "intro", "", "```js", "let a = 1;", "```", "", "$$", "x^2", "$$", "",
+      "> [!note] Title", "> body", "", "- item", "",
+    ].join("\n");
+    const view = makeView(text, [livePreview]);
+    view.dispatch({ selection: { anchor: 0 } });
+    const code = view.dom.querySelector(".code-block-widget");
+    const math = view.dom.querySelector(".math-display");
+    const callout = view.dom.querySelector(".callout");
+    const bullet = view.dom.querySelector(".list-bullet");
+    expect(code && math && callout && bullet).toBeTruthy();
+
+    for (const character of "typed ") {
+      const at = view.state.selection.main.head;
+      view.dispatch({
+        changes: { from: at, insert: character },
+        selection: { anchor: at + 1 },
+        annotations: Transaction.userEvent.of("input.type"),
+      });
+    }
+    for (const element of [code, math, callout, bullet])
+      expect(element!.isConnected).toBe(true);
+    expect(view.dom.querySelector(".code-block-widget")).toBe(code);
+
+    callout!.querySelector(".callout-content")!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const body = view.state.doc.toString().indexOf("> body");
+    expect(view.state.selection.main.head).toBe(body + 2);
+  });
+
   it("does not create empty CodeMirror marks for empty delimiters", () => {
     expect(() => makeView("****\n\n____\n\nOutside", [livePreview]))
       .not.toThrow();

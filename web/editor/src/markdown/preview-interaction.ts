@@ -187,8 +187,13 @@ function syncHardSelectionDOM(view: EditorView): void {
   for (const element of view.dom.querySelectorAll<HTMLElement>(
     ".cm-hard-rendered-item",
   )) {
-    const from = Number(element.dataset.hardPreviewFrom);
-    const to = Number(element.dataset.hardPreviewTo);
+    /* The dataset holds the range at construction. Mounted widget DOM is
+     * kept while text above it changes, so resolve its current start. */
+    const builtFrom = Number(element.dataset.hardPreviewFrom);
+    const builtTo = Number(element.dataset.hardPreviewTo);
+    const from = element.closest(".cm-content") === view.contentDOM
+      ? view.posAtDOM(element) : builtFrom;
+    const to = from + builtTo - builtFrom;
     const active = selected?.from === from && selected.to === to;
     element.classList.toggle("cm-hard-selected", active);
     element.setAttribute("aria-selected", String(active));
@@ -621,8 +626,7 @@ function clearImageDrag(view: EditorView): void {
 export function makeHardPreviewImageDraggable(
   view: EditorView,
   element: HTMLElement,
-  from: number,
-  to: number,
+  range: { readonly from: number; readonly to: number },
 ): void {
   const image = element.querySelector<HTMLImageElement>("img");
   if (!image) return;
@@ -633,6 +637,8 @@ export function makeHardPreviewImageDraggable(
     child.draggable = false;
   image.draggable = true;
   image.addEventListener("dragstart", (event) => {
+    /* Read the range now: mounted widget DOM survives edits above it. */
+    const { from, to } = range;
     const source = view.state.sliceDoc(from, to);
     if (!event.dataTransfer || !source) {
       event.preventDefault();

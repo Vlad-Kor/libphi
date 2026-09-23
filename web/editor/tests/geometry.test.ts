@@ -4,7 +4,7 @@ import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { PreviewIdleGate } from "../src/markdown/preview-idle";
 import { MermaidWidget, LinkWidget, MarkdownLinkWidget, setPreviewGeometryContext, seedPreviewImageGeometry, resetPreviewGeometryCaches } from "../src/widgets/preview";
-import { clearPreviewGeometry, lineGeometryKey, measuredPreviewGeometry, previewGeometry, settlePreview, withMeasuredGeometry } from "../src/markdown/geometry";
+import { clearPreviewGeometry, geometryWidgetKey, lineGeometryKey, measuredPreviewGeometry, previewGeometry, settlePreview, withMeasuredGeometry } from "../src/markdown/geometry";
 
 class Preview extends WidgetType {
   get estimatedHeight() { return 64; }
@@ -97,21 +97,20 @@ describe('background preview geometry', () => {
     expect(state.field(previewGeometry).size).toBe(0);
   });
 
-  it('retains exact geometry before an edit and drops stale geometry after it', () => {
-    let state = EditorState.create({ doc: 'abcdefgh', extensions: [previewGeometry] });
-    const before = JSON.stringify(['widget', 'math', 'a', {}, 0, 2]);
-    const after = JSON.stringify(['widget', 'math', 'b', {}, 5, 7]);
-    const beforeLine = lineGeometryKey('ab', Decoration.none, 0, 2);
-    const afterLine = lineGeometryKey('fg', Decoration.none, 5, 7);
+  it('keeps content-addressed geometry valid across edits', () => {
+    let state = EditorState.create({ doc: 'ab\ncd\nfg', extensions: [previewGeometry] });
+    const node = { kind: 'display-math', text: 'b', from: 6, to: 8 };
+    const widget = geometryWidgetKey(node, true, { text: 'fg', from: 6 });
+    const line = lineGeometryKey('fg', Decoration.none, 6, 8);
     state = state.update({
-      effects: measuredPreviewGeometry.of(new Map([
-        [before, 10], [after, 20], [beforeLine, 30], [afterLine, 40],
-      ])),
+      effects: measuredPreviewGeometry.of(new Map([[widget, 20], [line, 40]])),
     }).state;
-    state = state.update({ changes: { from: 4, insert: 'x' } }).state;
-    expect([...state.field(previewGeometry)]).toEqual([
-      [before, 10], [beforeLine, 30],
-    ]);
+    state = state.update({ changes: { from: 1, insert: 'x' } }).state;
+    expect([...state.field(previewGeometry)]).toEqual([[widget, 20], [line, 40]]);
+    /* The same content at its shifted position resolves to the same keys. */
+    expect(geometryWidgetKey({ ...node, from: 7, to: 9 }, true, { text: 'fg', from: 7 }))
+      .toBe(widget);
+    expect(lineGeometryKey('fg', Decoration.none, 7, 9)).toBe(line);
   });
 
   it('cancels unresolved renderers immediately instead of publishing a placeholder height', async () => {

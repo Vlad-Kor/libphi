@@ -11,45 +11,62 @@ export const previewGeometryEnvironment = Facet.define<() => void>();
 /** Heights belong to a document revision and its exact browser layout. */
 export const measuredPreviewGeometry = StateEffect.define<ReadonlyMap<string, number>>();
 export const clearPreviewGeometry = StateEffect.define<null>();
+/* Keys are content addressed (see geometryWidgetKey and lineGeometryKey), so
+ * an entry stays correct wherever its content moves. Only width, font, and
+ * configuration changes invalidate them. The cap merely bounds growth from
+ * content that no longer exists; the oldest entries are dropped first. */
+const GEOMETRY_ENTRY_LIMIT = 8192;
+
 export const previewGeometry = StateField.define<ReadonlyMap<string, number>>({
   create: () => new Map(),
   update(value, transaction) {
     if (transaction.reconfigured || transaction.effects.some(e => e.is(clearPreviewGeometry)))
       return new Map();
-    if (transaction.docChanged) {
-      let changedFrom = transaction.startState.doc.length;
-      transaction.changes.iterChanges(from => {
-        changedFrom = Math.min(changedFrom, from);
-      });
-      /* Geometry before the first edit remains valid and determines the
-       * viewport position of the caret. Dropping it for one transaction made
-       * typing temporarily fall back to estimates, then jump back when the
-       * background measurements were published again. Geometry at and after
-       * the edit is allowed to warm again, which also discards stale keys. */
-      value = new Map([...value].filter(([key]) => {
-        try {
-          const identity = JSON.parse(key) as unknown;
-          if (!Array.isArray(identity)) return true;
-          if (identity[0] === "line" && typeof identity[2] === "number")
-            return identity[2] <= changedFrom;
-          if (identity[0] === "widget" && typeof identity[5] === "number")
-            return identity[5] <= changedFrom;
-        } catch {
-          /* Only Phi's positional keys are pruned here. */
-        }
-        return true;
-      }));
+    /* Edits keep every height. An earlier position-keyed scheme discarded all
+     * measurements after the edit on every keystroke, so each later widget
+     * fell back to an estimate (rebuilding its DOM and shifting CodeMirror's
+     * height map) until the background pass re-measured the whole suffix. */
+    for (const effect of transaction.effects) {
+      if (!effect.is(measuredPreviewGeometry)) continue;
+      const merged = new Map([...value, ...effect.value]);
+      for (const key of merged.keys()) {
+        if (merged.size <= GEOMETRY_ENTRY_LIMIT) break;
+        merged.delete(key);
+      }
+      return merged;
     }
-    for (const effect of transaction.effects)
-      if (effect.is(measuredPreviewGeometry)) return new Map([...value, ...effect.value]);
     return value;
   },
 });
 
+const positionalMeta = new Set([
+  "contentFrom", "definition", "markerFrom", "markerTo", "prefixFrom",
+  "prefixTo", "taskFrom",
+]);
+
+/** Position-independent identity of a rendered replacement's geometry. Block
+ * widgets are measured alone at the content width; inline widgets depend on
+ * their line, so its text and their offset in it are part of the key. */
+export function geometryWidgetKey(
+  node: { kind: string; text: string; from: number; to: number;
+          meta?: Record<string, unknown> },
+  block: boolean,
+  line: { text: string; from: number },
+): string {
+  const meta = node.meta && Object.fromEntries(Object.entries(node.meta)
+    .filter(([name]) => !positionalMeta.has(name)));
+  return JSON.stringify([
+    "widget", node.kind, node.text, meta, node.to - node.from, block,
+    ...(block ? [] : [line.text, node.from - line.from]),
+  ]);
+}
+
 export function lineGeometryKey(
   text: string, decorations: DecorationSet, from: number, to: number,
 ): string {
-  const signature: unknown[] = ["line", from, to, text];
+  /* Only relative decoration offsets: the height of a line does not depend on
+   * where it is in the document. */
+  const signature: unknown[] = ["line", text];
   decorations.between(from, to, (a, b, decoration) => {
     const widget = decoration.spec.widget as WidgetType | undefined;
     if (decoration.spec.phiLineGeometry) return;
