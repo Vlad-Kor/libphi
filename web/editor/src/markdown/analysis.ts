@@ -19,6 +19,9 @@ export interface MarkdownAnalysis {
   /** `mapped`: a proven plain-prose edit reused the previous nodes; `region`:
    * only a context-independent window was reparsed (see regionAnalysis). */
   readonly updateKind: "full" | "mapped" | "region";
+  /** Whole lines of the new document whose nodes may differ from the previous
+   * analysis. Nodes outside it are the previous nodes, mapped. */
+  readonly changed: { readonly from: number; readonly to: number };
 }
 
 const positionMeta = new Set([
@@ -40,6 +43,7 @@ function fullAnalysis(text: string): MarkdownAnalysis {
       math: nodes.filter((node) =>
         node.kind === "math" || node.kind === "display-math"),
       updateKind: "full",
+      changed: { from: 0, to: text.length },
     };
   });
 }
@@ -307,6 +311,7 @@ function regionAnalysis(previous: MarkdownAnalysis, transaction: Transaction,
     math: nodes.filter((node) =>
       node.kind === "math" || node.kind === "display-math"),
     updateKind: "region",
+    changed: { from: window.from, to: window.newTo },
   };
 }
 
@@ -319,12 +324,19 @@ function updateAnalysis(previous: MarkdownAnalysis,
   }
   return measurePerformance("markdown/analysis-map", () => {
     const nodes = previous.nodes.map((node) => mapNode(node, transaction.changes));
+    let changedFrom = transaction.newDoc.length;
+    let changedTo = 0;
+    transaction.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      changedFrom = Math.min(changedFrom, transaction.newDoc.lineAt(fromB).from);
+      changedTo = Math.max(changedTo, transaction.newDoc.lineAt(toB).to);
+    });
     return {
       text,
       nodes,
       math: nodes.filter((node) =>
         node.kind === "math" || node.kind === "display-math"),
       updateKind: "mapped",
+      changed: { from: changedFrom, to: changedTo },
     };
   });
 }

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /// <reference types="node" />
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorState, Transaction } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorState, RangeSet, Transaction } from "@codemirror/state";
+import { type DecorationSet, EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PhiMarkdownEditor } from "../src/editor";
 import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
@@ -315,5 +315,85 @@ describe("region reparse", () => {
       expect(markdownAnalysis(state).nodes)
         .toEqual(parseMarkdownNodes(state.doc.toString()));
     }
+  });
+});
+
+describe("incremental live preview decorations", () => {
+  function decorations(state: EditorState): DecorationSet {
+    const sets = state.facet(EditorView.decorations)
+      .filter((value): value is DecorationSet => typeof value !== "function");
+    expect(sets).toHaveLength(1);
+    return sets[0];
+  }
+
+  function random(seed: number) {
+    return () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+  }
+
+  it("equal a clean rebuild after random edits and selection changes", () => {
+    const blocks = [
+      "Plain prose line.", "A line with **bold**, *em*, `code`, and $x^2$.",
+      "- list item with $$y$$ display", "- [ ] task", "1. ordered", "# Heading",
+      "> quote", "> [!note] Callout\n> body", "| a | b |\n| --- | --- |\n| 1 | 2 |",
+      "```js\nlet a = 1;\n\nlet b = 2;\n```", "$$\n\\frac{a}{b}\n$$",
+      "[^1]: note", "text[^1] ref", "<span>html</span>", "%% comment %%",
+      "---", "tag #tag ^block-id", "[[Wiki]] and [link](target)",
+      "![image](a.png)", "![[embed.png]]", "==mark== ~~strike~~", "", "",
+    ];
+    const tokens = ["x", " ", "\n", "$", "$$", "`", "*", "_", "[", "]", "#",
+      "- ", "|", ">", "^", "\\", "~", "=", "---", "[[", "]]", "\n\n"];
+    const next = random(Number(process.env.PHI_REGION_SEED ?? 5));
+    const pick = <T,>(values: readonly T[]) =>
+      values[Math.floor(next() * values.length)];
+    let checked = 0;
+    for (let run = 0; run < Number(process.env.PHI_DECORATION_RUNS ?? 60); run++) {
+      const lines = Array.from({ length: 4 + Math.floor(next() * 12) },
+        () => pick(blocks));
+      let state = EditorState.create({
+        doc: lines.join("\n"),
+        extensions: [markdown({ base: markdownLanguage }), livePreview],
+      });
+      for (let step = 0; step < 40; step++) {
+        const length = state.doc.length;
+        const at = Math.floor(next() * (length + 1));
+        const roll = next();
+        if (roll < 0.35) {
+          const head = Math.min(length, at + (next() < 0.3 ? Math.floor(next() * 12) : 0));
+          state = state.update({ selection: { anchor: at, head } }).state;
+        } else {
+          const change = roll < 0.75
+            ? { from: at, insert: next() < 0.6 ? pick(["a", "b", " "]) : pick(tokens) }
+            : { from: at, to: Math.min(length, at + 1 + Math.floor(next() * 3)) };
+          const insert = "insert" in change ? change.insert?.length ?? 0 : 0;
+          state = state.update({
+            changes: change,
+            selection: { anchor: Math.min(change.from + insert, length + insert) },
+          }).state;
+        }
+        const clean = EditorState.create({
+          doc: state.doc,
+          selection: state.selection,
+          extensions: [markdown({ base: markdownLanguage }), livePreview],
+        });
+        const incremental = decorations(state);
+        const expected = decorations(clean);
+        if (!RangeSet.eq([incremental], [expected])) {
+          const dump = (set: DecorationSet) => {
+            const out: string[] = [];
+            for (let it = set.iter(); it.value; it.next())
+              out.push(`${it.from}-${it.to}:${it.value.spec.class ?? it.value.spec.widget?.constructor.name ?? "?"}`);
+            return out.join(" ");
+          };
+          throw new Error(`mismatch in ${JSON.stringify(state.doc.toString())} ` +
+            `sel ${JSON.stringify(state.selection.main)}\n` +
+            `got  ${dump(incremental)}\nwant ${dump(expected)}`);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
   });
 });

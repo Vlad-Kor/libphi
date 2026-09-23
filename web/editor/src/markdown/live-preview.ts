@@ -37,7 +37,6 @@ import {
   markdownAnalysis,
   markdownAnalysisField,
   mathNodeAt,
-  type MarkdownAnalysis,
 } from "./analysis";
 import { measurePerformance } from "../performance";
 import {
@@ -249,12 +248,14 @@ function addHtmlSyntax(builder: DecorationSink, node: MarkdownNode): void {
 
 function buildDecorations(state: EditorState): DecorationSet {
   return measurePerformance("markdown/preview-decorations", () =>
-    buildDecorationsNow(state, markdownAnalysis(state)));
+    Decoration.set(buildRanges(state, markdownAnalysis(state).nodes), true));
 }
 
-function buildDecorationsNow(state: EditorState,
-                             analysis: MarkdownAnalysis): DecorationSet {
-  const nodes = analysis.nodes;
+/** Decorations for `nodes`, which must be complete top-level groups: every
+ * node overlapping one of their lines is included (see dirtyRegions). All
+ * decorations produced for a node lie within the lines it spans. */
+function buildRanges(state: EditorState,
+                     nodes: readonly MarkdownNode[]): Range<Decoration>[] {
   const inactiveDisplayMathByLine = new Map<number, MarkdownNode[]>();
   for (const node of nodes) {
     if (node.kind !== "display-math" || active(node, state)) continue;
@@ -427,10 +428,10 @@ function buildDecorationsNow(state: EditorState,
       widget: new LineHeightEstimateWidget(-1), side: -1,
     }).range(from));
   }
-  const result = Decoration.set(ranges, true);
   const heights = state.field(previewGeometry, false);
-  if (!heights?.size) return result;
-  const measured = ranges.map(range => {
+  if (!heights?.size) return ranges;
+  const result = Decoration.set(ranges, true);
+  return ranges.map(range => {
     if (!(range.value.spec.widget instanceof LineHeightEstimateWidget)) return range;
     const line = state.doc.lineAt(range.from);
     const height = heights.get(lineGeometryKey(line.text, result, line.from, line.to));
@@ -439,7 +440,6 @@ function buildDecorationsNow(state: EditorState,
       widget: new LineHeightEstimateWidget(height), side: -1,
     }).range(range.from);
   });
-  return Decoration.set(measured, true);
 }
 
 function activeMathNodes(state: EditorState): MarkdownNode[] {
@@ -580,16 +580,90 @@ function buildMathTooltips(state: EditorState): readonly Tooltip[] {
   }));
 }
 
-function selectionActivatesNode(analysis: MarkdownAnalysis,
-                                state: EditorState): boolean {
-  return analysis.nodes.some((node) => active(node, state));
+interface Region { from: number; to: number }
+
+/** Grow each range to whole lines and whole top-level node groups, then
+ * merge overlapping regions. Nodes are sorted by start. */
+function dirtyRegions(state: EditorState, nodes: readonly MarkdownNode[],
+                      ranges: readonly Region[]): Region[] {
+  const regions: Region[] = [];
+  for (const range of ranges) {
+    let from = state.doc.lineAt(range.from).from;
+    let to = state.doc.lineAt(range.to).to;
+    for (let grown = true; grown;) {
+      grown = false;
+      for (const node of nodes) {
+        if (node.from > to) break;
+        if (node.to < from || (node.from >= from && node.to <= to)) continue;
+        from = Math.min(from, state.doc.lineAt(node.from).from);
+        to = Math.max(to, state.doc.lineAt(node.to).to);
+        grown = true;
+      }
+    }
+    regions.push({ from, to });
+  }
+  regions.sort((a, b) => a.from - b.from);
+  const merged: Region[] = [];
+  for (const region of regions) {
+    const last = merged.at(-1);
+    if (last && region.from <= last.to + 1) last.to = Math.max(last.to, region.to);
+    else merged.push({ ...region });
+  }
+  return merged;
 }
 
-function changesFollowAllNodes(transaction: Transaction): boolean {
-  let earliest = transaction.startState.doc.length;
-  transaction.changes.iterChanges((fromA) => { earliest = Math.min(earliest, fromA); });
-  return markdownAnalysis(transaction.startState).nodes.every((node) =>
-    node.to <= earliest);
+/* Whether a node is revealed depends only on the selection and pinned
+ * source it touches, and its decorations only on its own lines. A document
+ * edit therefore affects the analysis's changed lines, and a selection change
+ * affects nodes touching the old or new selection or pinned range. Everything
+ * else is the previous decoration set, mapped. Rebuilding every decoration on
+ * each key (about 12 ms for a 40 KiB note in WebKit) was the largest remaining
+ * per-keystroke cost after incremental parsing. */
+function updateDecorations(value: DecorationSet,
+                           transaction: Transaction): DecorationSet {
+  const state = transaction.state;
+  const analysis = markdownAnalysis(state);
+  if (transaction.docChanged && analysis.updateKind === "full")
+    return buildDecorations(state);
+  const changes = transaction.changes;
+  const ranges: Region[] = [];
+  if (transaction.docChanged) ranges.push(analysis.changed);
+  const oldPin = transaction.startState.field(previewSourceRange, false);
+  const newPin = state.field(previewSourceRange, false);
+  if (transaction.selection || transaction.docChanged || oldPin !== newPin) {
+    for (const range of transaction.startState.selection.ranges)
+      ranges.push({ from: changes.mapPos(range.from, -1), to: changes.mapPos(range.to, 1) });
+    for (const range of state.selection.ranges) ranges.push(range);
+    if (oldPin) ranges.push({ from: changes.mapPos(oldPin.from, -1), to: changes.mapPos(oldPin.to, 1) });
+    if (newPin) ranges.push(newPin);
+  }
+  if (!ranges.length) return value;
+  return measurePerformance("markdown/preview-decorations-region", () => {
+    const regions = dirtyRegions(state, analysis.nodes, ranges);
+    const covered = regions.reduce((sum, region) => sum + region.to - region.from, 0);
+    if (covered > state.doc.length / 2) return buildDecorations(state);
+    const nodes = analysis.nodes.filter((node) => regions.some((region) =>
+      node.from >= region.from && node.from <= region.to));
+    const added = buildRanges(state, nodes);
+    const mapped = value.map(changes);
+    const outside = (from: number, to: number) => !regions.some((region) =>
+      from >= region.from && to <= region.to);
+    let stale = false;
+    for (const region of regions) {
+      mapped.between(region.from, region.to, (from, to) => {
+        if (!outside(from, to)) stale = true;
+        return stale ? false : undefined;
+      });
+    }
+    if (!stale && !added.length) return mapped;
+    return mapped.update({
+      filter: outside,
+      filterFrom: regions[0].from,
+      filterTo: regions.at(-1)!.to,
+      add: added,
+      sort: true,
+    });
+  });
 }
 
 const livePreviewDecorations = StateField.define<DecorationSet>({
@@ -599,25 +673,7 @@ const livePreviewDecorations = StateField.define<DecorationSet>({
       effect.is(refreshLivePreview) || effect.is(pinPreviewSource) ||
       effect.is(measuredPreviewGeometry));
     if (forced) return buildDecorations(transaction.state);
-    if (transaction.docChanged) {
-      const previous = markdownAnalysis(transaction.startState);
-      const current = markdownAnalysis(transaction.state);
-      /* A proven plain-prose edit after every preview node cannot affect any
-       * decoration or position-aware widget. Keep the exact set and DOM. */
-      if (current.updateKind === "mapped" && changesFollowAllNodes(transaction) &&
-          !selectionActivatesNode(previous, transaction.startState) &&
-          !selectionActivatesNode(current, transaction.state))
-        return value;
-      return buildDecorations(transaction.state);
-    }
-    if (transaction.selection) {
-      const analysis = markdownAnalysis(transaction.state);
-      if (!selectionActivatesNode(analysis, transaction.startState) &&
-          !selectionActivatesNode(analysis, transaction.state))
-        return value;
-      return buildDecorations(transaction.state);
-    }
-    return value;
+    return updateDecorations(value, transaction);
   },
   provide: (field) => [
     EditorView.decorations.from(field),

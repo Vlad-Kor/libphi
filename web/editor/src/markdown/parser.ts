@@ -850,7 +850,18 @@ export function mathModeAt(text: string, position: number,
   let display: "dollar" | "bracket" | null = null;
   let inlineDollar = false;
   let inlineParen = false;
+  /* Only newlines, dollars, and backslashes change the state; skip everything
+   * else. This scan runs for automatic snippets on every key in math and
+   * cost milliseconds per 32 KiB in WebKit when stepping every character. */
+  const interesting = /[\n$\\]/g;
   for (let at = start; at < position; at++) {
+    const code = text.charCodeAt(at);
+    if (code !== 10 && code !== 36 && code !== 92) {
+      interesting.lastIndex = at;
+      const next = interesting.exec(text);
+      if (!next || next.index >= position) break;
+      at = next.index;
+    }
     /* Inline delimiters cannot span source lines. Check this before escape
      * handling so even a Markdown hard-break backslash ends inline state. */
     if (!display && text[at] === "\n") {
