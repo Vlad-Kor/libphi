@@ -35,6 +35,36 @@ phi_lib = library('phi', phi_src,
 	install: true
 )
 
+phi_public_headers = [
+	'phi.h',
+	'phierrors.h',
+	'phidocument.h',
+	'phipage.h',
+	'phidocumentview.h',
+]
+install_headers(phi_public_headers, subdir: 'phi')
+
+phi_gir_dep = dependency('gobject-introspection-1.0',
+	required: get_option('introspection'))
+if phi_gir_dep.found()
+	phi_gir = import('gnome').generate_gir(phi_lib,
+		sources: phi_public_headers + [
+			'phierrors.c',
+			'phidocument.c',
+			'phipage.c',
+			'phidocumentview.c',
+		],
+		namespace: 'Phi',
+		nsversion: '1.0',
+		identifier_prefix: 'Phi',
+		symbol_prefix: 'phi',
+		header: 'phi/phi.h',
+		includes: ['GObject-2.0', 'Gio-2.0', 'Gtk-4.0'],
+		extra_args: ['--warn-all'],
+		install: true,
+	)
+endif
+
 phi_dep = declare_dependency(
 	include_directories: inc,
 	link_with: phi_lib,

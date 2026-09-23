@@ -41,7 +41,11 @@ struct _PhiLink {
 	PhiLink* next;
 };
 
+#define PHI_TYPE_LINK (phi_link_get_type())
+GType phi_link_get_type(void) G_GNUC_CONST;
+
 PhiLink* phi_page_get_links(PhiPage* self);
+PhiLink* phi_link_copy(const PhiLink* link);
 void phi_link_free(PhiLink* link);
 
 /* Text selection and search */

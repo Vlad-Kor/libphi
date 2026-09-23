@@ -27,6 +27,8 @@ static void phi_document_list_model_iface_init(GListModelInterface *iface);
 G_DEFINE_FINAL_TYPE_WITH_CODE(PhiDocument, phi_document, G_TYPE_OBJECT,
 	G_IMPLEMENT_INTERFACE(G_TYPE_LIST_MODEL, phi_document_list_model_iface_init)
 )
+G_DEFINE_BOXED_TYPE(PhiOutlineItem, phi_outline_item,
+	phi_outline_item_copy, phi_outline_item_free)
 
 static void phi_document_object_finalize(GObject* object) {
 	PhiDocument* self = PHI_DOCUMENT(object);
@@ -146,6 +148,21 @@ static void phi_document_error_handler(void* user, const char* message) {
 	g_debug("MuPDF repair: %s", message);
 }
 
+/**
+ * phi_document_new_from_stream: (constructor)
+ * @stream: a seekable input stream holding the document
+ * @magic: (nullable): a file name, extension or MIME type used to pick the
+ *   document handler
+ * @error: return location for a #GError
+ *
+ * Opens a document from @stream, which is kept referenced for the lifetime of
+ * the document. Documents opened this way have no independent source for the
+ * background renderer, so phi_document_render_page_texture() fails with
+ * %G_IO_ERROR_NOT_SUPPORTED. Prefer phi_document_new_from_file() or
+ * phi_document_new_from_bytes().
+ *
+ * Returns: (transfer full): a new #PhiDocument, or %NULL on error
+ */
 PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* magic, GError** error) {
 	PhiDocument* self = g_object_new(PHI_TYPE_DOCUMENT, NULL);
 
@@ -184,6 +201,15 @@ PhiDocument* phi_document_new_from_stream(GInputStream* stream, const gchar* mag
 	return self;
 }
 
+/**
+ * phi_document_new_from_file: (constructor)
+ * @file: the document file
+ * @error: return location for a #GError
+ *
+ * Opens the document stored in @file.
+ *
+ * Returns: (transfer full): a new #PhiDocument, or %NULL on error
+ */
 PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
 	const gchar* content_type = NULL;
 	GFileInfo* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
@@ -206,11 +232,25 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
 	return ret;
 }
 
+/**
+ * phi_document_get_n_pages:
+ * @self: a #PhiDocument
+ *
+ * Returns: the number of pages in the document
+ */
 gint phi_document_get_n_pages(PhiDocument* self) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), 0);
 	return self->n_pages;
 }
 
+/**
+ * phi_document_dup_metadata:
+ * @self: a #PhiDocument
+ * @metadata: the metadata field to look up
+ *
+ * Returns: (transfer full) (nullable): the UTF-8 value of @metadata, or
+ *   %NULL when the document does not provide it
+ */
 gchar* phi_document_dup_metadata(PhiDocument* self,
 		PhiDocumentMetadata metadata) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
@@ -254,6 +294,16 @@ gchar* phi_document_dup_metadata(PhiDocument* self,
 	return value;
 }
 
+/**
+ * phi_document_get_page:
+ * @self: a #PhiDocument
+ * @pageno: zero-based page index
+ * @error: return location for a #GError
+ *
+ * Loads page @pageno. Pages are cached and owned by the document.
+ *
+ * Returns: (transfer none): the page, or %NULL on error
+ */
 PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
 	g_return_val_if_fail(pageno >= 0 && pageno < self->n_pages, NULL);
@@ -277,6 +327,19 @@ PhiPage* phi_document_get_page(PhiDocument* self, gint pageno, GError** error) {
 	return cpage;
 }
 
+/**
+ * phi_document_render_thumbnail:
+ * @self: a #PhiDocument
+ * @pageno: zero-based page index
+ * @max_width: maximum thumbnail width in pixels
+ * @max_height: maximum thumbnail height in pixels
+ * @error: return location for a #GError
+ *
+ * Renders a thumbnail with a MuPDF context that is independent from the
+ * interactive one. Safe to call from a worker thread.
+ *
+ * Returns: (transfer full): an image surface, or %NULL on error
+ */
 cairo_surface_t* phi_document_render_thumbnail(PhiDocument* self, gint pageno,
 		gint max_width, gint max_height, GError** error) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
@@ -452,6 +515,22 @@ static void phi_document_cancel_render_cookie(GCancellable* cancellable,
 	cookie->abort = 1;
 }
 
+/**
+ * phi_document_render_page_texture:
+ * @self: a #PhiDocument
+ * @pageno: zero-based page index
+ * @scale: device pixels per PDF point
+ * @tile_x: left edge of the tile in scaled page pixels
+ * @tile_y: top edge of the tile in scaled page pixels
+ * @tile_width: tile width in pixels, or 0 for the whole page
+ * @tile_height: tile height in pixels, or 0 for the whole page
+ * @cancellable: (nullable): a #GCancellable
+ * @error: return location for a #GError
+ *
+ * Rasterizes a page or a tile of it. Safe to call from a worker thread.
+ *
+ * Returns: (transfer full): an immutable texture, or %NULL on error
+ */
 GdkTexture* phi_document_render_page_texture(PhiDocument* self, gint pageno,
 		gdouble scale, gint tile_x, gint tile_y, gint tile_width,
 		gint tile_height, GCancellable* cancellable, GError** error) {
@@ -569,6 +648,13 @@ static PhiOutlineItem* phi_outline_convert(fz_context* ctx, fz_outline* outline)
 	return item;
 }
 
+/**
+ * phi_document_get_outline:
+ * @self: a #PhiDocument
+ *
+ * Returns: (transfer full) (nullable): the first top-level outline item,
+ *   or %NULL when the document has no outline
+ */
 PhiOutlineItem* phi_document_get_outline(PhiDocument* self) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), NULL);
 	
@@ -588,6 +674,33 @@ PhiOutlineItem* phi_document_get_outline(PhiDocument* self) {
 	return result;
 }
 
+/**
+ * phi_outline_item_copy:
+ * @item: (nullable): a #PhiOutlineItem
+ *
+ * Deep-copies @item together with its children and following siblings.
+ *
+ * Returns: (transfer full) (nullable): the copy
+ */
+PhiOutlineItem* phi_outline_item_copy(const PhiOutlineItem* item) {
+	if (!item)
+		return NULL;
+
+	PhiOutlineItem* copy = g_new0(PhiOutlineItem, 1);
+	copy->title = g_strdup(item->title);
+	copy->uri = g_strdup(item->uri);
+	copy->page = item->page;
+	copy->children = phi_outline_item_copy(item->children);
+	copy->next = phi_outline_item_copy(item->next);
+	return copy;
+}
+
+/**
+ * phi_outline_item_free:
+ * @item: (nullable): a #PhiOutlineItem
+ *
+ * Frees @item together with its children and following siblings.
+ */
 void phi_outline_item_free(PhiOutlineItem* item) {
 	if (!item)
 		return;
@@ -599,6 +712,14 @@ void phi_outline_item_free(PhiOutlineItem* item) {
 	g_free(item);
 }
 
+/**
+ * phi_document_resolve_link:
+ * @self: a #PhiDocument
+ * @uri: a link URI, for example from phi_page_get_links()
+ * @dest: (out caller-allocates): return location for the destination
+ *
+ * Returns: %TRUE if @uri points into this document
+ */
 gboolean phi_document_resolve_link(PhiDocument* self, const gchar* uri, PhiLinkDest* dest) {
 	g_return_val_if_fail(PHI_IS_DOCUMENT(self), FALSE);
 	g_return_val_if_fail(uri != NULL, FALSE);

@@ -22,6 +22,7 @@
 #include "phi/phinodedeviceprivate.h"
 
 G_DEFINE_FINAL_TYPE(PhiPage, phi_page, G_TYPE_OBJECT)
+G_DEFINE_BOXED_TYPE(PhiLink, phi_link, phi_link_copy, phi_link_free)
 
 void phi_page_detach_document(PhiPage* self) {
 	g_return_if_fail(PHI_IS_PAGE(self));
@@ -58,6 +59,12 @@ static void phi_page_init(PhiPage* self) {
 	self->bounds_valid = FALSE;
 }
 
+/**
+ * phi_page_get_size:
+ * @self: a #PhiPage
+ * @width: (out) (optional): return location for the width in PDF points
+ * @height: (out) (optional): return location for the height in PDF points
+ */
 void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height) {
 	g_return_if_fail(PHI_IS_PAGE(self));
 	
@@ -71,6 +78,14 @@ void phi_page_get_size(PhiPage* self, gfloat* width, gfloat* height) {
 		*height = self->bounds.y1 - self->bounds.y0;
 }
 
+/**
+ * phi_page_get_bounds:
+ * @self: a #PhiPage
+ * @x0: (out) (optional): return location for the left edge
+ * @y0: (out) (optional): return location for the top edge
+ * @x1: (out) (optional): return location for the right edge
+ * @y1: (out) (optional): return location for the bottom edge
+ */
 void phi_page_get_bounds(PhiPage* self, gfloat* x0, gfloat* y0, gfloat* x1, gfloat* y1) {
 	g_return_if_fail(PHI_IS_PAGE(self));
 	
@@ -84,6 +99,15 @@ void phi_page_get_bounds(PhiPage* self, gfloat* x0, gfloat* y0, gfloat* x1, gflo
 	if (y1) *y1 = self->bounds.y1;
 }
 
+/**
+ * phi_page_render_to_node:
+ * @self: a #PhiPage
+ * @error: return location for a #GError
+ *
+ * Converts the page into a vector render node at 1 unit per PDF point.
+ *
+ * Returns: (transfer full): the render node, or %NULL on error
+ */
 GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	
@@ -106,6 +130,13 @@ GskRenderNode* phi_page_render_to_node(PhiPage* self, GError** error) {
 	return ret;
 }
 
+/**
+ * phi_page_render_to_paintable:
+ * @self: a #PhiPage
+ * @error: return location for a #GError
+ *
+ * Returns: (transfer full): a paintable of the page, or %NULL on error
+ */
 GdkPaintable* phi_page_render_to_paintable(PhiPage* self, GError** error) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	
@@ -121,6 +152,13 @@ GdkPaintable* phi_page_render_to_paintable(PhiPage* self, GError** error) {
 	return ret;
 }
 
+/**
+ * phi_page_get_links:
+ * @self: a #PhiPage
+ *
+ * Returns: (transfer full) (nullable): the first link on the page; further
+ *   links follow through #PhiLink.next
+ */
 PhiLink* phi_page_get_links(PhiPage* self) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	
@@ -154,6 +192,33 @@ PhiLink* phi_page_get_links(PhiPage* self) {
 	return result;
 }
 
+/**
+ * phi_link_copy:
+ * @link: (nullable): a #PhiLink
+ *
+ * Copies @link together with the links following it.
+ *
+ * Returns: (transfer full) (nullable): the copy
+ */
+PhiLink* phi_link_copy(const PhiLink* link) {
+	PhiLink* result = NULL;
+	PhiLink** tail = &result;
+	for (; link; link = link->next) {
+		PhiLink* copy = g_new0(PhiLink, 1);
+		copy->rect = link->rect;
+		copy->uri = g_strdup(link->uri);
+		*tail = copy;
+		tail = &copy->next;
+	}
+	return result;
+}
+
+/**
+ * phi_link_free:
+ * @link: (nullable): a #PhiLink
+ *
+ * Frees @link together with the links following it.
+ */
 void phi_link_free(PhiLink* link) {
 	while (link) {
 		PhiLink* next = link->next;
@@ -276,6 +341,15 @@ static gchar* phi_normalize_extracted_text(const char* text) {
 	return normalized ? normalized : g_strdup(text);
 }
 
+/**
+ * phi_page_search_text: (skip)
+ * @self: a #PhiPage
+ * @needle: text to search for
+ * @quads: caller-allocated array receiving match quads
+ * @max_quads: number of elements in @quads
+ *
+ * Returns: the number of quads written
+ */
 gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads, gint max_quads) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), 0);
 	g_return_val_if_fail(needle != NULL, 0);
@@ -307,6 +381,16 @@ gint phi_page_search_text(PhiPage* self, const gchar* needle, PhiTextQuad* quads
 	return count;
 }
 
+/**
+ * phi_page_get_selection_quads: (skip)
+ * @self: a #PhiPage
+ * @start: selection start in page coordinates
+ * @end: selection end in page coordinates
+ * @quads: caller-allocated array receiving selection quads
+ * @max_quads: number of elements in @quads
+ *
+ * Returns: the number of quads written
+ */
 gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphene_point_t* end, PhiTextQuad* quads, gint max_quads) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), 0);
 	g_return_val_if_fail(start != NULL && end != NULL, 0);
@@ -341,6 +425,15 @@ gint phi_page_get_selection_quads(PhiPage* self, graphene_point_t* start, graphe
 	return count;
 }
 
+/**
+ * phi_page_select_word_at:
+ * @self: a #PhiPage
+ * @point: a point in page coordinates
+ * @word_start: (out caller-allocates): return location for the word start
+ * @word_end: (out caller-allocates): return location for the word end
+ *
+ * Returns: %TRUE if a word was found at @point
+ */
 gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphene_point_t* word_start, graphene_point_t* word_end) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), FALSE);
 	g_return_val_if_fail(point != NULL && word_start != NULL && word_end != NULL, FALSE);
@@ -426,6 +519,13 @@ gboolean phi_page_select_word_at(PhiPage* self, graphene_point_t* point, graphen
 	return found;
 }
 
+/**
+ * phi_page_has_text_at:
+ * @self: a #PhiPage
+ * @point: a point in page coordinates
+ *
+ * Returns: %TRUE when @point is over selectable text
+ */
 gboolean phi_page_has_text_at(PhiPage* self, graphene_point_t* point) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), FALSE);
 	g_return_val_if_fail(point != NULL, FALSE);
@@ -463,6 +563,15 @@ static gboolean phi_sentence_terminator(int character) {
 	return character == '.' || character == '?' || character == '!';
 }
 
+/**
+ * phi_page_select_sentence_at:
+ * @self: a #PhiPage
+ * @point: a point in page coordinates
+ * @sentence_start: (out caller-allocates): return location for the start
+ * @sentence_end: (out caller-allocates): return location for the end
+ *
+ * Returns: %TRUE if a sentence was found at @point
+ */
 gboolean phi_page_select_sentence_at(PhiPage* self, graphene_point_t* point,
 		graphene_point_t* sentence_start, graphene_point_t* sentence_end) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), FALSE);
@@ -551,6 +660,14 @@ gboolean phi_page_select_sentence_at(PhiPage* self, graphene_point_t* point,
 	return found;
 }
 
+/**
+ * phi_page_copy_selection:
+ * @self: a #PhiPage
+ * @start: selection start in page coordinates
+ * @end: selection end in page coordinates
+ *
+ * Returns: (transfer full) (nullable): the selected text
+ */
 gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_point_t* end) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	g_return_val_if_fail(start != NULL && end != NULL, NULL);
@@ -579,6 +696,12 @@ gchar* phi_page_copy_selection(PhiPage* self, graphene_point_t* start, graphene_
 	return result;
 }
 
+/**
+ * phi_page_get_text:
+ * @self: a #PhiPage
+ *
+ * Returns: (transfer full) (nullable): all text on the page
+ */
 gchar* phi_page_get_text(PhiPage* self) {
 	g_return_val_if_fail(PHI_IS_PAGE(self), NULL);
 	

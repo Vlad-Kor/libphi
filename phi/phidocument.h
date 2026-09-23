@@ -84,7 +84,11 @@ struct _PhiOutlineItem {
 	PhiOutlineItem* next;
 };
 
+#define PHI_TYPE_OUTLINE_ITEM (phi_outline_item_get_type())
+GType phi_outline_item_get_type(void) G_GNUC_CONST;
+
 PhiOutlineItem* phi_document_get_outline(PhiDocument* self);
+PhiOutlineItem* phi_outline_item_copy(const PhiOutlineItem* item);
 void phi_outline_item_free(PhiOutlineItem* item);
 
 /* Link destination resolution */

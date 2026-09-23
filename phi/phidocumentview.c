@@ -2080,6 +2080,15 @@ on_scroll_begin(GtkEventControllerScroll* controller, PhiDocumentView* self)
         cancel_scroll_momentum(self);
 }
 
+/**
+ * phi_document_view_capture_zoom_scroll:
+ * @self: a #PhiDocumentView
+ * @ancestor: a widget outside the enclosing #GtkScrolledWindow
+ *
+ * Installs a capture-phase controller on @ancestor so that Ctrl+scroll (and
+ * pinch gestures emulated as Ctrl+scroll) zoom the view instead of scrolling
+ * the enclosing scrolled window.
+ */
 void
 phi_document_view_capture_zoom_scroll(PhiDocumentView* self,
                                        GtkWidget* ancestor)
@@ -2450,6 +2459,16 @@ phi_document_view_dispose(GObject* object)
     G_OBJECT_CLASS(phi_document_view_parent_class)->dispose(object);
 }
 
+/**
+ * PhiDocumentView:
+ *
+ * A scrollable widget that displays a #PhiDocument.
+ *
+ * Pages are rasterized in tiles on a worker thread and cached by zoom level.
+ * The view supports continuous and dual-page layouts, zooming, pinch zoom,
+ * text search and selection, links, and link navigation history.
+ */
+
 static void
 phi_document_view_class_init(PhiDocumentViewClass* klass)
 {
@@ -2499,12 +2518,26 @@ phi_document_view_class_init(PhiDocumentViewClass* klass)
     
     g_object_class_install_properties(object_class, PROP_HADJUSTMENT, props);
     
+    /**
+     * PhiDocumentView::link-activated:
+     * @self: the view
+     * @uri: the URI of a link that does not point into the document
+     *
+     * Emitted when an external link is activated.
+     */
     signals[SIGNAL_LINK_ACTIVATED] = g_signal_new("link-activated",
         G_TYPE_FROM_CLASS(klass),
         G_SIGNAL_RUN_LAST,
         0, NULL, NULL, NULL,
         G_TYPE_NONE, 1, G_TYPE_STRING);
     
+    /**
+     * PhiDocumentView::search-completed:
+     * @self: the view
+     * @n_matches: the number of matches
+     *
+     * Emitted when a search has finished scanning all pages.
+     */
     signals[SIGNAL_SEARCH_COMPLETED] = g_signal_new("search-completed",
         G_TYPE_FROM_CLASS(klass),
         G_SIGNAL_RUN_LAST,
@@ -2604,12 +2637,27 @@ phi_document_view_init(PhiDocumentView* self)
     gtk_widget_set_focusable(GTK_WIDGET(self), TRUE);
 }
 
+/**
+ * phi_document_view_new:
+ *
+ * Creates a new, empty document view. Place it inside a #GtkScrolledWindow,
+ * which drives it through the #GtkScrollable interface.
+ *
+ * Returns: (transfer floating): a new #PhiDocumentView
+ */
 PhiDocumentView*
 phi_document_view_new(void)
 {
     return g_object_new(PHI_TYPE_DOCUMENT_VIEW, NULL);
 }
 
+/**
+ * phi_document_view_set_document:
+ * @self: a #PhiDocumentView
+ * @document: (nullable): the document to display, or %NULL
+ *
+ * Displays @document. The view keeps a reference to it.
+ */
 void
 phi_document_view_set_document(PhiDocumentView* self, PhiDocument* document)
 {
@@ -2653,6 +2701,12 @@ phi_document_view_set_document(PhiDocumentView* self, PhiDocument* document)
     notify_history_changed(self);
 }
 
+/**
+ * phi_document_view_get_document:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: (transfer none) (nullable): the displayed document
+ */
 PhiDocument*
 phi_document_view_get_document(PhiDocumentView* self)
 {
@@ -2660,6 +2714,13 @@ phi_document_view_get_document(PhiDocumentView* self)
     return self->document;
 }
 
+/**
+ * phi_document_view_go_to_page:
+ * @self: a #PhiDocumentView
+ * @page: zero-based page index
+ *
+ * Scrolls to the top of @page.
+ */
 void
 phi_document_view_go_to_page(PhiDocumentView* self, gint page)
 {
@@ -2698,6 +2759,12 @@ phi_document_view_go_to_page(PhiDocumentView* self, gint page)
         g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CURRENT_PAGE]);
 }
 
+/**
+ * phi_document_view_get_current_page:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: the zero-based index of the page at the center of the view
+ */
 gint
 phi_document_view_get_current_page(PhiDocumentView* self)
 {
@@ -2705,6 +2772,18 @@ phi_document_view_get_current_page(PhiDocumentView* self)
     return self->current_page;
 }
 
+/**
+ * phi_document_view_get_scroll_state:
+ * @self: a #PhiDocumentView
+ * @page: (out) (optional): return location for the page index
+ * @page_fraction: (out) (optional): return location for the vertical position
+ *   within the page, from 0 to 1
+ * @horizontal_center: (out) (optional): return location for the horizontal
+ *   position in unzoomed PDF points
+ *
+ * Gets a zoom-independent position suitable for persistent history. Pass it
+ * to phi_document_view_restore_scroll_state() later.
+ */
 void
 phi_document_view_get_scroll_state(PhiDocumentView* self,
                                     gint* page,
@@ -2722,6 +2801,15 @@ phi_document_view_get_scroll_state(PhiDocumentView* self,
             self->zoom > 0 ? self->scroll_x / self->zoom : 0;
 }
 
+/**
+ * phi_document_view_restore_scroll_state:
+ * @self: a #PhiDocumentView
+ * @page: page index from phi_document_view_get_scroll_state()
+ * @page_fraction: vertical position within the page, from 0 to 1
+ * @horizontal_center: horizontal position in unzoomed PDF points
+ *
+ * Restores a position saved with phi_document_view_get_scroll_state().
+ */
 void
 phi_document_view_restore_scroll_state(PhiDocumentView* self,
                                         gint page,
@@ -2745,6 +2833,13 @@ phi_document_view_restore_scroll_state(PhiDocumentView* self,
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
+/**
+ * phi_document_view_set_zoom:
+ * @self: a #PhiDocumentView
+ * @zoom: the zoom factor, where 1.0 is one pixel per PDF point
+ *
+ * Sets the zoom factor, keeping the current view position.
+ */
 void
 phi_document_view_set_zoom(PhiDocumentView* self, gdouble zoom)
 {
@@ -2809,6 +2904,12 @@ zoom_at_point(PhiDocumentView* self, gdouble new_zoom, gdouble focus_x,
     zoom_from_anchor(self, new_zoom, anchor_x, &anchor_y, focus_x, focus_y);
 }
 
+/**
+ * phi_document_view_get_zoom:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: the current zoom factor
+ */
 gdouble
 phi_document_view_get_zoom(PhiDocumentView* self)
 {
@@ -2816,6 +2917,12 @@ phi_document_view_get_zoom(PhiDocumentView* self)
     return self->zoom;
 }
 
+/**
+ * phi_document_view_zoom_in:
+ * @self: a #PhiDocumentView
+ *
+ * Zooms in by one step.
+ */
 void
 phi_document_view_zoom_in(PhiDocumentView* self)
 {
@@ -2823,6 +2930,12 @@ phi_document_view_zoom_in(PhiDocumentView* self)
     phi_document_view_set_zoom(self, self->zoom * ZOOM_STEP);
 }
 
+/**
+ * phi_document_view_zoom_out:
+ * @self: a #PhiDocumentView
+ *
+ * Zooms out by one step, not below the minimum zoom.
+ */
 void
 phi_document_view_zoom_out(PhiDocumentView* self)
 {
@@ -2884,6 +2997,12 @@ get_current_page_size_for_fit(PhiDocumentView* self, gdouble* width,
     return TRUE;
 }
 
+/**
+ * phi_document_view_zoom_fit_width:
+ * @self: a #PhiDocumentView
+ *
+ * Zooms so that the current page fills the view width.
+ */
 void
 phi_document_view_zoom_fit_width(PhiDocumentView* self)
 {
@@ -2900,6 +3019,12 @@ phi_document_view_zoom_fit_width(PhiDocumentView* self)
     phi_document_view_set_zoom(self, new_zoom);
 }
 
+/**
+ * phi_document_view_zoom_fit_page:
+ * @self: a #PhiDocumentView
+ *
+ * Zooms so that the current page fits inside the view.
+ */
 void
 phi_document_view_zoom_fit_page(PhiDocumentView* self)
 {
@@ -2920,6 +3045,12 @@ phi_document_view_zoom_fit_page(PhiDocumentView* self)
     phi_document_view_set_zoom(self, MIN(zoom_w, zoom_h));
 }
 
+/**
+ * phi_document_view_zoom_fit_page_full:
+ * @self: a #PhiDocumentView
+ *
+ * Zooms so that the current page fits the view without margins.
+ */
 void
 phi_document_view_zoom_fit_page_full(PhiDocumentView* self)
 {
@@ -2937,6 +3068,13 @@ phi_document_view_zoom_fit_page_full(PhiDocumentView* self)
         self, MIN(width / page_width, height / page_height));
 }
 
+/**
+ * phi_document_view_set_minimum_zoom:
+ * @self: a #PhiDocumentView
+ * @zoom: the smallest allowed zoom factor
+ *
+ * Sets the smallest zoom factor that zooming out can reach.
+ */
 void
 phi_document_view_set_minimum_zoom(PhiDocumentView* self, gdouble zoom)
 {
@@ -2949,6 +3087,12 @@ phi_document_view_set_minimum_zoom(PhiDocumentView* self, gdouble zoom)
         update_adjustments(self);
 }
 
+/**
+ * phi_document_view_get_minimum_zoom:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: the smallest allowed zoom factor
+ */
 gdouble
 phi_document_view_get_minimum_zoom(PhiDocumentView* self)
 {
@@ -2956,6 +3100,13 @@ phi_document_view_get_minimum_zoom(PhiDocumentView* self)
     return self->minimum_zoom;
 }
 
+/**
+ * phi_document_view_set_presentation_mode:
+ * @self: a #PhiDocumentView
+ * @presentation: whether to present the document
+ *
+ * Switches presentation mode, which centers pages on a black surround.
+ */
 void
 phi_document_view_set_presentation_mode(PhiDocumentView* self,
                                          gboolean presentation)
@@ -2973,6 +3124,12 @@ phi_document_view_set_presentation_mode(PhiDocumentView* self,
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
+/**
+ * phi_document_view_get_presentation_mode:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: whether presentation mode is enabled
+ */
 gboolean
 phi_document_view_get_presentation_mode(PhiDocumentView* self)
 {
@@ -2980,6 +3137,13 @@ phi_document_view_get_presentation_mode(PhiDocumentView* self)
     return self->presentation_mode;
 }
 
+/**
+ * phi_document_view_set_continuous:
+ * @self: a #PhiDocumentView
+ * @continuous: whether to lay out all pages in one scrollable column
+ *
+ * Switches between continuous and single-page layout.
+ */
 void
 phi_document_view_set_continuous(PhiDocumentView* self, gboolean continuous)
 {
@@ -2996,6 +3160,12 @@ phi_document_view_set_continuous(PhiDocumentView* self, gboolean continuous)
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_CONTINUOUS]);
 }
 
+/**
+ * phi_document_view_get_continuous:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: whether continuous layout is enabled
+ */
 gboolean
 phi_document_view_get_continuous(PhiDocumentView* self)
 {
@@ -3003,6 +3173,13 @@ phi_document_view_get_continuous(PhiDocumentView* self)
     return self->continuous;
 }
 
+/**
+ * phi_document_view_set_dual_page:
+ * @self: a #PhiDocumentView
+ * @dual: whether to show two pages side by side
+ *
+ * Switches dual-page layout.
+ */
 void
 phi_document_view_set_dual_page(PhiDocumentView* self, gboolean dual)
 {
@@ -3017,6 +3194,12 @@ phi_document_view_set_dual_page(PhiDocumentView* self, gboolean dual)
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_DUAL_PAGE]);
 }
 
+/**
+ * phi_document_view_get_dual_page:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: whether dual-page layout is enabled
+ */
 gboolean
 phi_document_view_get_dual_page(PhiDocumentView* self)
 {
@@ -3024,6 +3207,13 @@ phi_document_view_get_dual_page(PhiDocumentView* self)
     return self->dual_page;
 }
 
+/**
+ * phi_document_view_set_inverted:
+ * @self: a #PhiDocumentView
+ * @inverted: whether to invert page colors
+ *
+ * Switches inverted (dark) page colors.
+ */
 void
 phi_document_view_set_inverted(PhiDocumentView* self, gboolean inverted)
 {
@@ -3037,6 +3227,12 @@ phi_document_view_set_inverted(PhiDocumentView* self, gboolean inverted)
     g_object_notify_by_pspec(G_OBJECT(self), props[PROP_INVERTED]);
 }
 
+/**
+ * phi_document_view_get_inverted:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: whether page colors are inverted
+ */
 gboolean
 phi_document_view_get_inverted(PhiDocumentView* self)
 {
@@ -3044,6 +3240,12 @@ phi_document_view_get_inverted(PhiDocumentView* self)
     return self->inverted;
 }
 
+/**
+ * phi_document_view_can_go_back:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: whether there is an earlier position in the link history
+ */
 gboolean
 phi_document_view_can_go_back(PhiDocumentView* self)
 {
@@ -3051,6 +3253,12 @@ phi_document_view_can_go_back(PhiDocumentView* self)
     return self->history_pos > 0;
 }
 
+/**
+ * phi_document_view_can_go_forward:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: whether there is a later position in the link history
+ */
 gboolean
 phi_document_view_can_go_forward(PhiDocumentView* self)
 {
@@ -3058,6 +3266,12 @@ phi_document_view_can_go_forward(PhiDocumentView* self)
     return self->history_pos < (gint)self->history->len - 1;
 }
 
+/**
+ * phi_document_view_go_back:
+ * @self: a #PhiDocumentView
+ *
+ * Returns to the previous position in the link history.
+ */
 void
 phi_document_view_go_back(PhiDocumentView* self)
 {
@@ -3074,6 +3288,12 @@ phi_document_view_go_back(PhiDocumentView* self)
     notify_history_changed(self);
 }
 
+/**
+ * phi_document_view_go_forward:
+ * @self: a #PhiDocumentView
+ *
+ * Moves to the next position in the link history.
+ */
 void
 phi_document_view_go_forward(PhiDocumentView* self)
 {
@@ -3090,6 +3310,14 @@ phi_document_view_go_forward(PhiDocumentView* self)
     notify_history_changed(self);
 }
 
+/**
+ * phi_document_view_activate_link:
+ * @self: a #PhiDocumentView
+ * @uri: a link URI
+ *
+ * Follows @uri. Links into the document are recorded in the navigation
+ * history; other links emit #PhiDocumentView::link-activated.
+ */
 void
 phi_document_view_activate_link(PhiDocumentView* self, const gchar* uri)
 {
@@ -3245,6 +3473,14 @@ search_debounce_callback(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+/**
+ * phi_document_view_search:
+ * @self: a #PhiDocumentView
+ * @text: (nullable): the text to search for, or %NULL to clear the search
+ *
+ * Starts an incremental search and highlights matches. Emits
+ * #PhiDocumentView::search-completed when all pages have been searched.
+ */
 void
 phi_document_view_search(PhiDocumentView* self, const gchar* text)
 {
@@ -3280,6 +3516,12 @@ phi_document_view_search(PhiDocumentView* self, const gchar* text)
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
+/**
+ * phi_document_view_search_next:
+ * @self: a #PhiDocumentView
+ *
+ * Scrolls to the next search match.
+ */
 void
 phi_document_view_search_next(PhiDocumentView* self)
 {
@@ -3298,6 +3540,12 @@ phi_document_view_search_next(PhiDocumentView* self)
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
+/**
+ * phi_document_view_search_prev:
+ * @self: a #PhiDocumentView
+ *
+ * Scrolls to the previous search match.
+ */
 void
 phi_document_view_search_prev(PhiDocumentView* self)
 {
@@ -3316,6 +3564,12 @@ phi_document_view_search_prev(PhiDocumentView* self)
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
+/**
+ * phi_document_view_clear_search:
+ * @self: a #PhiDocumentView
+ *
+ * Clears the search and its highlights.
+ */
 void
 phi_document_view_clear_search(PhiDocumentView* self)
 {
@@ -3328,6 +3582,12 @@ phi_document_view_clear_search(PhiDocumentView* self)
     gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
+/**
+ * phi_document_view_get_search_match_count:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: the number of search matches found so far
+ */
 gint
 phi_document_view_get_search_match_count(PhiDocumentView* self)
 {
@@ -3335,6 +3595,12 @@ phi_document_view_get_search_match_count(PhiDocumentView* self)
     return self->search_total_matches;
 }
 
+/**
+ * phi_document_view_get_search_current_match:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: the index of the current search match, or -1
+ */
 gint
 phi_document_view_get_search_current_match(PhiDocumentView* self)
 {
@@ -3342,6 +3608,12 @@ phi_document_view_get_search_current_match(PhiDocumentView* self)
     return self->search_current_match;
 }
 
+/**
+ * phi_document_view_get_selected_text:
+ * @self: a #PhiDocumentView
+ *
+ * Returns: (transfer full) (nullable): the selected text, or %NULL
+ */
 gchar*
 phi_document_view_get_selected_text(PhiDocumentView* self)
 {
@@ -3361,6 +3633,12 @@ phi_document_view_get_selected_text(PhiDocumentView* self)
     return phi_page_copy_selection(page, &self->selection_start, &self->selection_end);
 }
 
+/**
+ * phi_document_view_clear_selection:
+ * @self: a #PhiDocumentView
+ *
+ * Clears the text selection.
+ */
 void
 phi_document_view_clear_selection(PhiDocumentView* self)
 {
