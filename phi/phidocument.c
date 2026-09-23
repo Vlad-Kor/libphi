@@ -105,19 +105,16 @@ static guint phi_document_list_model_get_n_items(GListModel* list) {
 }
 static gpointer phi_document_list_model_get_item(GListModel* list, guint position) {
 	PhiDocument* self = PHI_DOCUMENT(list);
-	if ((gint)position >= self->n_pages)
+	if (position >= (guint)self->n_pages)
 		return NULL;
-	if (!self->pages[position]) {
-		GError* error = NULL;
-		PhiPage* page = phi_document_get_page(self, position, &error);
-		if (!page) {
-			g_critical("Failed to load page: %s", error->message);
-			g_error_free(error);
-			return NULL;
-		}
-		return g_object_ref(page);
+	GError* error = NULL;
+	PhiPage* page = phi_document_get_page(self, position, &error);
+	if (!page) {
+		g_critical("Failed to load page: %s", error->message);
+		g_error_free(error);
+		return NULL;
 	}
-	return g_object_ref(self->pages[position]);
+	return g_object_ref(page);
 }
 static void phi_document_list_model_iface_init(GListModelInterface *iface) {
 	iface->get_item_type = phi_document_list_model_get_item_type;
@@ -329,8 +326,10 @@ PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
 		content_type = g_file_info_get_content_type(info);
 
 	GFileInputStream* stream = g_file_read(file, NULL, error);
-	if (!stream)
+	if (!stream) {
+		g_clear_object(&info);
 		return NULL;
+	}
 
 	PhiDocument* ret = phi_document_new_from_stream(G_INPUT_STREAM(stream), content_type, error);
 	if (ret) {
