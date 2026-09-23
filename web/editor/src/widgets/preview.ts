@@ -1,6 +1,7 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { parseDocument } from "yaml";
 import { requestNative, reportError, sendNative } from "../bridge";
+import { isNestedScrollbarEvent } from "../horizontal-scroll";
 import { getMathRevision, isMathScrollbarEvent, renderMath, wireMathScroll } from "../math/mathjax";
 import {
   rawHtmlIsBlock,
@@ -101,6 +102,29 @@ function reveal(
     scrollIntoView: true,
   });
   view.focus();
+}
+
+/**
+ * Reveal a soft preview's source on press, click, and double-click, except
+ * for presses on a nested horizontal scrollbar (such as a wide code block).
+ * Revealing replaces the widget, which would end the native scrollbar drag
+ * immediately. The click that ends such a drag is ignored as well, because
+ * WebKit reports it wherever the pointer was released.
+ */
+function addSourceRevealListeners(
+  element: HTMLElement,
+  revealClick: (event: MouseEvent) => void,
+): void {
+  let scrollbarPress = false;
+  element.addEventListener("pointerdown", (event) => {
+    scrollbarPress = isNestedScrollbarEvent(element, event);
+    if (!scrollbarPress) revealClick(event);
+  });
+  const follow = (event: MouseEvent) => {
+    if (!scrollbarPress) revealClick(event);
+  };
+  element.addEventListener("click", follow);
+  element.addEventListener("dblclick", follow);
 }
 
 function revealAt(view: EditorView, position: number): void {
@@ -1254,9 +1278,7 @@ export class HtmlPreviewWidget extends WidgetType {
         : selected ?? fallback;
       revealAt(view, this.from + offset);
     };
-    container.addEventListener("pointerdown", revealClick);
-    container.addEventListener("click", revealClick);
-    container.addEventListener("dblclick", revealClick);
+    addSourceRevealListeners(container, revealClick);
     return container;
   }
 
@@ -1335,9 +1357,7 @@ export class CalloutWidget extends WidgetType {
       const selected = clickedSourceOffset(body, this.body, event) ?? 0;
       revealAt(view, calloutBodyPosition(view, this.from, this.body, selected));
     };
-    details.addEventListener("pointerdown", revealClick);
-    details.addEventListener("click", revealClick);
-    details.addEventListener("dblclick", revealClick);
+    addSourceRevealListeners(details, revealClick);
     return details;
   }
 

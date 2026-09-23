@@ -56,6 +56,24 @@ export function isHorizontalScrollbarEvent(
     event.clientY >= scrollbarTop && event.clientY < rect.bottom;
 }
 
+/**
+ * Whether a pointer event lies in the horizontal scrollbar of `root` or of a
+ * nested scroller inside it. WebKit targets scrollbar presses at the scroller.
+ */
+export function isNestedScrollbarEvent(
+  root: HTMLElement,
+  event: Event,
+): boolean {
+  if (!(event instanceof MouseEvent)) return false;
+  for (let node = event.target instanceof Element ? event.target : null;
+       node && root.contains(node); node = node.parentElement) {
+    if (node instanceof HTMLElement && isHorizontalScrollbarEvent(node, event))
+      return true;
+    if (node === root) break;
+  }
+  return false;
+}
+
 /** Install the direct nested-scroller policy without involving the editor. */
 export function wireHorizontalScroll(
   target: HTMLElement,

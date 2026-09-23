@@ -4,7 +4,7 @@ import type { EditorView } from "@codemirror/view";
 import { afterEach, expect, it, vi } from "vitest";
 import { acceptNativeResponse } from "../src/bridge";
 import type { NativeMessage } from "../src/types";
-import { CalloutWidget, LinkWidget, RawHtmlWidget, resetPreviewGeometryCaches } from "../src/widgets/preview";
+import { CalloutWidget, HtmlPreviewWidget, LinkWidget, RawHtmlWidget, resetPreviewGeometryCaches } from "../src/widgets/preview";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -17,6 +17,62 @@ function mockView(doc = " ".repeat(200)) {
     dispatch: vi.fn(), focus: vi.fn(), requestMeasure: vi.fn(),
   } as unknown as EditorView;
 }
+
+/** Give a rendered <pre> jsdom geometry with a 12 px bottom scrollbar. */
+function overflowingPre(pre: HTMLElement): void {
+  Object.defineProperties(pre, {
+    clientWidth: { value: 300 },
+    scrollWidth: { value: 900 },
+    offsetWidth: { value: 300 },
+    offsetHeight: { value: 100 },
+    clientHeight: { value: 88 },
+  });
+  pre.getBoundingClientRect = () => ({
+    left: 20, top: 30, right: 320, bottom: 130, width: 300, height: 100,
+    x: 20, y: 30, toJSON: () => ({}),
+  });
+}
+
+it("keeps a code block rendered while its horizontal scrollbar is dragged", () => {
+  const source = "```\n" + "x".repeat(200) + "\n```";
+  const view = mockView(source);
+  const dom = new HtmlPreviewWidget(source, 0, "code-block-widget").toDOM(view);
+  document.body.append(dom);
+  const pre = dom.querySelector("pre")!;
+  overflowingPre(pre);
+  const press = new MouseEvent("pointerdown", {
+    bubbles: true, cancelable: true, clientX: 100, clientY: 125,
+  });
+  pre.dispatchEvent(press);
+  expect(press.defaultPrevented).toBe(false);
+  // The drag's closing click lands wherever the pointer was released.
+  pre.dispatchEvent(new MouseEvent("click", {
+    bubbles: true, cancelable: true, clientX: 200, clientY: 60,
+  }));
+  expect(view.dispatch).not.toHaveBeenCalled();
+
+  // A press on the code itself still reveals its source.
+  pre.dispatchEvent(new MouseEvent("pointerdown", {
+    bubbles: true, cancelable: true, clientX: 100, clientY: 60,
+  }));
+  expect(view.dispatch).toHaveBeenCalled();
+});
+
+it("keeps a callout rendered while a nested code scrollbar is dragged", () => {
+  const body = "```\n" + "x".repeat(200) + "\n```";
+  const view = mockView("> [!note] Title\n> " + body.replaceAll("\n", "\n> "));
+  const dom = new CalloutWidget(body, "note", "Title", "", 0).toDOM(view);
+  document.body.append(dom);
+  const pre = dom.querySelector("pre")!;
+  overflowingPre(pre);
+  pre.dispatchEvent(new MouseEvent("pointerdown", {
+    bubbles: true, cancelable: true, clientX: 100, clientY: 125,
+  }));
+  pre.dispatchEvent(new MouseEvent("click", {
+    bubbles: true, cancelable: true, clientX: 100, clientY: 125,
+  }));
+  expect(view.dispatch).not.toHaveBeenCalled();
+});
 
 it.each([false, true])("lets HTML summary close and reopen (initial open: %s)", open => {
   const view = mockView();
