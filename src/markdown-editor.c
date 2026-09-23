@@ -461,6 +461,7 @@ static void handle_completion(PdfvMarkdownEditor *self, const gchar *type,
   if (!values) {
     send_response_error(self, id, error);
   } else {
+    /* NATIVE_COMPLETION_LIMIT in completion.ts must match. */
     if (values->len > 100)
       g_ptr_array_set_size(values, 100);
     send_response_node(self, id, string_array_node(values), NULL);

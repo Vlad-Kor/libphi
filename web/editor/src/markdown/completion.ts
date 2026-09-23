@@ -9,6 +9,11 @@ interface NativeCompletion {
   target?: string;
 }
 
+/* markdown-editor.c returns at most this many completions. A truncated list
+ * must be requested again as the query grows, or the notes past the limit
+ * could never be offered. */
+export const NATIVE_COMPLETION_LIMIT = 100;
+
 const callouts = [
   "note", "abstract", "summary", "tldr", "info", "todo", "tip", "hint",
   "important", "success", "check", "done", "question", "help", "faq",
@@ -78,11 +83,11 @@ export async function markdownCompletion(
     from += headingAt + 1;
   }
   try {
-    const result = await requestNative<(NativeCompletion | string)[]>(type, { query: search, target });
+    const result = await requestNative<(NativeCompletion | string)[]>(type, { query: search, target }) ?? [];
     return {
       from,
-      options: (result ?? []).map((value) => asCompletion(value, type)),
-      validFor: /^[^\]\n]*$/,
+      options: result.map((value) => asCompletion(value, type)),
+      validFor: result.length < NATIVE_COMPLETION_LIMIT ? /^[^\]\n]*$/ : undefined,
     };
   } catch {
     return { from, options: [] };
