@@ -16,8 +16,9 @@ export interface MarkdownAnalysis {
   readonly text: string;
   readonly nodes: readonly MarkdownNode[];
   readonly math: readonly MarkdownNode[];
-  /** `mapped` means a proven plain-prose edit reused the previous analysis. */
-  readonly updateKind: "full" | "mapped";
+  /** `mapped`: a proven plain-prose edit reused the previous nodes; `region`:
+   * only a context-independent window was reparsed (see regionAnalysis). */
+  readonly updateKind: "full" | "mapped" | "region";
 }
 
 const positionMeta = new Set([
@@ -65,6 +66,9 @@ function mapNode(node: MarkdownNode, changes: ChangeDesc): MarkdownNode {
 
 const inlineStructure = /[#*_~`$<>\[\]!^|\\%]/;
 const blockStructure = /^\s*(?:[-+*]|\d+[.)])\s/;
+/* Horizontal rules and frontmatter delimiters consist of characters that are
+ * not otherwise structural; typing `---` used to be mapped as plain prose. */
+const lineStructure = /^\s*(?:-[ \t]*){3,}$|^[{}]\s*$/;
 
 function canMapPlainEdit(previous: MarkdownAnalysis,
                          transaction: Transaction): boolean {
@@ -86,7 +90,8 @@ function canMapPlainEdit(previous: MarkdownAnalysis,
   const oldLine = transaction.startState.doc.lineAt(resolved.fromA);
   const newLine = transaction.newDoc.lineAt(resolved.fromB);
   if (inlineStructure.test(oldLine.text) || inlineStructure.test(newLine.text) ||
-      blockStructure.test(oldLine.text) || blockStructure.test(newLine.text))
+      blockStructure.test(oldLine.text) || blockStructure.test(newLine.text) ||
+      lineStructure.test(oldLine.text) || lineStructure.test(newLine.text))
     return false;
 
   /* There must be no parsed construct on the edited line. This excludes
@@ -95,10 +100,223 @@ function canMapPlainEdit(previous: MarkdownAnalysis,
     node.from <= oldLine.to && node.to >= oldLine.from);
 }
 
+/* ---------------------------------------------------------------------------
+ * Region reparse.
+ *
+ * parseMarkdownNodes is a whole-document parser. Typing inside a code block,
+ * a multiline equation, or any paragraph containing Markdown syntax used to
+ * reparse the entire note on every key. A region reparse parses only a
+ * window of whole lines and splices the result between the unchanged nodes.
+ *
+ * It is used only when the window is provably independent of its context:
+ *  1. the old window parsed on its own reproduces exactly the old nodes inside
+ *     it, and no old node crosses its boundaries;
+ *  2. neither the old nor the new window contains a token whose meaning can
+ *     reach past the window: display delimiters, fence lines, `%%` comments,
+ *     raw HTML tags, footnote syntax (definitions are global), or frontmatter
+ *     delimiters; and the edit itself inserts or removes no `<` or `>`;
+ *  3. the window is bounded by empty lines (nothing continues across one), or
+ *     is the complete source of a code/display block whose delimiter lines the
+ *     edit does not touch.
+ * Anything else falls back to one full analysis.
+ * ------------------------------------------------------------------------- */
+
+const REGION_LIMIT = 16_384;
+const htmlTag = /<[A-Za-z/]/;
+const fenceLine = /^ {0,3}(?:`{3,}|~{3,})/m;
+const frontmatterOpener = /^(---|\{)\s*\n/;
+const frontmatterCloser = /^(?:---|\})[ \t]*$/m;
+
+function longRangeFree(window: string, container: boolean): boolean {
+  if (htmlTag.test(window) || window.includes("%%") || window.includes("[^"))
+    return false;
+  /* A container's own delimiters are balanced inside it and verified by its
+   * shape; a paragraph must not contain any. */
+  return container || !(window.includes("$$") || window.includes("\\[") ||
+    window.includes("\\]") || fenceLine.test(window));
+}
+
+function sameNodes(left: readonly MarkdownNode[], right: readonly MarkdownNode[],
+                   offset: number): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    const a = left[index];
+    const b = right[index];
+    if (a.kind !== b.kind || a.from + offset !== b.from || a.to + offset !== b.to ||
+        a.text !== b.text ||
+        (a.contentFrom == null ? b.contentFrom != null : a.contentFrom + offset !== b.contentFrom) ||
+        (a.contentTo == null ? b.contentTo != null : a.contentTo + offset !== b.contentTo))
+      return false;
+    const aMeta = a.meta ?? {};
+    const bMeta = b.meta ?? {};
+    const keys = Object.keys(aMeta);
+    if (keys.length !== Object.keys(bMeta).length) return false;
+    for (const key of keys) {
+      const value = aMeta[key];
+      const expected = typeof value === "number" && positionMeta.has(key)
+        ? value + offset : value;
+      if (bMeta[key] !== expected) return false;
+    }
+  }
+  return true;
+}
+
+function shiftNode(node: MarkdownNode, offset: number): MarkdownNode {
+  if (!offset) return node;
+  const meta = node.meta ? { ...node.meta } : undefined;
+  if (meta) {
+    for (const [name, value] of Object.entries(meta)) {
+      if (typeof value === "number" && positionMeta.has(name))
+        meta[name] = value + offset;
+    }
+  }
+  return {
+    ...node,
+    from: node.from + offset,
+    to: node.to + offset,
+    contentFrom: node.contentFrom == null ? undefined : node.contentFrom + offset,
+    contentTo: node.contentTo == null ? undefined : node.contentTo + offset,
+    meta,
+  };
+}
+
+interface RegionWindow {
+  from: number;
+  oldTo: number;
+  newTo: number;
+  /** The container node whose complete source is the window, if any. */
+  container?: MarkdownNode;
+}
+
+function changedSpan(transaction: Transaction) {
+  let fromA = Infinity, toA = -Infinity, fromB = Infinity, toB = -Infinity;
+  let delimiters = false;
+  transaction.changes.iterChanges((a, b, c, d, inserted) => {
+    fromA = Math.min(fromA, a); toA = Math.max(toA, b);
+    fromB = Math.min(fromB, c); toB = Math.max(toB, d);
+    if (/[<>]/.test(inserted.toString()) ||
+        /[<>]/.test(transaction.startState.sliceDoc(a, b))) delimiters = true;
+  });
+  return { fromA, toA, fromB, toB, delimiters };
+}
+
+const containerKinds = new Set(["code-block", "mermaid", "display-math"]);
+
+function containerWindow(previous: MarkdownAnalysis, transaction: Transaction,
+                         span: ReturnType<typeof changedSpan>): RegionWindow | null {
+  const doc = transaction.startState.doc;
+  /* The innermost container around the edit (nodes are sorted by start). */
+  let container: MarkdownNode | undefined;
+  for (const node of previous.nodes) {
+    if (node.from > span.fromA) break;
+    if (containerKinds.has(node.kind) && node.to >= span.toA) container = node;
+  }
+  if (!container) return null;
+  const first = doc.lineAt(container.from);
+  const last = doc.lineAt(container.to);
+  if (container.from !== first.from || container.to !== last.to ||
+      first.number === last.number ||
+      span.fromA <= first.to || span.toA >= last.from) return null;
+  if (container.kind === "display-math") {
+    const open = first.text.trim();
+    const close = last.text.trim();
+    if (!((open === "$$" && close === "$$") || (open === "\\[" && close === "\\]")))
+      return null;
+  }
+  const delta = transaction.newDoc.length - doc.length;
+  return { from: container.from, oldTo: container.to, newTo: container.to + delta, container };
+}
+
+function paragraphWindow(transaction: Transaction,
+                         span: ReturnType<typeof changedSpan>): RegionWindow | null {
+  const doc = transaction.newDoc;
+  let first = doc.lineAt(span.fromB);
+  while (first.number > 1) {
+    const above = doc.line(first.number - 1);
+    if (!above.length) break;
+    first = above;
+    if (span.fromB - first.from > REGION_LIMIT) return null;
+  }
+  let last = doc.lineAt(span.toB);
+  while (last.number < doc.lines) {
+    const below = doc.line(last.number + 1);
+    if (!below.length) break;
+    last = below;
+    if (last.to - span.toB > REGION_LIMIT) return null;
+  }
+  const delta = doc.length - transaction.startState.doc.length;
+  /* Everything outside [first.from, last.to] is unchanged text. */
+  if (first.from > span.fromA || last.to - delta < span.toA) return null;
+  return { from: first.from, oldTo: last.to - delta, newTo: last.to };
+}
+
+function regionAnalysis(previous: MarkdownAnalysis, transaction: Transaction,
+                        text: string): MarkdownAnalysis | null {
+  const span = changedSpan(transaction);
+  if (span.delimiters || !Number.isFinite(span.fromA)) return null;
+  const window = containerWindow(previous, transaction, span) ??
+    paragraphWindow(transaction, span);
+  if (!window || window.newTo - window.from > REGION_LIMIT) return null;
+  const oldText = previous.text;
+  const oldWindow = oldText.slice(window.from, window.oldTo);
+  const newWindow = text.slice(window.from, window.newTo);
+  const container = Boolean(window.container);
+  if (!longRangeFree(oldWindow, container) || !longRangeFree(newWindow, container))
+    return null;
+
+  /* A frontmatter block that has not been closed yet could close inside the
+   * window, and a window at the very start could open one. */
+  const hasFrontmatter = previous.nodes[0]?.kind === "frontmatter";
+  if ((window.from === 0 && (frontmatterOpener.test(oldWindow) ||
+       frontmatterOpener.test(newWindow))) ||
+      (!hasFrontmatter && frontmatterOpener.test(text) &&
+       (frontmatterCloser.test(oldWindow) || frontmatterCloser.test(newWindow))))
+    return null;
+
+  const before: MarkdownNode[] = [];
+  const inside: MarkdownNode[] = [];
+  const after: MarkdownNode[] = [];
+  for (const node of previous.nodes) {
+    if (node.to <= window.from && node.from < window.from) before.push(node);
+    else if (node.from >= window.oldTo && node.from > window.from) after.push(node);
+    else if (node.from >= window.from && node.to <= window.oldTo) inside.push(node);
+    else return null;
+  }
+  if (!sameNodes(parseMarkdownNodes(oldWindow), inside, window.from)) return null;
+
+  const parsed = parseMarkdownNodes(newWindow);
+  if (window.container) {
+    const kind = window.container.kind;
+    const shape = parsed.find((node) => node.from === 0 &&
+      node.to === newWindow.length && node.kind === kind);
+    if (!shape || (kind !== "display-math" &&
+        shape.meta?.incomplete !== window.container.meta?.incomplete)) return null;
+  }
+
+  const changes = transaction.changes;
+  const nodes = [
+    /* Footnote references keep their definition's position in `meta`. */
+    ...before.map((node) => typeof node.meta?.definition === "number" &&
+      node.meta.definition >= window.from ? mapNode(node, changes) : node),
+    ...parsed.map((node) => shiftNode(node, window.from)),
+    ...after.map((node) => mapNode(node, changes)),
+  ];
+  return {
+    text,
+    nodes,
+    math: nodes.filter((node) =>
+      node.kind === "math" || node.kind === "display-math"),
+    updateKind: "region",
+  };
+}
+
 function updateAnalysis(previous: MarkdownAnalysis,
                         transaction: Transaction): MarkdownAnalysis {
   const text = transaction.newDoc.toString();
-  if (!canMapPlainEdit(previous, transaction)) return fullAnalysis(text);
+  if (!canMapPlainEdit(previous, transaction)) {
+    return measurePerformance("markdown/analysis-region", () =>
+      regionAnalysis(previous, transaction, text)) ?? fullAnalysis(text);
+  }
   return measurePerformance("markdown/analysis-map", () => {
     const nodes = previous.nodes.map((node) => mapNode(node, transaction.changes));
     return {

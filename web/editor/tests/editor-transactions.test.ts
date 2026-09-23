@@ -1582,6 +1582,48 @@ $$`;
     expect(parent.querySelectorAll(".math-display")).toHaveLength(1);
   });
 
+  it("keeps one math bubble and coalesces slow typesets while typing", async () => {
+    const typeset: string[] = [];
+    (window as unknown as { MathJax?: unknown }).MathJax = {
+      startup: { promise: Promise.resolve() },
+      tex2svg: (source: string) => {
+        typeset.push(source);
+        const until = performance.now() + 30;
+        while (performance.now() < until) { /* an expensive environment */ }
+        const svg = document.createElement("mjx-container");
+        svg.textContent = source;
+        return svg;
+      },
+    };
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const text = "$$\ny = 7\n$$\n\nAfter";
+    editor.openDocument({ documentId: "math-typing", path: "math.md", text, revision: 1, lineEnding: "LF" });
+    editor.view.dispatch({ selection: { anchor: 8 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const bubble = parent.querySelector(".math-preview-bubble");
+    expect(bubble).not.toBeNull();
+    expect(typeset).toEqual(["y = 7"]);
+
+    for (const character of "+1+2+3+4+5") {
+      const at = editor.view.state.selection.main.head;
+      editor.view.dispatch({
+        changes: { from: at, insert: character },
+        selection: { anchor: at + 1 },
+        userEvent: "input.type",
+      });
+      await Promise.resolve();
+    }
+    expect(parent.querySelector(".math-preview-bubble")).toBe(bubble);
+    expect(typeset).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(typeset).toEqual(["y = 7", "y = 7+1+2+3+4+5"]);
+    expect(bubble!.querySelectorAll(".math-edit-preview")).toHaveLength(1);
+    expect(bubble!.textContent).toContain("y = 7+1+2+3+4+5");
+  });
+
   it("disables MathJax inline line breaking so lone relation symbols are not clipped", () => {
     const source = readFileSync(
       "src/math/mathjax-config.js",

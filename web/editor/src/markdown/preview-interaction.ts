@@ -23,6 +23,7 @@ import {
 } from "./source-edit";
 import { selectionTouches, type MarkdownNode } from "./parser";
 import { focusRichTableBoundary } from "../widgets/table";
+import { mountedWidgetFrom } from "../widgets/mounted";
 
 export interface HardPreviewSelection {
   from: number;
@@ -191,8 +192,7 @@ function syncHardSelectionDOM(view: EditorView): void {
      * kept while text above it changes, so resolve its current start. */
     const builtFrom = Number(element.dataset.hardPreviewFrom);
     const builtTo = Number(element.dataset.hardPreviewTo);
-    const from = element.closest(".cm-content") === view.contentDOM
-      ? view.posAtDOM(element) : builtFrom;
+    const from = mountedWidgetFrom(view, element) ?? builtFrom;
     const to = from + builtTo - builtFrom;
     const active = selected?.from === from && selected.to === to;
     element.classList.toggle("cm-hard-selected", active);

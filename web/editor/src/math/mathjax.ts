@@ -21,6 +21,13 @@ interface MathJaxWindow extends Window {
 }
 
 const cache = new Map<string, string>();
+let lastTypesetDuration = 0;
+let typesetCount = 0;
+
+/** Number of synchronous MathJax conversions and the last one's duration. */
+export function mathTypesetStats(): { count: number; lastDuration: number } {
+  return { count: typesetCount, lastDuration: lastTypesetDuration };
+}
 let preamble = "";
 let preambleRevision = 0;
 let mathJaxScript: Promise<void> | undefined;
@@ -105,7 +112,15 @@ async function convertMath(
   for (let attempt = 0; attempt < 32; attempt++) {
     signal?.throwIfAborted();
     try {
-      return measurePerformance("math/typeset", () => mathjax.tex2svg!(source, { display }));
+      return measurePerformance("math/typeset", () => {
+        const started = performance.now();
+        try {
+          return mathjax.tex2svg!(source, { display });
+        } finally {
+          lastTypesetDuration = performance.now() - started;
+          typesetCount++;
+        }
+      });
     } catch (error) {
       const retry = retryPromise(error);
       if (!retry) throw error;

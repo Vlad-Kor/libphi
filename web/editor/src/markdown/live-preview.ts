@@ -4,7 +4,10 @@ import {
   StateField,
   type Transaction,
 } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, showTooltip, type Tooltip } from "@codemirror/view";
+import {
+  Decoration, type DecorationSet, EditorView, showTooltip, type Tooltip, type ViewUpdate,
+} from "@codemirror/view";
+import { getMathRevision, mathTypesetStats } from "../math/mathjax";
 import type { MarkdownNode } from "./parser";
 import {
   CalloutWidget,
@@ -180,7 +183,7 @@ function addInlineCode(
       ? node.to
       : Number(node.contentFrom ?? node.from);
     builder.add(node.from, node.to, Decoration.replace({
-      widget: new EmptyInlineCodeWidget(sourcePosition),
+      widget: new EmptyInlineCodeWidget(sourcePosition - node.from, node.from),
     }));
     return;
   }
@@ -439,34 +442,142 @@ function buildDecorationsNow(state: EditorState,
   return Decoration.set(measured, true);
 }
 
-function buildMathTooltips(state: EditorState): readonly Tooltip[] {
+function activeMathNodes(state: EditorState): MarkdownNode[] {
   const analysis = markdownAnalysis(state);
   const seen = new Set<number>();
-  const tooltips: Tooltip[] = [];
+  const nodes: MarkdownNode[] = [];
   for (const selection of state.selection.ranges) {
     const node = mathNodeAt(analysis, selection);
     if (!node || seen.has(node.from)) continue;
     seen.add(node.from);
-    tooltips.push({
-      pos: node.from,
-      end: node.to,
-      above: true,
-      strictSide: true,
-      create(view) {
-        const dom = document.createElement("div");
-        dom.className = "math-preview-bubble";
-        dom.append(new MathWidget(
-          node.text,
-          node.kind === "display-math",
-          node.from,
-          undefined,
-          true,
-        ).toDOM(view));
-        return { dom };
-      },
+    nodes.push(node);
+  }
+  return nodes;
+}
+
+/* A typeset slower than this is deferred until input pauses. Faster ones
+ * (most inline and small display equations) still update on every key. */
+const LIVE_BUBBLE_TYPESET_MS = 12;
+const BUBBLE_QUIET_MS = 180;
+
+/** The live rendering above edited math. CodeMirror reuses a tooltip view
+ * while its `create` function is unchanged, so one bubble persists while the
+ * caret stays in math and re-renders only the latest source. Recreating it
+ * per keystroke used to start a synchronous MathJax typeset for every key
+ * (about 100 ms for a multiline environment in WebKit); holding a key queued
+ * them, so rendering continued long after the key was released. */
+class MathBubble {
+  readonly dom = document.createElement("div");
+  /** The visible rendering, and a newer one that is still typesetting. */
+  private shown: RenderedMath | null = null;
+  private pending: RenderedMath | null = null;
+  private timer = 0;
+  private lastCost = 0;
+  private target = "";
+  private nodeFrom = -1;
+
+  constructor(private readonly view: EditorView, private readonly slot: number) {
+    this.dom.className = "math-preview-bubble";
+    const node = activeMathNodes(view.state)[slot];
+    if (node) {
+      this.target = `${getMathRevision()}\0${node.kind}\0${node.text}`;
+      this.nodeFrom = node.from;
+    }
+    this.render(node);
+  }
+
+  update(update: ViewUpdate): void {
+    const node = activeMathNodes(update.state)[this.slot];
+    if (!node) return;
+    /* Compare with the latest requested source, including a deferred one:
+     * unrelated transactions must not postpone a scheduled render. */
+    const target = `${getMathRevision()}\0${node.kind}\0${node.text}`;
+    const sameNode = update.changes.mapPos(this.nodeFrom) === node.from;
+    this.nodeFrom = node.from;
+    if (target === this.target) return;
+    this.target = target;
+    window.clearTimeout(this.timer);
+    /* Only edits of one equation are deferred; moving to another equation
+     * must show that equation immediately. */
+    if (!sameNode || this.lastCost <= LIVE_BUBBLE_TYPESET_MS) this.render(node);
+    else this.timer = window.setTimeout(() =>
+      this.render(activeMathNodes(this.view.state)[this.slot]), BUBBLE_QUIET_MS);
+  }
+
+  private render(node: MarkdownNode | undefined): void {
+    this.timer = 0;
+    if (!node) return;
+    if (this.pending) discardMath(this.pending);
+    const widget = new MathWidget(
+      node.text, node.kind === "display-math", node.from, undefined, true,
+    );
+    const before = mathTypesetStats().count;
+    const math = { widget, dom: widget.toDOM(this.view) };
+    const first = !this.shown;
+    if (first) {
+      this.shown = math;
+    } else {
+      /* Keep the previous rendering until this one is ready, so the bubble
+       * does not flash its source text on every key. */
+      this.pending = math;
+      math.dom.style.display = "none";
+    }
+    this.dom.append(math.dom);
+    void widgetRendered(math.dom).then(() => {
+      if (this.pending !== math && this.shown !== math) return;
+      const stats = mathTypesetStats();
+      /* Cached renderings do not typeset; only real conversions set cost. */
+      if (stats.count !== before) this.lastCost = stats.lastDuration;
+      if (first) return;
+      if (this.shown) discardMath(this.shown);
+      math.dom.style.removeProperty("display");
+      this.shown = math;
+      this.pending = null;
     });
   }
-  return tooltips;
+
+  destroy(): void {
+    window.clearTimeout(this.timer);
+    if (this.pending) discardMath(this.pending);
+    if (this.shown) discardMath(this.shown);
+  }
+}
+
+interface RenderedMath { widget: MathWidget; dom: HTMLElement }
+
+function discardMath(math: RenderedMath): void {
+  math.widget.destroy(math.dom);
+  math.dom.remove();
+}
+
+/** Resolves once a MathWidget element has left its loading state. */
+function widgetRendered(dom: HTMLElement): Promise<void> {
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!dom.classList.contains("math-loading") || !dom.isConnected) {
+        observer.disconnect();
+        resolve();
+      }
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(dom, { attributes: true, attributeFilter: ["class"] });
+    queueMicrotask(check);
+  });
+}
+
+const mathBubbleCreators: Array<(view: EditorView) => MathBubble> = [];
+function mathBubbleCreator(slot: number): (view: EditorView) => MathBubble {
+  return mathBubbleCreators[slot] ??= (view) => new MathBubble(view, slot);
+}
+
+function buildMathTooltips(state: EditorState): readonly Tooltip[] {
+  return activeMathNodes(state).map((node, slot) => ({
+    pos: node.from,
+    end: node.to,
+    above: true,
+    strictSide: true,
+    create: mathBubbleCreator(slot),
+  }));
 }
 
 function selectionActivatesNode(analysis: MarkdownAnalysis,

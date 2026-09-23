@@ -15,6 +15,7 @@ import { remoteImagesAllowed } from "../settings";
 import { calloutIcon } from "../markdown/callout-icons";
 import { pinPreviewSource } from "../markdown/source-edit";
 import { markdownAnalysis } from "../markdown/analysis";
+import { mountedWidgetFrom } from "./mounted";
 import {
   chooseHardPreview,
   makeHardPreviewImageDraggable,
@@ -102,14 +103,6 @@ function ensureMermaidReady(): Promise<MermaidApi> {
 export interface SourceAnchor {
   readonly from: number;
   readonly to: number;
-}
-
-/** Current start of mounted widget DOM, or null outside this view's content
- * (tooltips, measurement probes, nested table-cell editors, detached DOM). */
-export function mountedWidgetFrom(view: EditorView, element: Element): number | null {
-  if (!element.isConnected || element.closest(".cm-content") !== view.contentDOM)
-    return null;
-  return view.posAtDOM(element);
 }
 
 function sourceAnchor(
@@ -591,10 +584,11 @@ export class HiddenWidget extends WidgetType {
 }
 
 export class EmptyInlineCodeWidget extends WidgetType {
-  constructor(readonly sourcePosition: number) { super(); }
+  /** `offset` is the caret position to reveal, relative to `from`. */
+  constructor(readonly offset: number, readonly from: number) { super(); }
 
   eq(other: EmptyInlineCodeWidget): boolean {
-    return other.sourcePosition === this.sourcePosition;
+    return other.offset === this.offset;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -602,10 +596,11 @@ export class EmptyInlineCodeWidget extends WidgetType {
     code.className = "cm-live-inline-code cm-live-inline-code-empty";
     code.textContent = "\u200b";
     code.setAttribute("aria-label", "Empty inline code");
+    const anchor = sourceAnchor(view, code, this.from);
     code.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      revealAt(view, this.sourcePosition);
+      revealAt(view, anchor.from + this.offset);
     });
     return code;
   }

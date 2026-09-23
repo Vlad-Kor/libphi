@@ -63,7 +63,7 @@ describe("editor input performance invariants", () => {
       extensions: [markdownAnalysisField],
     });
     state = state.update({ changes: { from: 0, insert: "# " } }).state;
-    expect(markdownAnalysis(state).updateKind).toBe("full");
+    expect(markdownAnalysis(state).updateKind).not.toBe("mapped");
     expect(markdownAnalysis(state).nodes.some((node) =>
       node.kind === "heading")).toBe(true);
   });
@@ -114,6 +114,37 @@ describe("editor input performance invariants", () => {
       new MouseEvent("click", { bubbles: true, cancelable: true }));
     const body = view.state.doc.toString().indexOf("> body");
     expect(view.state.selection.main.head).toBe(body + 2);
+  });
+
+  it("edits a kept table widget at its shifted source position", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const editor = new PhiMarkdownEditor(parent);
+    views.push(editor.view);
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+    editor.openDocument({
+      documentId: "table-shift", path: "table.md",
+      text: `intro\n\n${table}\n\nafter`, revision: 1, lineEnding: "LF",
+    });
+    const widget = parent.querySelector(".rich-table-widget");
+    editor.view.dispatch({
+      changes: { from: 0, insert: "typed above " },
+      selection: { anchor: 12 },
+      userEvent: "input.type",
+    });
+    expect(parent.querySelector(".rich-table-widget")).toBe(widget);
+
+    let context: { payload: Record<string, unknown> } | null = null;
+    window.addEventListener("phi-native-message", (event) => {
+      const message = (event as CustomEvent).detail;
+      if (message.type === "table/context") context = message;
+    }, { once: true });
+    parent.querySelector('.rich-table-row-handle[data-index="1"]')!
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    expect(context!.payload.from).toBe(editor.view.state.doc.toString().indexOf("| A"));
+    editor.receive({ protocol: 1, type: "table/remove", payload: context!.payload });
+    expect(editor.view.state.doc.toString()).toBe(
+      "typed above intro\n\n| A   | B   |\n| --- | --- |\n| 3   | 4   |\n\nafter");
   });
 
   it("does not create empty CodeMirror marks for empty delimiters", () => {
@@ -214,3 +245,75 @@ it.skipIf(process.env.PHI_PERF_BENCHMARK !== "1")(
   },
   30_000,
 );
+
+describe("region reparse", () => {
+  const blocks = [
+    "Plain prose line.", "A line with **bold**, *em*, `code`, and $x^2$.",
+    "- list item", "- [ ] task", "1. ordered", "# Heading", "> quote",
+    "> [!note] Callout\n> body", "| a | b |\n| --- | --- |\n| 1 | 2 |",
+    "```js\nlet a = 1;\n\nlet b = a < 2;\n```", "~~~\nraw\n~~~",
+    "$$\n\\frac{a}{b}\n\\sum_i x_i\n$$", "\\[\nx\n\\]", "$$ inline display $$",
+    "[^1]: note", "text[^1] ref", "<span>html</span>", "%% comment %%",
+    "---", "{", "}", "tag #tag ^block-id", "[[Wiki]] and [link](target)",
+    "![image](a.png)", "", "",
+  ];
+  const tokens = ["x", " ", "\n", "$", "$$", "`", "```", "*", "_", "[", "]",
+    "(", ")", "#", "- ", "|", ">", "<", "%", "^", "\\", "~", "=", "{", "}",
+    "---", "[^", "ab", "\n\n"];
+
+  function random(seed: number) {
+    return () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+  }
+
+  it("matches a clean parse after every random edit", () => {
+    const next = random(Number(process.env.PHI_REGION_SEED ?? 11));
+    const pick = <T,>(values: readonly T[]) =>
+      values[Math.floor(next() * values.length)];
+    const kinds: Record<string, number> = { full: 0, mapped: 0, region: 0 };
+    for (let run = 0; run < Number(process.env.PHI_REGION_RUNS ?? 150); run++) {
+      const lines = Array.from({ length: 4 + Math.floor(next() * 14) },
+        () => pick(blocks));
+      if (next() < 0.1) lines.unshift("---\ntitle: x\n---");
+      let state = EditorState.create({
+        doc: lines.join("\n"), extensions: [markdownAnalysisField],
+      });
+      for (let step = 0; step < 40; step++) {
+        const length = state.doc.length;
+        const from = Math.floor(next() * (length + 1));
+        const roll = next();
+        const change = roll < 0.55
+          ? { from, insert: next() < 0.7 ? pick(["a", "b", "x", " ", "1"]) : pick(tokens) }
+          : roll < 0.8
+            ? { from, to: Math.min(length, from + 1 + Math.floor(next() * 3)) }
+            : { from, to: Math.min(length, from + Math.floor(next() * 2)),
+                insert: pick(tokens) };
+        const previousText = state.doc.toString();
+        state = state.update({ changes: change }).state;
+        const analysis = markdownAnalysis(state);
+        kinds[analysis.updateKind]++;
+        const expected = parseMarkdownNodes(state.doc.toString());
+        if (process.env.PHI_DEBUG_REGION && JSON.stringify(analysis.nodes) !== JSON.stringify(expected)) {
+          process.stdout.write(`BEFORE ${JSON.stringify(previousText)}\nCHANGE ${JSON.stringify(change)}\nAFTER ${JSON.stringify(state.doc.toString())}\nGOT ${JSON.stringify(analysis.nodes)}\nWANT ${JSON.stringify(expected)}\n`);
+        }
+        expect(analysis.nodes).toEqual(expected);
+      }
+    }
+    expect(kinds.region).toBeGreaterThan(500);
+  });
+
+  it("reparses only the code block or equation being typed in", () => {
+    const text = "# Title\n\nIntro $x$.\n\n```py\ndef f():\n    return 1\n```\n\n" +
+      "$$\n\\begin{aligned}\na &= b \\\\\n\\end{aligned}\n$$\n\nEnd *here*.";
+    let state = EditorState.create({ doc: text, extensions: [markdownAnalysisField] });
+    for (const probe of ["return 1", "a &= b", "End *here*"]) {
+      const at = state.doc.toString().indexOf(probe) + 3;
+      state = state.update({ changes: { from: at, insert: "q" } }).state;
+      expect(markdownAnalysis(state).updateKind).toBe("region");
+      expect(markdownAnalysis(state).nodes)
+        .toEqual(parseMarkdownNodes(state.doc.toString()));
+    }
+  });
+});

@@ -13,7 +13,11 @@ import { RichTableWidget } from "../src/widgets/table";
 const post = (message: string) =>
   (window as any).webkit.messageHandlers.test.postMessage(message);
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve));
+/* rAF stops while the test window is occluded; report instead of hanging. */
+const frame = () => new Promise<number>((resolve, reject) => {
+  const watchdog = setTimeout(() => reject(new Error("no animation frame for 5 s")), 5000);
+  requestAnimationFrame((time) => { clearTimeout(watchdog); resolve(time); });
+});
 
 let measureTime = 0;
 const proto = EditorView.prototype as unknown as { measure(flush?: boolean): void };
@@ -230,6 +234,7 @@ async function run() {
     post(`LOG typed ${probe}`);
   }
   results.scroll = scrollDown;
+  post("LOG scrolling again");
   results.scrollAgain = await scroll(view, 90);
   post("PASS " + JSON.stringify(results));
 }

@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, Prec } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, WidgetType } from "@codemirror/view";
 import { wireHorizontalScroll } from "../horizontal-scroll";
+import { mountedWidgetFrom } from "./mounted";
 import {
   handleLatexTab,
   latexSnippetsEnabled,
@@ -189,11 +190,22 @@ class RichTableController {
   private overflowObserver: ResizeObserver | null = null;
   private pointerDragCleanup: (() => void) | null = null;
 
+  /* The source range when this DOM was built or last updated. The widget
+   * DOM is kept while text above it changes, so the live range is resolved
+   * from the mounted DOM (see mountedWidgetFrom). */
+  private get from(): number {
+    return mountedWidgetFrom(this.view, this.root) ?? this.builtFrom;
+  }
+
+  private get to(): number {
+    return this.from + this.builtTo - this.builtFrom;
+  }
+
   constructor(
     readonly root: ControlledTable,
     private view: EditorView,
-    private from: number,
-    private to: number,
+    private builtFrom: number,
+    private builtTo: number,
     private model: MarkdownTable,
   ) {
     root[tableController] = this;
@@ -234,8 +246,8 @@ class RichTableController {
     const dimensionsChanged = model.cells.length !== this.model.cells.length ||
       model.alignments.length !== this.model.alignments.length;
     this.view = view;
-    this.from = from;
-    this.to = to;
+    this.builtFrom = from;
+    this.builtTo = to;
     this.model = model;
     this.markRoot();
     if (dimensionsChanged) {
@@ -260,8 +272,8 @@ class RichTableController {
 
   private markRoot(): void {
     this.root.className = "table-widget rich-table-widget cm-hard-rendered-item";
-    this.root.dataset.hardPreviewFrom = String(this.from);
-    this.root.dataset.hardPreviewTo = String(this.to);
+    this.root.dataset.hardPreviewFrom = String(this.builtFrom);
+    this.root.dataset.hardPreviewTo = String(this.builtTo);
     this.root.setAttribute("aria-selected", "false");
   }
 
@@ -1189,8 +1201,7 @@ export class RichTableWidget extends WidgetType {
   ) { super(); }
 
   eq(other: RichTableWidget): boolean {
-    return other.source === this.source && other.from === this.from &&
-      other.to === this.to &&
+    return other.source === this.source &&
       other.geometryContext.key === this.geometryContext.key;
   }
 
@@ -1241,7 +1252,8 @@ export class RichTableWidget extends WidgetType {
 function controllerFor(view: EditorView, from: number): RichTableController | null {
   const root = [...view.dom.querySelectorAll<ControlledTable>(
     ".rich-table-widget",
-  )].find((candidate) => Number(candidate.dataset.hardPreviewFrom) === from);
+  )].find((candidate) => (mountedWidgetFrom(view, candidate) ??
+    Number(candidate.dataset.hardPreviewFrom)) === from);
   return root?.[tableController] ?? null;
 }
 

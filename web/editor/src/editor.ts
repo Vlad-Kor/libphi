@@ -48,6 +48,7 @@ import {
   seedPreviewImageGeometry,
   setPreviewGeometryContext,
 } from "./widgets/preview";
+import { mountedWidgetFrom } from "./widgets/mounted";
 import {
   focusRichTableCell,
   removeRichTablePart,
@@ -139,7 +140,8 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       this.tableContextInside = Boolean(table);
       sendNative("table/context", {
         inside: Boolean(table),
-        from: Number(table?.dataset.hardPreviewFrom ?? -1),
+        from: table ? mountedWidgetFrom(this.view, table) ??
+          Number(table.dataset.hardPreviewFrom) : -1,
         kind: handle?.dataset.tableHandle ?? "",
         index: Number(handle?.dataset.index ?? -1),
         removable: handle?.dataset.removable === "true",
