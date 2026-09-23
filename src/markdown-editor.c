@@ -1142,6 +1142,7 @@ static void on_save_vault_image(GSimpleAction *action, GVariant *parameter,
   gtk_file_dialog_save(dialog,
                        GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL,
                        NULL, on_vault_image_save_location, request);
+  g_object_unref(dialog);
 }
 
 static WebKitContextMenuItem *vault_image_menu_item(

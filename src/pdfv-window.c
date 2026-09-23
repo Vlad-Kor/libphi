@@ -3478,6 +3478,7 @@ static void on_file_dialog_opened(GObject *source, GAsyncResult *result,
     pdfv_window_open_file(self, file);
     g_object_unref(file);
   }
+  g_object_unref(self);
 }
 
 static void action_open(GSimpleAction *action, GVariant *parameter,
@@ -3506,7 +3507,8 @@ static void action_open(GSimpleAction *action, GVariant *parameter,
   g_object_unref(filters);
 
   gtk_file_dialog_open(dialog, GTK_WINDOW(self), NULL, on_file_dialog_opened,
-                       self);
+                       g_object_ref(self));
+  g_object_unref(dialog);
 }
 
 static gchar *workspace_page_relative_path(PdfvWindow *self,
@@ -4672,6 +4674,7 @@ static void action_open_folder(GSimpleAction *action, GVariant *parameter,
   gtk_file_dialog_set_title(dialog, "Open Workspace Folder");
   gtk_file_dialog_select_folder(dialog, GTK_WINDOW(self), NULL,
                                 on_folder_dialog_selected, g_object_ref(self));
+  g_object_unref(dialog);
 }
 
 static void action_open_recent_workspace(GSimpleAction *action,
@@ -5709,6 +5712,7 @@ static void on_choose_attachment_folder(GtkButton *button,
   data->folder_row = g_object_ref(folder_row);
   gtk_file_dialog_select_folder(dialog, GTK_WINDOW(self), NULL,
                                 on_attachment_folder_selected, data);
+  g_object_unref(dialog);
   g_object_unref(initial);
   g_free(uri);
 }
