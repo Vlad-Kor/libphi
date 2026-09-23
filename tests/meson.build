@@ -29,6 +29,13 @@ test_text = executable('test-text', 'test-text.c',
 
 test('text-test', test_text)
 
+test_document = executable('test-document', 'test-document.c',
+	include_directories: inc,
+	dependencies: [phi_dep],
+)
+
+test('document-test', test_document)
+
 test_document_view = executable('test-document-view',
 	'test-document-view.c',
 	include_directories: inc,
