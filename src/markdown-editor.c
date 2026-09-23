@@ -434,40 +434,103 @@ static GFile *resolve_target_note(PdfvMarkdownEditor *self,
       self->vault, self->relative_path, target, error);
 }
 
-static void handle_completion(PdfvMarkdownEditor *self, const gchar *type,
-                              const gchar *id, JsonObject *payload) {
-  const gchar *query = payload ? json_object_get_string_member_with_default(
-                                      payload, "query", "")
-                               : "";
-  const gchar *target = payload ? json_object_get_string_member_with_default(
-                                       payload, "target", "")
-                                : "";
+typedef struct {
+  GWeakRef editor;
+  gchar *id;
+  gchar *type;
+  gchar *query;
+  gchar *target;
+  gchar *source_path;
+  GFile *current_file;
+} CompletionRequest;
+
+static void completion_request_free(CompletionRequest *request) {
+  g_weak_ref_clear(&request->editor);
+  g_free(request->id);
+  g_free(request->type);
+  g_free(request->query);
+  g_free(request->target);
+  g_free(request->source_path);
+  g_clear_object(&request->current_file);
+  g_free(request);
+}
+
+/* Listing notes, and resolving a note by name, walk the whole vault. */
+static void completion_thread(GTask *task, gpointer source_object,
+                              gpointer task_data, GCancellable *cancellable) {
+  (void)cancellable;
+  PdfvMarkdownVaultAdapter *vault = source_object;
+  CompletionRequest *request = task_data;
   GError *error = NULL;
   GPtrArray *values = NULL;
-  if (g_str_equal(type, "completion/files")) {
-    values = pdfv_markdown_vault_adapter_list_notes(self->vault, query,
+  if (g_str_equal(request->type, "completion/files")) {
+    values = pdfv_markdown_vault_adapter_list_notes(vault, request->query,
                                                      &error);
   } else {
-    GFile *file = resolve_target_note(self, target, &error);
+    GFile *file = !*request->target || request->target[0] == '#'
+        ? (request->current_file ? g_object_ref(request->current_file) : NULL)
+        : pdfv_markdown_vault_adapter_resolve_note(
+              vault, request->source_path, request->target, &error);
     if (file) {
-      values = g_str_equal(type, "completion/headings")
-                   ? pdfv_markdown_vault_adapter_get_headings(self->vault,
-                                                               file, &error)
-                   : pdfv_markdown_vault_adapter_get_blocks(self->vault, file,
+      values = g_str_equal(request->type, "completion/headings")
+                   ? pdfv_markdown_vault_adapter_get_headings(vault, file,
+                                                               &error)
+                   : pdfv_markdown_vault_adapter_get_blocks(vault, file,
                                                              &error);
       g_object_unref(file);
     }
   }
-  if (!values) {
-    send_response_error(self, id, error);
-  } else {
-    /* NATIVE_COMPLETION_LIMIT in completion.ts must match. */
-    if (values->len > 100)
-      g_ptr_array_set_size(values, 100);
-    send_response_node(self, id, string_array_node(values), NULL);
+  if (values)
+    g_task_return_pointer(task, values, (GDestroyNotify)g_ptr_array_unref);
+  else if (error)
+    g_task_return_error(task, error);
+  else
+    g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED,
+                            "Native request failed");
+}
+
+static void on_completion_listed(GObject *source, GAsyncResult *result,
+                                 gpointer user_data) {
+  (void)source;
+  CompletionRequest *request = g_task_get_task_data(G_TASK(result));
+  PdfvMarkdownEditor *self = g_weak_ref_get(&request->editor);
+  GError *error = NULL;
+  GPtrArray *values = g_task_propagate_pointer(G_TASK(result), &error);
+  if (self && self->web_view) {
+    if (!values) {
+      send_response_error(self, request->id, error);
+    } else {
+      /* NATIVE_COMPLETION_LIMIT in completion.ts must match. */
+      if (values->len > 100)
+        g_ptr_array_set_size(values, 100);
+      send_response_node(self, request->id, string_array_node(values), NULL);
+    }
   }
   g_clear_pointer(&values, g_ptr_array_unref);
   g_clear_error(&error);
+  g_clear_object(&self);
+  (void)user_data;
+}
+
+static void handle_completion(PdfvMarkdownEditor *self, const gchar *type,
+                              const gchar *id, JsonObject *payload) {
+  CompletionRequest *request = g_new0(CompletionRequest, 1);
+  g_weak_ref_init(&request->editor, self);
+  request->id = g_strdup(id);
+  request->type = g_strdup(type);
+  request->query = g_strdup(payload ? json_object_get_string_member_with_default(
+                                          payload, "query", "")
+                                    : "");
+  request->target = g_strdup(payload ? json_object_get_string_member_with_default(
+                                           payload, "target", "")
+                                     : "");
+  request->source_path = g_strdup(self->relative_path);
+  request->current_file = self->file ? g_object_ref(self->file) : NULL;
+  GTask *task = g_task_new(self->vault, NULL, on_completion_listed, NULL);
+  g_task_set_task_data(task, request,
+                       (GDestroyNotify)completion_request_free);
+  g_task_run_in_thread(task, completion_thread);
+  g_object_unref(task);
 }
 
 static void handle_link_open(PdfvMarkdownEditor *self, JsonObject *payload) {
