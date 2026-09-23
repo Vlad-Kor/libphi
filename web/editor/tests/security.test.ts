@@ -212,3 +212,17 @@ describe("rendering security", () => {
     expect(remountedImage?.height).toBe(600);
   });
 });
+
+describe("rendered Markdown cache", () => {
+  it("never reuses output rendered under another remote-image policy", () => {
+    const source = "![remote](https://example.com/cached.png)";
+    const blocked = renderMarkdown(source);
+    expect(blocked).toContain("remote-image-blocked");
+    updateRuntimeSettings({ ...defaultSettings, allowRemoteImages: true });
+    const allowed = renderMarkdown(source);
+    expect(allowed).not.toContain("remote-image-blocked");
+    expect(allowed).toContain('src="https://example.com/cached.png"');
+    updateRuntimeSettings(defaultSettings);
+    expect(renderMarkdown(source)).toBe(blocked);
+  });
+});

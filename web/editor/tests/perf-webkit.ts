@@ -29,12 +29,21 @@ proto.measure = function (this: EditorView, ...args: [boolean?]) {
 };
 
 let widgetRenders = 0;
+/** Synchronous toDOM time per widget class, reset per scenario. */
+let widgetTime: Record<string, { count: number; ms: number }> = {};
 for (const Widget of [...Object.values(widgets), RichTableWidget]) {
   if (typeof Widget !== "function" || !Widget.prototype?.toDOM) continue;
   const original = Widget.prototype.toDOM;
+  const name = Widget.name;
   Widget.prototype.toDOM = function (this: unknown, view: EditorView) {
     widgetRenders++;
-    return original.call(this, view);
+    const started = performance.now();
+    try { return original.call(this, view); }
+    finally {
+      const entry = widgetTime[name] ??= { count: 0, ms: 0 };
+      entry.count++;
+      entry.ms = Math.round((entry.ms + performance.now() - started) * 10) / 10;
+    }
   };
 }
 
@@ -144,6 +153,10 @@ async function scroll(view: EditorView, step: number) {
   for (let index = 0; index < 10; index++) await frame();
   const work: number[] = [];
   const gaps: number[] = [];
+  widgetTime = {};
+  const stages = (window as any).phiEditorPerformance;
+  stages.enabled = true;
+  stages.reset();
   let last = await frame();
   for (let index = 0; index < 400 &&
        scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2; index++) {
@@ -155,8 +168,12 @@ async function scroll(view: EditorView, step: number) {
     gaps.push(now - last);
     last = now;
   }
+  stages.enabled = false;
+  const stageMeans = Object.fromEntries(Object.entries(stages.snapshot() as
+    Record<string, { mean: number; count: number }>).map(([name, value]) =>
+    [name, `${Math.round(value.mean * 100) / 100}x${value.count}`]));
   return { frames: work.length, measure: summary(work), frameGap: summary(gaps),
-    slowFrames: gaps.filter(gap => gap > 25).length };
+    slowFrames: gaps.filter(gap => gap > 25).length, widgetTime, stageMeans };
 }
 
 async function run() {
@@ -229,6 +246,11 @@ async function run() {
   results.idleFrameGap = summary(idleGaps);
   const scrollDown = await scroll(view, 90);
   post("LOG scrolled");
+  if (parameters.get("scroll") === "1") {
+    results.scroll = scrollDown;
+    results.scrollAgain = await scroll(view, 90);
+    return post("PASS " + JSON.stringify(results));
+  }
   for (const probe of ["PROBE_CODE", "PROBE_MATH", "PROBEPROSE"]) {
     results[probe] = await typeAt(view, probe, 45);
     post(`LOG typed ${probe}`);

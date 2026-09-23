@@ -145,17 +145,46 @@ export function sanitizeHtml(html: string): string {
   return sanitize(html, false);
 }
 
+/* Rendered HTML is a pure function of the source and the remote-image
+ * policy. CodeMirror mounts and unmounts preview widgets while scrolling, and
+ * rendering a code block (markdown-it, Prism, DOMPurify, and a template parse)
+ * took milliseconds in WebKit each time one scrolled into view. */
+const renderCache = new Map<string, string>();
+const RENDER_CACHE_LIMIT = 2048;
+const RENDER_CACHE_SOURCE_LIMIT = 65_536;
+
+function cachedRender(kind: string, source: string,
+                      render: () => string): string {
+  if (source.length > RENDER_CACHE_SOURCE_LIMIT) return render();
+  const key = `${kind}\0${remoteImagesAllowed() ? 1 : 0}\0${source}`;
+  const cached = renderCache.get(key);
+  if (cached != null) {
+    renderCache.delete(key);
+    renderCache.set(key, cached);
+    return cached;
+  }
+  const html = render();
+  renderCache.set(key, html);
+  if (renderCache.size > RENDER_CACHE_LIMIT)
+    renderCache.delete(renderCache.keys().next().value!);
+  return html;
+}
+
 export function renderMarkdown(source: string): string {
-  const prepared = prepare(source);
-  const rendered = restorePrepared(md.render(prepared.source), prepared);
-  return applyRemoteContentPolicy(sanitize(rendered, true));
+  return cachedRender("block", source, () => {
+    const prepared = prepare(source);
+    const rendered = restorePrepared(md.render(prepared.source), prepared);
+    return applyRemoteContentPolicy(sanitize(rendered, true));
+  });
 }
 
 export function renderMarkdownInline(source: string): string {
-  const prepared = prepare(source);
-  const rendered = restorePrepared(md.renderInline(prepared.source),
-                                   prepared);
-  return applyRemoteContentPolicy(sanitize(rendered, true));
+  return cachedRender("inline", source, () => {
+    const prepared = prepare(source);
+    const rendered = restorePrepared(md.renderInline(prepared.source),
+                                     prepared);
+    return applyRemoteContentPolicy(sanitize(rendered, true));
+  });
 }
 
 function safeFrameDimension(value: string): string {
@@ -224,7 +253,8 @@ function applyRemoteContentPolicy(sanitized: string): string {
 }
 
 export function renderRawHtml(source: string): string {
-  return applyRemoteContentPolicy(sanitize(source, true));
+  return cachedRender("raw", source, () =>
+    applyRemoteContentPolicy(sanitize(source, true)));
 }
 
 export function rawHtmlIsBlock(source: string): boolean {

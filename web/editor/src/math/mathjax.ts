@@ -20,7 +20,14 @@ interface MathJaxWindow extends Window {
   __phiMathJaxError?: string;
 }
 
-const cache = new Map<string, string>();
+/* Rendered equations by preamble revision, mode, and source. Mounting clones
+ * the stored DOM instead of re-parsing SVG markup, and the cache is a real
+ * LRU sized for math-heavy notes: CodeMirror remounts equations as they
+ * scroll into view, and an evicted one must be typeset again synchronously
+ * (up to ~100 ms for a large environment in WebKit), which stalled scrolling
+ * in notes with more than the former 256-entry FIFO limit. */
+const cache = new Map<string, HTMLTemplateElement>();
+const CACHE_LIMIT = 1024;
 let lastTypesetDuration = 0;
 let typesetCount = 0;
 
@@ -199,9 +206,11 @@ export async function renderMath(
   const key = `${preambleRevision}\0${display ? "display" : "inline"}\0${latex}`;
   const cached = cache.get(key);
   if (cached) {
+    cache.delete(key);
+    cache.set(key, cached);
     target.classList.remove("math-render-error", "math-loading");
     target.removeAttribute("title");
-    target.innerHTML = cached;
+    target.replaceChildren(cached.content.cloneNode(true));
     return;
   }
   try {
@@ -230,8 +239,10 @@ export async function renderMath(
     if (mathError) throw new Error(mathError);
     target.replaceChildren(rendered);
     target.classList.remove("math-loading");
-    cache.set(key, target.innerHTML);
-    if (cache.size > 256) cache.delete(cache.keys().next().value as string);
+    const template = document.createElement("template");
+    template.content.append(rendered.cloneNode(true));
+    cache.set(key, template);
+    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   } catch (error) {
     if (signal?.aborted) return;
     showMathError(target, latex, error);

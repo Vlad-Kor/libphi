@@ -26,6 +26,7 @@ parser.add_argument("--width", type=int, default=1000)
 parser.add_argument("--bytes", type=int, default=40000)
 parser.add_argument("--conceal", action="store_true")
 parser.add_argument("--engine", action="store_true", help="only run engine sanity checks")
+parser.add_argument("--scroll", action="store_true", help="only run the scrolling scenario")
 parser.add_argument("--output", type=Path)
 args = parser.parse_args()
 editor = Path(__file__).resolve().parents[1]
@@ -33,7 +34,7 @@ workspace = tempfile.TemporaryDirectory(prefix="phi-perf-")
 fixtures = Path(workspace.name)
 subprocess.run([
     str(editor / "node_modules/.bin/esbuild"), "tests/perf-webkit.ts",
-    "--bundle", "--format=iife", "--target=safari17", "--minify",
+    "--bundle", "--format=iife", "--target=safari17", "--keep-names",
     "--log-level=warning", f"--outfile={fixtures / 'perf-test.js'}",
 ], cwd=editor, check=True)
 (fixtures / "perf-test.html").write_text('''<!doctype html><html><head>
@@ -88,7 +89,7 @@ def activate(application):
     window.set_default_size(args.width, 700)
     window.set_child(web)
     window.present()
-    web.load_uri(f"app://editor/perf-test.html?bytes={args.bytes}&conceal={int(args.conceal)}&engine={int(args.engine)}")
+    web.load_uri(f"app://editor/perf-test.html?bytes={args.bytes}&conceal={int(args.conceal)}&engine={int(args.engine)}&scroll={int(args.scroll)}")
 
     def timeout():
         print("FAIL: WebKit benchmark timed out", flush=True)
