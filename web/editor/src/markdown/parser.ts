@@ -223,17 +223,29 @@ function collectInlineCodeNodes(
   return nodes;
 }
 
+/* JavaScriptCore's regular-expression JIT does not compile lookbehind; such
+ * patterns fall back to its interpreter and scanned whole notes about ten times
+ * more slowly in WebKit than under V8. A leading `(?<!c)` is therefore checked
+ * by hand: on rejection the search resumes one character later, exactly where
+ * the engine would have tried next, so the matches are identical. */
 function pushInline(
   nodes: MarkdownNode[],
   text: string,
   ranges: RangeIndex,
   pattern: RegExp,
+  notAfter: string,
   kind: MarkdownNodeKind,
   openLength: number,
   closeLength = openLength,
 ): void {
-  for (const match of text.matchAll(pattern)) {
+  pattern.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
     const from = match.index;
+    if (from > 0 && text[from - 1] === notAfter) {
+      pattern.lastIndex = from + 1;
+      continue;
+    }
     const to = from + match[0].length;
     if (inside(from, ranges) || isMarkdownEscape(text, from) ||
         isMarkdownEscape(text, to - closeLength)) continue;
@@ -248,7 +260,16 @@ function pushInline(
   }
 }
 
-const tableSeparatorCandidate = /^[ \t\r|:-]*\|[ \t\r|:-]*$/;
+function tableSeparatorCandidate(text: string, from: number, to: number): boolean {
+  let pipe = false;
+  for (let at = from; at < to; at++) {
+    const character = text[at];
+    if (character === "|") pipe = true;
+    else if (character !== " " && character !== "\t" && character !== "\r" &&
+             character !== ":" && character !== "-") return false;
+  }
+  return pipe;
+}
 
 function lineEnd(text: string, from: number): number {
   const newline = text.indexOf("\n", from);
@@ -471,11 +492,18 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   const protectedIndex = new RangeIndex(protectedRanges);
   nodes.push(...collectDisplayMathNodes(text, protectedRanges, protectedIndex));
   const occupiedMath = nodes.filter((node) => node.kind === "display-math");
-  const inlineMath = /(?<!\\)(\$|\\\()([^\n]+?)(?<!\\)(\$|\\\))/g;
+  /* Equivalent to `(?<!\\)(\$|\\\()([^\n]+?)(?<!\\)(\$|\\\))` without
+   * lookbehind (see pushInline): the closer's condition is that the nonempty
+   * content does not end in a backslash, and the opener's is checked here. */
+  const inlineMath = /(\$|\\\()([^\n]*?[^\n\\])(\$|\\\))/g;
   let inlineMatch: RegExpExecArray | null;
   while ((inlineMatch = inlineMath.exec(text))) {
     const match = inlineMatch;
     const from = match.index;
+    if (from > 0 && text[from - 1] === "\\") {
+      inlineMath.lastIndex = from + 1;
+      continue;
+    }
     if (inside(from, protectedIndex)) continue;
     /* Display nodes are sorted and disjoint: the first one ending after
      * `from` is the only candidate that can overlap this match. */
@@ -543,7 +571,12 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
       meta: { id: match[1] },
     });
   }
-  for (const match of text.matchAll(/(?<!!)\[\^([^\]\n]+)\]/g)) {
+  const reference = /\[\^([^\]\n]+)\]/g;
+  for (let match; (match = reference.exec(text));) {
+    if (match.index > 0 && text[match.index - 1] === "!") {
+      reference.lastIndex = match.index + 1;
+      continue;
+    }
     if (inside(match.index, protectedIndex)) continue;
     nodes.push({
       kind: "footnote-reference",
@@ -634,7 +667,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     /* A delimiter row consists only of pipes, colons, dashes, and blanks,
      * and the header needs a pipe. Reject other line pairs before running the
      * full row lexer, which previously dominated parsing of every note. */
-    if (!tableSeparatorCandidate.test(text.slice(separatorFrom, separatorTo)) ||
+    if (!tableSeparatorCandidate(text, separatorFrom, separatorTo) ||
         text.lastIndexOf("|", headerTo) < from) {
       from = headerTo + 1;
       continue;
@@ -739,12 +772,12 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     }
   }
 
-  pushInline(nodes, text, protectedIndex, /(?<!\*)\*\*([^\n*]|\*(?!\*))+?\*\*(?!\*)/g, "strong", 2);
-  pushInline(nodes, text, protectedIndex, /(?<!_)__([^\n_]|_(?!_))+?__(?!_)/g, "strong", 2);
-  pushInline(nodes, text, protectedIndex, /(?<!~)~~[^\n~]+~~(?!~)/g, "strike", 2);
-  pushInline(nodes, text, protectedIndex, /(?<!=)==[^\n=]+==(?!\=)/g, "highlight", 2);
-  pushInline(nodes, text, protectedIndex, /(?<!\*)\*[^\n*]+\*(?!\*)/g, "emphasis", 1);
-  pushInline(nodes, text, protectedIndex, /(?<!_)_[^\n_]+_(?!_)/g, "emphasis", 1);
+  pushInline(nodes, text, protectedIndex, /\*\*([^\n*]|\*(?!\*))+?\*\*(?!\*)/g, "*", "strong", 2);
+  pushInline(nodes, text, protectedIndex, /__([^\n_]|_(?!_))+?__(?!_)/g, "_", "strong", 2);
+  pushInline(nodes, text, protectedIndex, /~~[^\n~]+~~(?!~)/g, "~", "strike", 2);
+  pushInline(nodes, text, protectedIndex, /==[^\n=]+==(?!\=)/g, "=", "highlight", 2);
+  pushInline(nodes, text, protectedIndex, /\*[^\n*]+\*(?!\*)/g, "*", "emphasis", 1);
+  pushInline(nodes, text, protectedIndex, /_[^\n_]+_(?!_)/g, "_", "emphasis", 1);
 
   for (const match of text.matchAll(/(^|[\s(])#([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gmu)) {
     const from = match.index + match[1].length;
