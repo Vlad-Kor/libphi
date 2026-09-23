@@ -45,8 +45,39 @@ export interface MarkdownNode {
 
 interface Range { from: number; to: number }
 
-const inside = (position: number, ranges: Range[]) =>
-  ranges.some((range) => position >= range.from && position < range.to);
+/** Membership index for protected source ranges. Parsing checks thousands of
+ * candidate positions; a linear scan per check made large notes quadratic. */
+class RangeIndex {
+  private readonly starts: number[] = [];
+  private readonly ends: number[] = [];
+
+  constructor(ranges: readonly Range[]) {
+    const sorted = ranges.filter((range) => range.from < range.to)
+      .sort((left, right) => left.from - right.from);
+    for (const range of sorted) {
+      const last = this.ends.length - 1;
+      if (last >= 0 && range.from <= this.ends[last])
+        this.ends[last] = Math.max(this.ends[last], range.to);
+      else {
+        this.starts.push(range.from);
+        this.ends.push(range.to);
+      }
+    }
+  }
+
+  has(position: number): boolean {
+    let low = 0;
+    let high = this.starts.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (this.starts[middle] <= position) low = middle + 1;
+      else high = middle;
+    }
+    return low > 0 && position < this.ends[low - 1];
+  }
+}
+
+const inside = (position: number, ranges: RangeIndex) => ranges.has(position);
 
 function collectFencedCodeNodes(text: string): MarkdownNode[] {
   const nodes: MarkdownNode[] = [];
@@ -105,10 +136,14 @@ function collectInlineCodeNodes(
   fencedRanges: Range[],
 ): MarkdownNode[] {
   const nodes: MarkdownNode[] = [];
+  /* Fenced ranges are produced in source order and never overlap. */
+  let fence = 0;
   for (let lineFrom = 0; lineFrom <= text.length;) {
     const lineTo = lineEnd(text, lineFrom);
-    if (!fencedRanges.some((range) =>
-      lineFrom < range.to && lineTo >= range.from)) {
+    while (fence < fencedRanges.length && fencedRanges[fence].to <= lineFrom)
+      fence++;
+    if (!(fence < fencedRanges.length &&
+          lineTo >= fencedRanges[fence].from)) {
       let at = lineFrom;
       while (at < lineTo) {
         const open = text.indexOf("`", at);
@@ -191,7 +226,7 @@ function collectInlineCodeNodes(
 function pushInline(
   nodes: MarkdownNode[],
   text: string,
-  ranges: Range[],
+  ranges: RangeIndex,
   pattern: RegExp,
   kind: MarkdownNodeKind,
   openLength: number,
@@ -212,6 +247,8 @@ function pushInline(
     });
   }
 }
+
+const tableSeparatorCandidate = /^[ \t\r|:-]*\|[ \t\r|:-]*$/;
 
 function lineEnd(text: string, from: number): number {
   const newline = text.indexOf("\n", from);
@@ -240,15 +277,15 @@ function markdownDestination(raw: string): string {
   return value;
 }
 
-function collectMarkdownLinks(text: string, protectedRanges: Range[]): MarkdownNode[] {
+function collectMarkdownLinks(text: string, protectedIndex: RangeIndex): MarkdownNode[] {
   const nodes: MarkdownNode[] = [];
   for (let open = 0; open < text.length; open++) {
     if (text[open] !== "[" || isMarkdownEscape(text, open) ||
-        text[open + 1] === "[" || inside(open, protectedRanges)) continue;
+        text[open + 1] === "[" || inside(open, protectedIndex)) continue;
     const image = open > 0 && text[open - 1] === "!" &&
       !isMarkdownEscape(text, open - 1);
     const from = image ? open - 1 : open;
-    if (inside(from, protectedRanges)) continue;
+    if (inside(from, protectedIndex)) continue;
 
     let depth = 1;
     let close = open + 1;
@@ -288,6 +325,7 @@ function collectMarkdownLinks(text: string, protectedRanges: Range[]): MarkdownN
 function collectDisplayMathNodes(
   text: string,
   protectedRanges: Range[],
+  protectedIndex: RangeIndex,
 ): MarkdownNode[] {
   const nodes: MarkdownNode[] = [];
   const ranges = [...protectedRanges].sort((left, right) =>
@@ -295,7 +333,18 @@ function collectDisplayMathNodes(
   let rangeIndex = 0;
   let inlineDollar = false;
   let inlineParen = false;
+  const interesting = /[\n$\\]/g;
   for (let delimiterFrom = 0; delimiterFrom < text.length;) {
+    /* Only newlines, dollars, and backslashes change scanner state; every
+     * other character merely advances. Landing inside a protected range is
+     * handled below exactly as when stepping one character at a time. */
+    const character = text.charCodeAt(delimiterFrom);
+    if (character !== 10 && character !== 36 && character !== 92) {
+      interesting.lastIndex = delimiterFrom;
+      const next = interesting.exec(text);
+      if (!next) break;
+      delimiterFrom = next.index;
+    }
     if (text[delimiterFrom] === "\n") {
       inlineDollar = false;
       inlineParen = false;
@@ -360,7 +409,7 @@ function collectDisplayMathNodes(
       const validDollarPair = closer !== "$$" ||
         (text[close - 1] !== "$" && text[close + 2] !== "$");
       if (validDollarPair && !isMarkdownEscape(text, close) &&
-          !inside(close, protectedRanges)) break;
+          !inside(close, protectedIndex)) break;
       close = text.indexOf(closer, close + closer.length);
     }
     if (close < 0) {
@@ -396,10 +445,11 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   const nodes: MarkdownNode[] = [...fencedCodeNodes, ...inlineCodeNodes];
   const codeRanges = [...fencedCodeNodes, ...inlineCodeNodes]
     .map(({ from, to }) => ({ from, to }));
+  const codeIndex = new RangeIndex(codeRanges);
   const htmlRanges: Range[] = [];
   const rawHtml = /<(span|div|kbd|details|summary|sup|sub|small|mark|table|thead|tbody|tr|th|td|iframe)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
   for (const match of text.matchAll(rawHtml)) {
-    if (!inside(match.index, codeRanges)) {
+    if (!inside(match.index, codeIndex)) {
       htmlRanges.push({ from: match.index, to: match.index + match[0].length });
       nodes.push({ kind: "html", from: match.index, to: match.index + match[0].length, text: match[0] });
     }
@@ -418,16 +468,27 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     }
   }
 
-  nodes.push(...collectDisplayMathNodes(text, protectedRanges));
+  const protectedIndex = new RangeIndex(protectedRanges);
+  nodes.push(...collectDisplayMathNodes(text, protectedRanges, protectedIndex));
   const occupiedMath = nodes.filter((node) => node.kind === "display-math");
   const inlineMath = /(?<!\\)(\$|\\\()([^\n]+?)(?<!\\)(\$|\\\))/g;
   let inlineMatch: RegExpExecArray | null;
   while ((inlineMatch = inlineMath.exec(text))) {
     const match = inlineMatch;
     const from = match.index;
-    if (inside(from, protectedRanges)) continue;
-    const display = occupiedMath.find((node) =>
-      from < node.to && from + match[0].length > node.from);
+    if (inside(from, protectedIndex)) continue;
+    /* Display nodes are sorted and disjoint: the first one ending after
+     * `from` is the only candidate that can overlap this match. */
+    let low = 0;
+    let high = occupiedMath.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (occupiedMath[middle].to <= from) low = middle + 1;
+      else high = middle;
+    }
+    const candidate = occupiedMath[low];
+    const display = candidate && from + match[0].length > candidate.from
+      ? candidate : undefined;
     if (display) {
       inlineMath.lastIndex = Math.max(inlineMath.lastIndex, display.to);
       continue;
@@ -446,13 +507,13 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
 
   const comments = /%%[\s\S]*?%%/g;
   for (const match of text.matchAll(comments)) {
-    if (!inside(match.index, protectedRanges))
+    if (!inside(match.index, protectedIndex))
       nodes.push({ kind: "comment", from: match.index, to: match.index + match[0].length, text: match[0] });
   }
 
   const wiki = /(!)?\[\[([^\]\n]+)\]\]/g;
   for (const match of text.matchAll(wiki)) {
-    if (inside(match.index, protectedRanges)) continue;
+    if (inside(match.index, protectedIndex)) continue;
     const raw = match[2];
     const separator = raw.lastIndexOf("|");
     let target = (separator >= 0 ? raw.slice(0, separator) : raw).trim();
@@ -467,12 +528,12 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     });
   }
 
-  nodes.push(...collectMarkdownLinks(text, protectedRanges));
+  nodes.push(...collectMarkdownLinks(text, protectedIndex));
 
   const footnoteDefinitions = new Map<string, number>();
   const definitionPattern = /^\[\^([^\]\n]+)\]:[ \t]*([^\n]*(?:\n(?: {4}|\t)[^\n]*)*)/gm;
   for (const match of text.matchAll(definitionPattern)) {
-    if (inside(match.index, protectedRanges)) continue;
+    if (inside(match.index, protectedIndex)) continue;
     footnoteDefinitions.set(match[1], match.index);
     nodes.push({
       kind: "footnote-definition",
@@ -483,7 +544,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     });
   }
   for (const match of text.matchAll(/(?<!!)\[\^([^\]\n]+)\]/g)) {
-    if (inside(match.index, protectedRanges)) continue;
+    if (inside(match.index, protectedIndex)) continue;
     nodes.push({
       kind: "footnote-reference",
       from: match.index,
@@ -493,7 +554,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     });
   }
   for (const match of text.matchAll(/\^\[([^\]\n]+)\]/g)) {
-    if (inside(match.index, protectedRanges)) continue;
+    if (inside(match.index, protectedIndex)) continue;
     nodes.push({
       kind: "inline-footnote",
       from: match.index,
@@ -505,7 +566,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   const calloutRanges: Range[] = [];
   const callout = /^ {0,3}>[ \t]*\[!([^\]\s]+)\]([+-])?([^\n]*)$/gm;
   for (const match of text.matchAll(callout)) {
-    if (inside(match.index, protectedRanges)) continue;
+    if (inside(match.index, protectedIndex)) continue;
     let to = lineEnd(text, match.index);
     const bodyLines: string[] = [];
     while (to < text.length) {
@@ -530,6 +591,8 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     calloutRanges.push({ from: match.index, to });
   }
 
+  const calloutIndex = new RangeIndex(calloutRanges);
+
   /* Callouts are the conspicuous special case of Markdown blockquotes and
    * retain priority above. Render every other contiguous run of quoted lines
    * through MarkdownIt so nested quotes and inline Markdown keep their normal
@@ -538,12 +601,12 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   let blockquoteMatch: RegExpExecArray | null;
   while ((blockquoteMatch = blockquote.exec(text))) {
     const from = blockquoteMatch.index;
-    if (inside(from, protectedRanges) || inside(from, calloutRanges)) continue;
+    if (inside(from, protectedIndex) || inside(from, calloutIndex)) continue;
     let to = lineEnd(text, from);
     while (to < text.length) {
       const nextFrom = to + 1;
       const nextTo = lineEnd(text, nextFrom);
-      if (inside(nextFrom, calloutRanges) ||
+      if (inside(nextFrom, calloutIndex) ||
           !/^ {0,3}>/.test(text.slice(nextFrom, nextTo))) break;
       to = nextTo;
     }
@@ -562,15 +625,23 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
    * replacement range. */
   for (let from = 0; from < text.length;) {
     const headerTo = lineEnd(text, from);
-    if (headerTo >= text.length || inside(from, protectedRanges)) {
+    if (headerTo >= text.length || inside(from, protectedIndex)) {
       from = headerTo + 1;
       continue;
     }
     const separatorFrom = headerTo + 1;
     const separatorTo = lineEnd(text, separatorFrom);
+    /* A delimiter row consists only of pipes, colons, dashes, and blanks,
+     * and the header needs a pipe. Reject other line pairs before running the
+     * full row lexer, which previously dominated parsing of every note. */
+    if (!tableSeparatorCandidate.test(text.slice(separatorFrom, separatorTo)) ||
+        text.lastIndexOf("|", headerTo) < from) {
+      from = headerTo + 1;
+      continue;
+    }
     const firstTwo = text.slice(from, separatorTo);
     const initial = parseMarkdownTable(firstTwo);
-    if (!initial || inside(separatorFrom, protectedRanges)) {
+    if (!initial || inside(separatorFrom, protectedIndex)) {
       from = headerTo + 1;
       continue;
     }
@@ -579,7 +650,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
       const rowFrom = to + 1;
       const rowTo = lineEnd(text, rowFrom);
       const line = text.slice(rowFrom, rowTo);
-      if (!line.trim() || inside(rowFrom, protectedRanges) ||
+      if (!line.trim() || inside(rowFrom, protectedIndex) ||
           !splitMarkdownTableRow(line)) break;
       to = rowTo;
     }
@@ -590,13 +661,13 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   }
 
   for (const match of text.matchAll(/^ {0,3}(?:-[ \t]*){3,}$/gm)) {
-    if (!inside(match.index, protectedRanges))
+    if (!inside(match.index, protectedIndex))
       nodes.push({ kind: "horizontal-rule", from: match.index,
         to: match.index + match[0].length, text: match[0] });
   }
 
   for (const match of text.matchAll(/^(#{1,6})[ \t]+(.+)$/gm)) {
-    if (!inside(match.index, protectedRanges)) {
+    if (!inside(match.index, protectedIndex)) {
       nodes.push({
         kind: "heading",
         from: match.index,
@@ -612,7 +683,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   for (const match of text.matchAll(
     /^([ \t]*)(?:([-+*])|(\d+)([.)]))([ \t]+)/gm,
   )) {
-    if (inside(match.index, protectedRanges)) continue;
+    if (inside(match.index, protectedIndex)) continue;
     const markerFrom = match.index + match[1].length;
     const marker = match[2] ?? `${match[3]}${match[4]}`;
     const to = lineEnd(text, markerFrom);
@@ -648,7 +719,7 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
   for (const match of text.matchAll(
     /^[ \t]*[-*+][ \t]+\[([^\]])\]([ \t]*)/gm,
   )) {
-    if (!inside(match.index, protectedRanges)) {
+    if (!inside(match.index, protectedIndex)) {
       const marker = match[0].lastIndexOf("[");
       const from = match.index + marker;
       // The checkbox supplies one separator visually; extra source whitespace
@@ -668,16 +739,16 @@ export function parseMarkdownNodes(text: string): MarkdownNode[] {
     }
   }
 
-  pushInline(nodes, text, protectedRanges, /(?<!\*)\*\*([^\n*]|\*(?!\*))+?\*\*(?!\*)/g, "strong", 2);
-  pushInline(nodes, text, protectedRanges, /(?<!_)__([^\n_]|_(?!_))+?__(?!_)/g, "strong", 2);
-  pushInline(nodes, text, protectedRanges, /(?<!~)~~[^\n~]+~~(?!~)/g, "strike", 2);
-  pushInline(nodes, text, protectedRanges, /(?<!=)==[^\n=]+==(?!\=)/g, "highlight", 2);
-  pushInline(nodes, text, protectedRanges, /(?<!\*)\*[^\n*]+\*(?!\*)/g, "emphasis", 1);
-  pushInline(nodes, text, protectedRanges, /(?<!_)_[^\n_]+_(?!_)/g, "emphasis", 1);
+  pushInline(nodes, text, protectedIndex, /(?<!\*)\*\*([^\n*]|\*(?!\*))+?\*\*(?!\*)/g, "strong", 2);
+  pushInline(nodes, text, protectedIndex, /(?<!_)__([^\n_]|_(?!_))+?__(?!_)/g, "strong", 2);
+  pushInline(nodes, text, protectedIndex, /(?<!~)~~[^\n~]+~~(?!~)/g, "strike", 2);
+  pushInline(nodes, text, protectedIndex, /(?<!=)==[^\n=]+==(?!\=)/g, "highlight", 2);
+  pushInline(nodes, text, protectedIndex, /(?<!\*)\*[^\n*]+\*(?!\*)/g, "emphasis", 1);
+  pushInline(nodes, text, protectedIndex, /(?<!_)_[^\n_]+_(?!_)/g, "emphasis", 1);
 
   for (const match of text.matchAll(/(^|[\s(])#([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gmu)) {
     const from = match.index + match[1].length;
-    if (!inside(from, protectedRanges))
+    if (!inside(from, protectedIndex))
       nodes.push({ kind: "tag", from, to: from + match[0].length - match[1].length, text: match[2] });
   }
   for (const match of text.matchAll(/(?:^|\s)\^([A-Za-z0-9-]+)(?=\s*$)/gm)) {
