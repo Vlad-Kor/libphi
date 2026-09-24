@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CompletionContext } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
 import { markdownCompletion } from "../src/markdown/completion";
-import { mathModeAt, parseMarkdownNodes, selectionTouches } from "../src/markdown/parser";
+import { mathModeAt, openMathAt, parseMarkdownNodes, selectionTouches } from "../src/markdown/parser";
 
 describe("Markdown extension parser precedence", () => {
   it("does not parse links or math inside code", () => {
@@ -92,6 +92,9 @@ describe("Markdown extension parser precedence", () => {
     expect(nodes.some((node) => node.kind === "footnote-definition")).toBe(true);
     expect(mathModeAt("`$not math$`", 5)).toBe("none");
     expect(mathModeAt("$x + y$", 4)).toBe("inline");
+    expect(openMathAt("a $b$ c $d", 10)).toEqual({ mode: "inline", from: 8, delimiter: "$" });
+    expect(openMathAt("x\\[y", 5)).toEqual({ mode: "display", from: 1, delimiter: "\\[" });
+    expect(openMathAt("$x$ y", 5)).toEqual({ mode: "none", from: null, delimiter: null });
     expect(mathModeAt("$$\nx + y\n$$", 6)).toBe("display");
     const adjacentInline = "${a}$${b}$ after";
     expect(mathModeAt(adjacentInline, adjacentInline.indexOf("b")))

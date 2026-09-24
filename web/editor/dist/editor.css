@@ -462,6 +462,18 @@ pre::-webkit-scrollbar-thumb,
 .cm-latex-conceal-underline { text-decoration: underline; }
 .cm-latex-conceal-roman { font-style: normal; }
 sup.cm-latex-conceal, sub.cm-latex-conceal { line-height: 0; }
+/* Unclosed math in which LaTeX snippets are active. Color only: padding or
+ * borders would change line geometry on every `$` typed. */
+.cm-phi-pending-math-delimiter {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--editor-accent) 22%, transparent);
+  color: var(--editor-accent);
+}
+.cm-phi-pending-math {
+  background: color-mix(in srgb, var(--editor-accent) 7%, transparent);
+  text-decoration: underline dashed color-mix(in srgb, var(--editor-accent) 60%, transparent);
+  text-underline-offset: .2em;
+}
 .cm-editor .cm-tooltip.math-preview-bubble {
   box-sizing: border-box;
   max-width: min(720px, calc(100vw - 32px));

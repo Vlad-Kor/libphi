@@ -8,11 +8,19 @@ import {
   type EditorState,
   type Line,
 } from "@codemirror/state";
-import { EditorView, keymap, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
+import {
+  Decoration,
+  EditorView,
+  keymap,
+  ViewPlugin,
+  type Command,
+  type DecorationSet,
+  type ViewUpdate,
+} from "@codemirror/view";
 import { indentLess, isolateHistory } from "@codemirror/commands";
 import defaultSnippets from "./default-snippets.txt?raw";
 import defaultSnippetVariables from "./default-snippet-variables.txt?raw";
-import { codeModeAt, mathModeAt } from "../markdown/parser";
+import { codeModeAt, mathModeAt, openMathAt } from "../markdown/parser";
 import {
   markdownAnalysis,
   markdownAnalysisField,
@@ -721,10 +729,56 @@ const outdentToPreviousStop: Command = (view) => {
   return true;
 };
 
+const pendingMathDelimiter = Decoration.mark({
+  class: "cm-phi-pending-math-delimiter",
+  attributes: { title: "Unclosed math: LaTeX snippets are active until it is closed" },
+});
+const pendingMathBody = Decoration.mark({ class: "cm-phi-pending-math" });
+
+/** Marks math that the snippet engine considers open but the Markdown parser
+ * does not render yet, typically right after typing a lone `$`. Math-only
+ * snippets already fire there, so without this the user had no indication
+ * that they were in math mode. Closed math is left to its preview bubble. */
+function pendingMathDecorations(state: EditorState): DecorationSet {
+  if (!snippetsAreEnabled(state) || state.selection.ranges.length !== 1)
+    return Decoration.none;
+  const head = state.selection.main.head;
+  const contextFrom = Math.max(0, head - 32768);
+  const text = state.sliceDoc(contextFrom, head);
+  /* The delimiter scan is cheap; only pay for the code-context check, which
+   * splits the whole context into lines, when the scan finds math. */
+  const open = openMathAt(text, text.length, "none");
+  if (open.from == null || !open.delimiter ||
+      codeModeAt(text, text.length) !== "none" ||
+      mathNodeAt(markdownAnalysis(state), { from: head, to: head }))
+    return Decoration.none;
+  const from = contextFrom + open.from;
+  const delimiterTo = from + open.delimiter.length;
+  const bodyTo = state.doc.lineAt(head).to;
+  const ranges = [pendingMathDelimiter.range(from, delimiterTo)];
+  if (bodyTo > delimiterTo) ranges.push(pendingMathBody.range(delimiterTo, bodyTo));
+  return Decoration.set(ranges);
+}
+
+const pendingMathPlugin = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+
+  constructor(view: EditorView) {
+    this.decorations = pendingMathDecorations(view.state);
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.docChanged || update.selectionSet ||
+        snippetsAreEnabled(update.startState) !== snippetsAreEnabled(update.state))
+      this.decorations = pendingMathDecorations(update.state);
+  }
+}, { decorations: (plugin) => plugin.decorations });
+
 export const latexSuite = [
   markdownAnalysisField,
   tabstopState,
   automaticPlugin,
+  pendingMathPlugin,
   automaticPairInput,
   /* A native key event preserves the selection. Waiting for the browser's
    * text-input transaction is unreliable in WebKit because it may collapse

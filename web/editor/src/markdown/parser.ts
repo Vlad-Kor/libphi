@@ -837,15 +837,33 @@ export function codeModeAt(text: string, position: number): CodeMode {
   return delimiter !== 0 ? "inline" : "none";
 }
 
+export interface OpenMath {
+  mode: MathMode;
+  /** Offset of the delimiter that opened the math at `position`; null when
+   * `mode` is "none". */
+  from: number | null;
+  delimiter: "$" | "$$" | "\\(" | "\\[" | null;
+}
+
 export function mathModeAt(text: string, position: number,
                            knownCodeMode?: CodeMode): MathMode {
+  return openMathAt(text, position, knownCodeMode).mode;
+}
+
+/** The snippet engine's view of math at `position`: whether it is inside math
+ * and which delimiter opened it. Unlike the Markdown parser, this counts a
+ * delimiter that has not been closed yet. */
+export function openMathAt(text: string, position: number,
+                           knownCodeMode?: CodeMode): OpenMath {
   position = Math.max(0, Math.min(position, text.length));
   const start = Math.max(0, position - 32768);
-  if ((knownCodeMode ?? codeModeAt(text, position)) !== "none") return "none";
+  if ((knownCodeMode ?? codeModeAt(text, position)) !== "none")
+    return { mode: "none", from: null, delimiter: null };
 
   let display: "dollar" | "bracket" | null = null;
   let inlineDollar = false;
   let inlineParen = false;
+  let openedAt = 0;
   /* Only newlines, dollars, and backslashes change the state; skip everything
    * else. This scan runs for automatic snippets on every key in math and
    * cost milliseconds per 32 KiB in WebKit when stepping every character. */
@@ -897,6 +915,7 @@ export function mathModeAt(text: string, position: number,
       continue;
     }
 
+    openedAt = at;
     if (text.startsWith("$$", at)) {
       display = "dollar";
       at++;
@@ -910,6 +929,9 @@ export function mathModeAt(text: string, position: number,
       at++;
     }
   }
-  if (display) return "display";
-  return inlineDollar || inlineParen ? "inline" : "none";
+  if (display)
+    return { mode: "display", from: openedAt, delimiter: display === "dollar" ? "$$" : "\\[" };
+  if (inlineDollar) return { mode: "inline", from: openedAt, delimiter: "$" };
+  if (inlineParen) return { mode: "inline", from: openedAt, delimiter: "\\(" };
+  return { mode: "none", from: null, delimiter: null };
 }

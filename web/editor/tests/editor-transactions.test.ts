@@ -11,7 +11,7 @@ import { runEditingCommand } from "../src/commands";
 import { acceptNativeResponse } from "../src/bridge";
 import { PHI_MARKDOWN_CLIPBOARD_TYPE } from "../src/clipboard";
 import { PhiMarkdownEditor } from "../src/editor";
-import { latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
+import { latexSnippetsEnabled, latexSuite, setCustomSnippets } from "../src/latex-suite/engine";
 import { renderMath } from "../src/math/mathjax";
 import { smartPairs, smartPairTransaction } from "../src/markdown/pairs";
 import { parseMarkdownTable } from "../src/markdown/table";
@@ -915,6 +915,28 @@ $$`;
       .getPropertyValue("--phi-list-content-indent")).toBe("2.6em");
     expect(key(editor.view, "Tab", true)).toBe(true);
     expect(editor.getDocument()).toBe("- A long item that wraps beneath its content");
+  });
+
+  it("marks unclosed math in which snippets are active", () => {
+    const pending = (view: EditorView) => [
+      ...view.contentDOM.querySelectorAll(".cm-phi-pending-math-delimiter, .cm-phi-pending-math"),
+    ].map((element) => [element.className, element.textContent]);
+
+    const view = viewFor("Cost $x + y", 11, 11, latexSuite);
+    expect(pending(view)).toEqual([
+      ["cm-phi-pending-math-delimiter", "$"],
+      ["cm-phi-pending-math", "x + y"],
+    ]);
+
+    view.dispatch({ changes: { from: 11, insert: "$" }, selection: { anchor: 12 } });
+    expect(pending(view)).toEqual([]);
+
+    const display = viewFor("$$\nx", 4, 4, latexSuite);
+    expect(pending(display)[0]).toEqual(["cm-phi-pending-math-delimiter", "$$"]);
+
+    expect(pending(viewFor("`$x", 3, 3, latexSuite))).toEqual([]);
+    expect(pending(viewFor("$x", 2, 2, [latexSuite, latexSnippetsEnabled.of(false)])))
+      .toEqual([]);
   });
 
   it("snaps indentation to four-column stops", () => {
