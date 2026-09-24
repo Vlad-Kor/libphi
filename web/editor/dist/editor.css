@@ -865,7 +865,11 @@ pre code { padding: 0; background: transparent; }
   outline-offset: 2px;
   transition: outline-color 100ms ease;
 }
+/* The outline extends 4px outside the item. Adjacent positioned items (images
+ * side by side or stacked) paint later in DOM order and would cover it, so
+ * lift the selected one above its neighbours. */
 .cm-hard-rendered-item.cm-hard-selected {
+  z-index: 1;
   outline-color: color-mix(in srgb, var(--editor-fg) 34%, transparent);
 }
 .cm-line:has(.image-widget-block) { line-height: 0; }
