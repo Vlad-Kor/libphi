@@ -574,7 +574,9 @@ const gchar host_script[] =
     /* Report shortcuts the page left alone, once every listener had its
      * chance, so GTK can handle them in its bubble phase. */
     "  window.addEventListener('keydown', (event) => {"
-    "    if (event.isComposing || !(event.ctrlKey || event.altKey ||"
+    "    if (event.isComposing ||"
+    "        ['Control', 'Shift', 'Alt', 'Meta'].includes(event.key) ||"
+    "        !(event.ctrlKey || event.altKey ||"
     "        event.metaKey || /^F\\d+$/.test(event.key))) return;"
     "    setTimeout(() => {"
     "      if (event.defaultPrevented) return;"
@@ -657,9 +659,40 @@ std::shared_ptr<Host> host_of(PdfvWebView2View *view) {
   return view && view->host ? *view->host : nullptr;
 }
 
-void move_focus_into(Host *host) {
-  if (host->controller && !host->has_native_focus)
+gboolean move_focus_idle(gpointer data) {
+  auto weak = static_cast<std::weak_ptr<Host> *>(data);
+  auto host = weak->lock();
+  if (host && host->view && host->controller && host->applied_visible &&
+      gtk_widget_has_focus(GTK_WIDGET(host->view)))
     host->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+  delete weak;
+  return G_SOURCE_REMOVE;
+}
+
+/* Gives the keyboard focus to the page once the current event is handled:
+ * a page that handles a shortcut, such as Ctrl+Tab switching tabs, takes
+ * the focus back when it is done with the key. */
+void move_focus_into(const std::shared_ptr<Host> &host) {
+  if (host->controller)
+    g_idle_add(move_focus_idle, new std::weak_ptr<Host>(host));
+}
+
+/* A hidden window keeps the keyboard focus, so typing would go to a page
+ * that is no longer shown, as after switching tabs. Hand the focus back to
+ * the toplevel when hiding the page. */
+void hide_host(Host *host) {
+  if (!host->window)
+    return;
+  HWND focus = GetFocus();
+  if (host->toplevel &&
+      (host->has_native_focus ||
+       (focus && (focus == host->window || IsChild(host->window, focus)))))
+    SetFocus(host->toplevel);
+  host->has_native_focus = false;
+  if (host->controller)
+    host->controller->put_IsVisible(FALSE);
+  ShowWindow(host->window, SW_HIDE);
+  host->applied_visible = false;
 }
 
 gboolean refocus_after_activation(gpointer data) {
@@ -671,7 +704,7 @@ gboolean refocus_after_activation(gpointer data) {
     auto host = static_cast<Host *>(g_ptr_array_index(hosts, i));
     if (host->view && gtk_widget_has_focus(GTK_WIDGET(host->view)) &&
         GetForegroundWindow() == toplevel)
-      move_focus_into(host);
+      move_focus_into(host_of(host->view));
   }
   return G_SOURCE_REMOVE;
 }
@@ -680,9 +713,8 @@ LRESULT CALLBACK toplevel_subclass(HWND window, UINT message, WPARAM wparam,
                                    LPARAM lparam, UINT_PTR, DWORD_PTR) {
   switch (message) {
   case WM_KILLFOCUS:
-  case WM_SETFOCUS:
-    /* Focus moving into or out of a web view stays inside this window. GDK
-     * must not treat it as the window losing or regaining keyboard focus. */
+    /* GTK considers its window active while GDK reports keyboard focus.
+     * Focus moving into a web view stays within this window. */
     if (wparam && IsChild(window, reinterpret_cast<HWND>(wparam)))
       return 0;
     break;
@@ -699,10 +731,17 @@ LRESULT CALLBACK toplevel_subclass(HWND window, UINT message, WPARAM wparam,
     break;
   }
   case WM_ACTIVATE:
-    /* Windows gives the keyboard focus back to the toplevel itself; return
-     * it to the web view if that is GTK's focus widget. */
-    if (LOWORD(wparam) != WA_INACTIVE)
+    if (LOWORD(wparam) != WA_INACTIVE) {
+      /* Windows gives the keyboard focus back to the toplevel itself;
+       * return it to the web view if that is GTK's focus widget. */
       g_idle_add(refocus_after_activation, window);
+    } else {
+      /* A web view that has the focus loses it without the toplevel
+       * hearing of it; tell GDK that the window lost the focus. */
+      HWND focus = GetFocus();
+      if (focus && IsChild(window, focus))
+        DefSubclassProc(window, WM_KILLFOCUS, 0, 0);
+    }
     break;
   case WM_NCDESTROY:
     RemoveWindowSubclass(window, toplevel_subclass, 0);
@@ -872,6 +911,8 @@ bool run_controller(GtkShortcutController *controller, GtkWidget *widget,
  * widgets themselves, which the callbacks need as their widget. */
 bool run_shortcuts(GtkWidget *target, GtkPropagationPhase phase,
                    const KeyPress &press) {
+  if (!press.keyval)
+    return false;
   std::vector<GtkWidget *> chain;
   for (GtkWidget *widget = target; widget;
        widget = gtk_widget_get_parent(widget))
@@ -1056,11 +1097,8 @@ void update_geometry(const std::shared_ptr<Host> &host) {
     visible = false;
 
   if (!visible) {
-    if (host->applied_visible) {
-      host->controller->put_IsVisible(FALSE);
-      ShowWindow(host->window, SW_HIDE);
-      host->applied_visible = false;
-    }
+    if (host->applied_visible)
+      hide_host(host.get());
     return;
   }
 
@@ -1120,6 +1158,10 @@ void update_geometry(const std::shared_ptr<Host> &host) {
     ShowWindow(host->window, SW_SHOWNOACTIVATE);
     host->controller->put_IsVisible(TRUE);
     host->applied_visible = true;
+    /* A hidden view ignores focus requests, as when GTK focuses the page of
+     * a tab that is being switched to. */
+    if (gtk_widget_has_focus(widget))
+      move_focus_into(host);
   }
 }
 
@@ -1743,7 +1785,7 @@ void configure_webview(const std::shared_ptr<Host> &host) {
               flush_pending(host);
               update_geometry(host);
               if (gtk_widget_has_focus(GTK_WIDGET(host->view)))
-                move_focus_into(host.get());
+                move_focus_into(host);
             }
             return S_OK;
           })
@@ -1827,10 +1869,7 @@ static void pdfv_webview2_view_unrealize(GtkWidget *widget) {
     host->after_paint_handler = 0;
   }
   if (host->window) {
-    if (host->controller)
-      host->controller->put_IsVisible(FALSE);
-    ShowWindow(host->window, SW_HIDE);
-    host->applied_visible = false;
+    hide_host(host.get());
     SetParent(host->window, parking_window());
   }
   detach_from_toplevel(host.get());
@@ -1844,11 +1883,8 @@ static void pdfv_webview2_view_map(GtkWidget *widget) {
 
 static void pdfv_webview2_view_unmap(GtkWidget *widget) {
   auto host = host_of(PDFV_WEBVIEW2_VIEW(widget));
-  if (host->applied_visible) {
-    host->controller->put_IsVisible(FALSE);
-    ShowWindow(host->window, SW_HIDE);
-    host->applied_visible = false;
-  }
+  if (host->applied_visible)
+    hide_host(host.get());
   GTK_WIDGET_CLASS(pdfv_webview2_view_parent_class)->unmap(widget);
 }
 
@@ -1899,7 +1935,7 @@ static void on_focus_changed(GtkWidget *widget, GParamSpec *,
   if (!host)
     return;
   if (gtk_widget_has_focus(widget)) {
-    move_focus_into(host.get());
+    move_focus_into(host);
   } else if (host->has_native_focus && host->toplevel) {
     /* GTK moved the focus elsewhere; take the keyboard back from the page. */
     SetFocus(host->toplevel);
