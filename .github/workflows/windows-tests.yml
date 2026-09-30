@@ -1,0 +1,59 @@
+# Builds Phi and runs its tests on Windows for every push and pull request.
+name: Windows tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes older runs pointless.
+concurrency:
+  group: windows-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          pacboy: >-
+            gcc:p
+            meson:p
+            ninja:p
+            pkgconf:p
+            gtk4:p
+            libadwaita:p
+            json-glib:p
+            gdk-pixbuf2:p
+            librsvg:p
+            mupdf:p
+            webview2-loader:p
+            gobject-introspection:p
+            python-gobject:p
+
+      - name: Build
+        run: |
+          meson setup _build
+          meson compile -C _build
+
+      - name: Run the tests
+        run: meson test -C _build --print-errorlogs
+
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: windows-test-logs
+          path: _build/meson-logs/
+          if-no-files-found: ignore
