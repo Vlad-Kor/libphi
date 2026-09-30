@@ -1,0 +1,82 @@
+# Builds Phi and runs its tests on Linux for every push and pull request.
+name: Linux tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes older runs pointless.
+concurrency:
+  group: linux-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    # Standard GitHub-hosted Linux runners are free and unmetered for public
+    # repositories. Ubuntu's GTK is older than the >= 4.19.4 libphi needs, so
+    # build in a Fedora container, which ships current GTK, libadwaita and
+    # WebKitGTK.
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+      # gdk-pixbuf saves PNGs through glycin, which sandboxes its loaders
+      # with bubblewrap; that needs namespaces an unprivileged container
+      # does not get.
+      options: --privileged
+
+    steps:
+      - name: Install dependencies
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc gcc-c++ meson ninja-build pkgconf-pkg-config
+          gtk4-devel libadwaita-devel webkitgtk6.0-devel json-glib-devel
+          gdk-pixbuf2-devel gobject-introspection-devel
+          python3-gobject xorg-x11-server-Xvfb xorg-x11-xauth
+          dbus-daemon glibc-langpack-en
+
+      - uses: actions/checkout@v5
+
+      # Fedora's mupdf.pc has an empty -I/-L (it drops the include path of
+      # the next dependency, e.g. adwaita.h), so build the pinned MuPDF
+      # subproject instead, the same one the Flatpak uses.
+      - name: Build
+        run: |
+          meson setup _build --force-fallback-for=mupdf
+          meson compile -C _build
+
+      # The GTK tests call gtk_test_init() and need a display. It also makes
+      # warnings fatal, and there is no accessibility bus here.
+      - name: Run the tests
+        env:
+          GTK_A11Y: none
+        run: xvfb-run -a dbus-run-session -- meson test -C _build --print-errorlogs
+
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: linux-test-logs
+          path: _build/meson-logs/
+          if-no-files-found: ignore
+
+  web-editor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/editor
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/editor/package-lock.json
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
