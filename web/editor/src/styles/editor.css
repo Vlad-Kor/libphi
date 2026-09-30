@@ -585,7 +585,9 @@ th { background: var(--editor-code-bg); }
   overflow-x: hidden;
   overflow-y: clip;
 }
-.rich-table-scroll.rich-table-overflowing { overflow-x: auto; }
+/* `scroll`, not `auto`: WebKitGTK does not grow ancestors for a scrollbar
+   found during layout, which left the add-row strip over it. */
+.rich-table-scroll.rich-table-overflowing { overflow-x: scroll; }
 .rich-table-grid {
   border-collapse: separate;
   border-spacing: 0;
