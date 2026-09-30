@@ -429,6 +429,10 @@ class RichTableController {
       this.renderCell(editor, this.model.cells[row]?.[column] ?? "");
       editor.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
+        /* An active cell already hosts its CodeMirror editor. Cancelling the
+         * pointerdown would suppress the compatibility mousedown that
+         * CodeMirror uses for caret placement and drag selection. */
+        if (this.active?.element === editor) return;
         event.preventDefault();
         event.stopPropagation();
         this.activateCell(editor, row, column, {
