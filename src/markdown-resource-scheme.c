@@ -67,6 +67,23 @@ static gchar *mime_for_path(const gchar *path, const gchar *contents,
   return mime;
 }
 
+static const gchar *editor_install_dir(void) {
+#ifdef G_OS_WIN32
+  /* Windows installations can be moved, so find the assets relative to the
+   * installation that contains the executable. */
+  static gchar *directory;
+  if (g_once_init_enter_pointer(&directory)) {
+    gchar *root = g_win32_get_package_installation_directory_of_module(NULL);
+    g_once_init_leave_pointer(
+        &directory, g_build_filename(root, "share", "phi", "editor", NULL));
+    g_free(root);
+  }
+  return directory;
+#else
+  return PDFV_EDITOR_DIR;
+#endif
+}
+
 static gchar *editor_asset_filename(const gchar *relative) {
   /* Prefer the source bundle while running from a checkout. Otherwise an older
    * system installation can silently shadow the assets that were just built. */
@@ -74,7 +91,7 @@ static gchar *editor_asset_filename(const gchar *relative) {
   if (g_file_test(source, G_FILE_TEST_IS_REGULAR))
     return source;
   g_free(source);
-  return g_build_filename(PDFV_EDITOR_DIR, relative, NULL);
+  return g_build_filename(editor_install_dir(), relative, NULL);
 }
 
 static void app_scheme_request(PdfvWebSchemeRequest *request,
