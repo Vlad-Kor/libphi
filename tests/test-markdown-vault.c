@@ -9,7 +9,45 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib/gstdio.h>
 #include <string.h>
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
+
+/* Windows only lets privileged users, or everyone in Developer Mode, create
+ * symbolic links. Returns FALSE if links cannot be made. */
+static gboolean make_symlink(const gchar *target, const gchar *link,
+                             gboolean directory) {
+#ifdef G_OS_WIN32
+  gunichar2 *wide_target = g_utf8_to_utf16(target, -1, NULL, NULL, NULL);
+  gunichar2 *wide_link = g_utf8_to_utf16(link, -1, NULL, NULL, NULL);
+  DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE |
+                (directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0);
+  gboolean made = CreateSymbolicLinkW(wide_link, wide_target, flags) != 0;
+  g_free(wide_target);
+  g_free(wide_link);
+  return made;
+#else
+  (void)directory;
+  g_assert_cmpint(symlink(target, link), ==, 0);
+  return TRUE;
+#endif
+}
+
+static void remove_symlink(const gchar *link, gboolean directory) {
+#ifdef G_OS_WIN32
+  /* A directory link is removed like a directory. */
+  if (directory) {
+    g_assert_cmpint(g_rmdir(link), ==, 0);
+    return;
+  }
+#else
+  (void)directory;
+#endif
+  g_assert_cmpint(g_unlink(link), ==, 0);
+}
 
 typedef struct {
   gchar *path;
@@ -143,25 +181,30 @@ static void test_safe_resolution(VaultFixture *fixture, gconstpointer data) {
 
   gchar *link_path = g_build_filename(fixture->path, "Linked.md", NULL);
   gchar *overview_path = g_file_get_path(fixture->overview);
-  g_assert_cmpint(symlink(overview_path, link_path), ==, 0);
+  if (!make_symlink(overview_path, link_path, FALSE)) {
+    g_free(overview_path);
+    g_free(link_path);
+    g_test_skip("Symbolic links cannot be created on this system");
+    return;
+  }
   GFile *linked = pdfv_markdown_vault_adapter_resolve(
       fixture->vault, "Linked.md", &error);
   g_assert_null(linked);
   g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
   g_clear_error(&error);
-  g_assert_cmpint(g_unlink(link_path), ==, 0);
+  remove_symlink(link_path, FALSE);
   g_free(overview_path);
   g_free(link_path);
 
   gchar *linked_dir = g_build_filename(fixture->path, "Linked", NULL);
   gchar *nested_path = g_file_get_path(fixture->nested);
-  g_assert_cmpint(symlink(nested_path, linked_dir), ==, 0);
+  g_assert_true(make_symlink(nested_path, linked_dir, TRUE));
   GFile *new_note = pdfv_markdown_vault_adapter_resolve_new_note(
       fixture->vault, "Overview.md", "Linked/New note", &error);
   g_assert_null(new_note);
   g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
   g_clear_error(&error);
-  g_assert_cmpint(g_unlink(linked_dir), ==, 0);
+  remove_symlink(linked_dir, TRUE);
   g_free(nested_path);
   g_free(linked_dir);
 }
