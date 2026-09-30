@@ -29,7 +29,7 @@ static gboolean file_is_workspace_trash(GFile *root, GFile *file) {
   gchar *relative = g_file_get_relative_path(root, file);
   gboolean trash = relative &&
       (g_str_equal(relative, ".trash") ||
-       g_str_has_prefix(relative, ".trash/"));
+       g_str_has_prefix(relative, ".trash" G_DIR_SEPARATOR_S));
   g_free(relative);
   return trash;
 }
@@ -63,12 +63,29 @@ GFile *pdfv_workspace_creation_parent(GFile *root, GFile *selected,
   return parent;
 }
 
+#ifdef G_OS_WIN32
+/* Names Windows reserves for devices, with or without an extension. */
+static gboolean name_is_reserved(const gchar *name) {
+  static const gchar *const devices[] = {"CON", "PRN", "AUX", "NUL"};
+  gsize length = strcspn(name, ".");
+  for (guint i = 0; i < G_N_ELEMENTS(devices); i++) {
+    if (length == 3 && g_ascii_strncasecmp(name, devices[i], 3) == 0)
+      return TRUE;
+  }
+  return length == 4 && (g_ascii_strncasecmp(name, "COM", 3) == 0 ||
+                         g_ascii_strncasecmp(name, "LPT", 3) == 0) &&
+      name[3] >= '1' && name[3] <= '9';
+}
+#endif
+
 static gchar *validated_name(const gchar *name, gboolean markdown,
                              GError **error) {
   gchar *clean = g_strdup(name ? name : "");
   g_strstrip(clean);
+  /* '/' separates paths on every platform, and Windows also uses '\'. */
   if (!*clean || g_str_equal(clean, ".") || g_str_equal(clean, "..") ||
-      strchr(clean, G_DIR_SEPARATOR) || !g_utf8_validate(clean, -1, NULL)) {
+      strchr(clean, '/') || strchr(clean, G_DIR_SEPARATOR) ||
+      !g_utf8_validate(clean, -1, NULL)) {
     g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
                         "Use a valid name without path separators");
     g_free(clean);
@@ -82,6 +99,17 @@ static gchar *validated_name(const gchar *name, gboolean markdown,
       return NULL;
     }
   }
+#ifdef G_OS_WIN32
+  gsize clean_length = strlen(clean);
+  if (strpbrk(clean, "<>:\"|?*") || clean[clean_length - 1] == '.' ||
+      name_is_reserved(clean)) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                        "Windows does not allow this name. Avoid < > : \" | ? *, "
+                        "a trailing dot and device names such as CON");
+    g_free(clean);
+    return NULL;
+  }
+#endif
   if (markdown) {
     gsize length = strlen(clean);
     gboolean has_extension = length >= 3 &&
