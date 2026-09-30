@@ -26,6 +26,7 @@ import {
 import { latexEnhancements } from "./latex-suite/enhancements";
 import { invalidateMath, updatePreamble } from "./math/mathjax";
 import { markdownCompletion } from "./markdown/completion";
+import { installOverlayScrollbars } from "./overlay-scrollbars";
 import { previewGeometryEnvironment } from "./markdown/geometry";
 import { livePreview, refreshLivePreview } from "./markdown/live-preview";
 import { markdownAnalysis } from "./markdown/analysis";
@@ -137,6 +138,7 @@ export class PhiMarkdownEditor implements NativeMarkdownEditor {
       parent,
       state: this.createState(""),
     });
+    installOverlayScrollbars(this.view.scrollDOM);
     this.view.dom.addEventListener("contextmenu", (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const table = target?.closest<HTMLElement>(".rich-table-widget") ?? null;

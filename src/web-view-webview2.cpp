@@ -569,7 +569,9 @@ const gchar host_script[] =
     "  window.phiHost = Object.freeze({"
     "    postMessage(channel, message) {"
     "      webview.postMessage([String(channel), String(message)]);"
-    "    }"
+    "    },"
+    /* Chromium draws Windows scrollbars, not GTK's. */
+    "    toolkitScrollbars: false,"
     "  });"
     /* Report shortcuts the page left alone, once every listener had its
      * chance, so GTK can handle them in its bubble phase. */

@@ -33,7 +33,8 @@ static const gchar host_script[] =
     "window.phiHost = Object.freeze({"
     "  postMessage(channel, message) {"
     "    window.webkit.messageHandlers[channel].postMessage(String(message));"
-    "  }"
+    "  },"
+    "  toolkitScrollbars: true,"
     "});";
 
 /* All views share a context so WebKit can reuse its web process, compiled

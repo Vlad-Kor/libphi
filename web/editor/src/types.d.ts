@@ -2,7 +2,12 @@ declare global {
   interface Window {
     nativeEditorReceive?: (message: NativeMessage | string) => void;
     phiMarkdownEditor?: NativeMarkdownEditor;
-    phiHost?: { postMessage(channel: string, message: string): void };
+    phiHost?: {
+      postMessage(channel: string, message: string): void;
+      /* False if the engine draws its platform's scrollbars instead of the
+       * toolkit's; see src/web-view.h. */
+      toolkitScrollbars?: boolean;
+    };
     webkit?: {
       messageHandlers?: {
         native?: { postMessage(value: string): void };

@@ -19,6 +19,11 @@
  *
  * posts the string @message to the "script-message::channel" signal. The
  * application answers with pdfv_web_view_run_javascript().
+ *
+ *   window.phiHost.toolkitScrollbars
+ *
+ * is false if the engine draws its platform's scrollbars rather than ones
+ * that look like the toolkit's, so that the page draws its own.
  */
 
 #ifndef PDFV_WEB_VIEW_H

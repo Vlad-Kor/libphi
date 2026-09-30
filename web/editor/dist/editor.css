@@ -33,6 +33,33 @@ body { background: var(--editor-bg); color: var(--editor-fg); font-size: calc(16
 .cm-editor { height: 100%; background: var(--editor-bg); color: var(--editor-fg); }
 .cm-editor.cm-focused { outline: none; }
 .cm-scroller { font-family: "Adwaita Sans", Inter, Cantarell, system-ui, sans-serif; line-height: 1.62; overflow: auto; }
+/* GTK-like overlay scrollbar for engines that draw their platform's
+   scrollbars (see overlay-scrollbars.ts): a 3px indicator while scrolling,
+   an 8px slider on a faint trough under the pointer. WebKitGTK keeps GTK's
+   own scrollbars. */
+.phi-overlay-scrollbars .cm-scroller::-webkit-scrollbar { width: 14px; height: 14px; background: transparent; }
+.phi-overlay-scrollbars .cm-scroller::-webkit-scrollbar-track,
+.phi-overlay-scrollbars .cm-scroller::-webkit-scrollbar-corner { background: transparent; }
+.phi-overlay-scrollbars .cm-scroller::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  border: solid transparent;
+  border-width: 3px 3px 3px 8px;
+  border-radius: 999px;
+  background: transparent padding-box;
+}
+.phi-overlay-scrollbars .cm-scroller.phi-scrollbar-visible::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--editor-fg) 20%, transparent);
+}
+.phi-overlay-scrollbars .cm-scroller.phi-scrollbar-hover::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--editor-fg) 10%, transparent);
+}
+.phi-overlay-scrollbars .cm-scroller.phi-scrollbar-hover::-webkit-scrollbar-thumb { border-left-width: 3px; }
+.phi-overlay-scrollbars .cm-scroller.phi-scrollbar-hover::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--editor-fg) 40%, transparent);
+}
+.phi-overlay-scrollbars .cm-scroller.phi-scrollbar-hover::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in srgb, var(--editor-fg) 60%, transparent);
+}
 .cm-content {
   box-sizing: border-box;
   width: min(100%, 860px);
