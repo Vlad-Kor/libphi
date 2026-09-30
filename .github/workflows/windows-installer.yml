@@ -1,22 +1,13 @@
-# Builds the Windows installer for every push, or by hand under
-# Actions > Windows installer > Run workflow for the selected branch. The
-# installer is attached to the run as an artifact. Nothing is released or
-# published.
+# Builds the Windows installer from the selected branch. Start it by hand
+# under Actions > Windows installer > Run workflow; the installer is attached
+# to the run as an artifact. Nothing is released or published.
 name: Windows installer
 
-# Run on push too: a workflow_dispatch-only workflow can only be started
-# from the Actions tab once it exists on the default branch.
 on:
-  push:
   workflow_dispatch:
 
 permissions:
   contents: read
-
-# A newer push to the same branch makes older builds pointless.
-concurrency:
-  group: windows-installer-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   installer:
