@@ -1,13 +1,21 @@
-# Builds the Flatpak bundle from the selected branch. Start it by hand under
-# Actions > Flatpak > Run workflow; the .flatpak is attached to the run as an
-# artifact. Nothing is released or published.
+# Builds the Flatpak bundle for every push, or by hand under
+# Actions > Flatpak > Run workflow for the selected branch. The .flatpak is
+# attached to the run as an artifact. Nothing is released or published.
 name: Flatpak
 
+# Run on push too: a workflow_dispatch-only workflow can only be started
+# from the Actions tab once it exists on the default branch.
 on:
+  push:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A newer push to the same branch makes older builds pointless.
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   flatpak:
