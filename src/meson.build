@@ -39,8 +39,18 @@ pdfv_sources = [
 ]
 
 # PdfvWebView has one backend per platform; see web-view-backend.h.
-web_view_deps = [dependency('webkitgtk-6.0', version: '>= 2.40')]
-pdfv_sources += 'web-view-webkit.c'
+if host_machine.system() == 'windows'
+	add_languages('cpp', native: false)
+	# WebView2Loader.dll is loaded at run time; it has no import library.
+	web_view_deps = [
+		cc.find_library('ole32'),
+		cc.find_library('comctl32'),
+	]
+	pdfv_sources += 'web-view-webview2.cpp'
+else
+	web_view_deps = [dependency('webkitgtk-6.0', version: '>= 2.40')]
+	pdfv_sources += 'web-view-webkit.c'
+endif
 
 editor_install_dir = get_option('prefix') / get_option('datadir') / 'phi' / 'editor'
 editor_source_dir = meson.project_source_root() / 'web' / 'editor' / 'dist'
