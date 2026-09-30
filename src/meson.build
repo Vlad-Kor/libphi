@@ -52,6 +52,29 @@ else
 	pdfv_sources += 'web-view-webkit.c'
 endif
 
+# Windows shows the embedded icon and version for the executable, and starts
+# it without a console window.
+pdfv_win_subsystem = 'console'
+if host_machine.system() == 'windows'
+	version_parts = meson.project_version().split('.')
+	foreach _ : range(version_parts.length(), 4)
+		version_parts += '0'
+	endforeach
+	rc_configuration = configuration_data()
+	rc_configuration.set('VERSION', meson.project_version())
+	rc_configuration.set('VERSION_COMMA', ','.join(version_parts))
+	pdfv_rc = configure_file(
+		input: '../data/windows/pdfv.rc.in',
+		output: 'pdfv.rc',
+		configuration: rc_configuration,
+	)
+	pdfv_sources += import('windows').compile_resources(pdfv_rc,
+		include_directories: include_directories('../data/windows'),
+		depend_files: files('../data/windows/ai.korsakov.Phi.ico'),
+	)
+	pdfv_win_subsystem = 'windows'
+endif
+
 editor_install_dir = get_option('prefix') / get_option('datadir') / 'phi' / 'editor'
 editor_source_dir = meson.project_source_root() / 'web' / 'editor' / 'dist'
 
@@ -69,6 +92,7 @@ pdfv_app = executable('pdfv', pdfv_sources,
 		'-DPDFV_EDITOR_DIR="' + editor_install_dir + '"',
 		'-DPDFV_EDITOR_SOURCE_DIR="' + editor_source_dir + '"',
 	],
+	win_subsystem: pdfv_win_subsystem,
 	# A per-user prefix such as ~/.local/lib64 is not normally searched by the
 	# dynamic loader. Keep the executable paired with the libphi installed in
 	# the same prefix instead of accidentally loading an older system copy.

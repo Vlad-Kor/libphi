@@ -1,0 +1,35 @@
+/* Icon and version information of pdfv.exe, shown by Explorer, the taskbar
+ * and the Start menu. */
+
+#include <winver.h>
+
+1 ICON "ai.korsakov.Phi.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @VERSION_COMMA@
+PRODUCTVERSION @VERSION_COMMA@
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Vlad Korsakov"
+      VALUE "FileDescription", "Phi Document Viewer"
+      VALUE "FileVersion", "@VERSION@"
+      VALUE "InternalName", "pdfv"
+      VALUE "LegalCopyright", "Copyright (C) 2026 Vlad Korsakov. AGPL-3.0-or-later."
+      VALUE "OriginalFilename", "pdfv.exe"
+      VALUE "ProductName", "Phi Document Viewer"
+      VALUE "ProductVersion", "@VERSION@"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

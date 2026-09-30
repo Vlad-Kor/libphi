@@ -130,9 +130,15 @@ static void pdfv_application_about_action(GSimpleAction* action, GVariant* param
 		"Copyright © 2026 Vlad Korsakov\n"
 		"libphi Copyright © 2025 Florian \"sp1rit\"");
 	adw_about_dialog_set_license_type(about, GTK_LICENSE_AGPL_3_0);
+#ifdef G_OS_WIN32
+	adw_about_dialog_set_comments(
+		about,
+		"A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and Microsoft Edge WebView2");
+#else
 	adw_about_dialog_set_comments(
 		about,
 		"A high-performance PDF and Markdown viewer powered by MuPDF, GTK4, and WebKitGTK");
+#endif
 	adw_about_dialog_set_website(about, "https://github.com/Vlad-Kor/libphi");
 	adw_about_dialog_add_link(about, "Other Repository", "https://github.com/sp1ritCS/libphi");
 	adw_about_dialog_add_acknowledgement_section(
