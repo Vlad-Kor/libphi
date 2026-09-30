@@ -154,7 +154,8 @@ async function additionalWork(work) {
   return {
     ...work,
     selectedLicense: work.declaredLicense,
-    licenseSource: relative(process.cwd(), path),
+    // Keep the inventory identical when it is generated on Windows.
+    licenseSource: relative(process.cwd(), path).split(sep).join("/"),
     licenseText: (await readFile(path, "utf8")).trim(),
     noticeName: null,
     noticeText: null,
