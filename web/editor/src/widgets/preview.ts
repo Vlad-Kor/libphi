@@ -80,6 +80,9 @@ function ensureMermaidReady(): Promise<MermaidApi> {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: "strict",
+          // HTML labels live in <foreignObject>, which sanitizeHtml() removes
+          // together with the label text. SVG text labels survive it.
+          htmlLabels: false,
           theme: "base",
           suppressErrorRendering: true,
         });

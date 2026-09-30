@@ -262,7 +262,9 @@ describe("lazy preview renderers", () => {
       state: EditorState.create({ doc: "graph TD\nA-->B" }),
     });
     const initialize = vi.fn();
-    const render = vi.fn().mockResolvedValue({ svg: "<svg><title>Diagram</title></svg>" });
+    const render = vi.fn().mockResolvedValue({
+      svg: "<svg><title>Diagram</title><g class=\"label\"><text>Start</text></g></svg>",
+    });
     const widget = new MermaidWidget("graph TD\nA-->B", 0).toDOM(view);
     const script = document.querySelector<HTMLScriptElement>(
       'script[data-phi-renderer="mermaid"]',
@@ -275,7 +277,12 @@ describe("lazy preview renderers", () => {
       "graph TD\nA-->B",
     ));
     expect(initialize).toHaveBeenCalledOnce();
+    // Labels in <foreignObject> would be removed by the sanitizer.
+    expect(initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ htmlLabels: false }),
+    );
     expect(widget.querySelector("svg title")?.textContent).toBe("Diagram");
+    expect(widget.querySelector("svg .label text")?.textContent).toBe("Start");
     view.destroy();
   });
 });
