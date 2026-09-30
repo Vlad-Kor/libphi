@@ -11,3 +11,6 @@ subprojects/wayland-protocols
 doc/*
 web/editor/node_modules/
 subprojects/.wraplock
+_build-windows/
+_bundle-windows/
+_installer/
