@@ -19,6 +19,31 @@ meson compile -C _build
 meson install -C _build
 ```
 
+### Windows
+
+Phi runs on 64-bit Windows 10 and 11. The Markdown editor uses the Microsoft
+Edge WebView2 Runtime that comes with Windows; the installer adds it where it
+is missing.
+
+To get an installer, run the **Windows installer** workflow under the
+repository's *Actions* tab for the branch you want; the setup program is
+attached to the run. The setup adds Phi to the Start menu, to *Open with* for
+PDF and Markdown files and, as `pdfv`, to `PATH`. Running a newer setup over
+an existing installation updates it, and Phi can be removed under
+*Settings > Apps*.
+
+To build it yourself, install [MSYS2](https://www.msys2.org/) and, in its
+*UCRT64* shell, the packages listed in
+[`.github/workflows/windows-installer.yml`](.github/workflows/windows-installer.yml)
+(`pacboy -S --needed gcc:p meson:p …`). Then:
+
+```bash
+build-aux/windows/build-installer.sh   # writes _installer/Phi-*-setup.exe
+```
+
+For development, build with Meson in the UCRT64 shell as above and run
+`PATH="$PWD/_build/phi:$PATH" _build/src/pdfv.exe`.
+
 ## Using libphi from other applications
 
 The PDF viewer widget is part of libphi, which only needs GLib/GIO, GTK 4 and
