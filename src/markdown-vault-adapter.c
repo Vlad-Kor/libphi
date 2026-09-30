@@ -73,6 +73,18 @@ GFile *pdfv_markdown_vault_adapter_get_root(
   return self->root;
 }
 
+/* Vault paths are separated by '/', like the URLs the editor builds from
+ * them, on every platform. */
+static gchar *vault_relative_path(GFile *root, GFile *file) {
+  gchar *relative = g_file_get_relative_path(root, file);
+#ifdef G_OS_WIN32
+  /* '\\' separates paths on Windows and cannot occur in file names. */
+  if (relative)
+    g_strdelimit(relative, "\\", '/');
+#endif
+  return relative;
+}
+
 static gboolean path_is_safe(const gchar *path) {
   if (!path || !*path || g_path_is_absolute(path) || strchr(path, '\\'))
     return FALSE;
@@ -129,7 +141,7 @@ GFile *pdfv_markdown_vault_adapter_resolve(PdfvMarkdownVaultAdapter *self,
     return NULL;
   }
   GFile *file = g_file_resolve_relative_path(self->root, decoded);
-  gchar *back = g_file_get_relative_path(self->root, file);
+  gchar *back = vault_relative_path(self->root, file);
   if (!back || !path_is_safe(back)) {
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                 "Path escapes the vault");
@@ -144,7 +156,7 @@ gchar *pdfv_markdown_vault_adapter_relative_path(
     PdfvMarkdownVaultAdapter *self, GFile *file) {
   g_return_val_if_fail(PDFV_IS_MARKDOWN_VAULT_ADAPTER(self), NULL);
   g_return_val_if_fail(G_IS_FILE(file), NULL);
-  gchar *relative = g_file_get_relative_path(self->root, file);
+  gchar *relative = vault_relative_path(self->root, file);
   if (!relative || !path_is_safe(relative))
     g_clear_pointer(&relative, g_free);
   return relative;
@@ -210,7 +222,7 @@ static gboolean list_notes_recursive(PdfvMarkdownVaultAdapter *self,
     GFileType type = g_file_info_get_file_type(info);
     GFile *child = g_file_get_child(folder, name);
     gchar *relative = prefix && *prefix
-                          ? g_build_filename(prefix, name, NULL)
+                          ? g_build_path("/", prefix, name, NULL)
                           : g_strdup(name);
     if (type == G_FILE_TYPE_DIRECTORY &&
         !g_str_equal(name, ".obsidian") && !g_str_has_prefix(name, ".git")) {
@@ -277,7 +289,7 @@ GFile *pdfv_markdown_vault_adapter_resolve_new_note(
     gchar *directory = g_path_get_dirname(source_path);
     candidate = g_str_equal(directory, ".")
                     ? g_strdup(path)
-                    : g_build_filename(directory, path, NULL);
+                    : g_build_path("/", directory, path, NULL);
     g_free(directory);
   } else {
     candidate = g_strdup(path);
@@ -302,7 +314,7 @@ GFile *pdfv_markdown_vault_adapter_resolve_note(
     gchar *directory = g_path_get_dirname(source_path);
     gchar *near_path = g_str_equal(directory, ".")
                            ? g_strdup(path)
-                           : g_build_filename(directory, path, NULL);
+                           : g_build_path("/", directory, path, NULL);
     result = pdfv_markdown_vault_adapter_resolve(self, near_path, NULL);
     if (result && !g_file_query_exists(result, NULL))
       g_clear_object(&result);
@@ -354,7 +366,7 @@ static GFile *find_attachment_recursive(PdfvMarkdownVaultAdapter *self,
     GFile *child = g_file_get_child(folder, name);
     if (type == G_FILE_TYPE_REGULAR &&
         g_ascii_strcasecmp(name, basename) == 0) {
-      gchar *relative = g_file_get_relative_path(self->root, child);
+      gchar *relative = vault_relative_path(self->root, child);
       if (relative && path_is_safe(relative))
         result = g_object_ref(child);
       g_free(relative);
@@ -398,7 +410,7 @@ static GFile *resolve_attachment(
                         ? g_object_ref(self->root)
                         : g_file_resolve_relative_path(self->root, directory);
     GFile *candidate = g_file_resolve_relative_path(parent, decoded);
-    gchar *relative = g_file_get_relative_path(self->root, candidate);
+    gchar *relative = vault_relative_path(self->root, candidate);
     if (relative && path_is_safe(relative) &&
         g_file_query_exists(candidate, NULL))
       result = g_object_ref(candidate);
@@ -415,7 +427,7 @@ static GFile *resolve_attachment(
     g_clear_object(&candidate);
   }
   if (!result && self->attachment_folder[0] && !strchr(decoded, '/')) {
-    gchar *path = g_build_filename(self->attachment_folder, decoded, NULL);
+    gchar *path = g_build_path("/", self->attachment_folder, decoded, NULL);
     GFile *candidate = pdfv_markdown_vault_adapter_resolve(self, path, NULL);
     if (candidate && g_file_query_exists(candidate, NULL))
       result = g_object_ref(candidate);

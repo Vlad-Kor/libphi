@@ -668,8 +668,8 @@ static gchar *attachment_link_from_note(PdfvMarkdownEditor *self,
   if (!target)
     return NULL;
   gchar *note_directory = g_path_get_dirname(self->relative_path);
-  gchar **from_parts = g_strsplit(note_directory, G_DIR_SEPARATOR_S, -1);
-  gchar **to_parts = g_strsplit(target, G_DIR_SEPARATOR_S, -1);
+  gchar **from_parts = g_strsplit(note_directory, "/", -1);
+  gchar **to_parts = g_strsplit(target, "/", -1);
   guint common = 0;
   while (from_parts[common] && to_parts[common] &&
          g_str_equal(from_parts[common], to_parts[common]))

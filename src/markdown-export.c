@@ -1411,15 +1411,32 @@ static void expand_picker_selection(PdfvMarkdownExport *self) {
   }
 }
 
+/* The note picker lists workspace paths, which use the platform's separator,
+ * while notes carry vault paths separated by '/'. */
+static gchar *workspace_path_for_note(const ExportNote *note) {
+  gchar *path = g_strdup(note->path);
+#ifdef G_OS_WIN32
+  g_strdelimit(path, "/", '\\');
+#endif
+  return path;
+}
+
 static ExportNote *load_export_note(PdfvMarkdownExport *self,
-                                    const gchar *path, GError **error) {
-  gchar *basename = path ? g_path_get_basename(path) : NULL;
-  if (!path || !basename || !note_filename_supported(basename)) {
+                                    const gchar *workspace_path,
+                                    GError **error) {
+  gchar *basename = workspace_path ? g_path_get_basename(workspace_path)
+                                   : NULL;
+  if (!workspace_path || !basename || !note_filename_supported(basename)) {
     g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
                         "The selection contains an unsupported note");
     g_free(basename);
     return NULL;
   }
+  /* Workspace paths use the platform's separator; vault paths use '/'. */
+  gchar *path = g_strdup(workspace_path);
+#ifdef G_OS_WIN32
+  g_strdelimit(path, "\\", '/');
+#endif
   GFile *file = pdfv_markdown_vault_adapter_resolve(self->vault, path, error);
   GFileInfo *info = file ? g_file_query_info(
       file, G_FILE_ATTRIBUTE_STANDARD_TYPE ","
@@ -1436,6 +1453,7 @@ static ExportNote *load_export_note(PdfvMarkdownExport *self,
   g_free(text);
   g_clear_object(&info);
   g_clear_object(&file);
+  g_free(path);
   g_free(basename);
   return note;
 }
@@ -1501,10 +1519,12 @@ static void on_picker_done(GtkButton *button,
                                             NULL);
   for (guint i = 0; i < self->notes->len; i++) {
     ExportNote *note = g_ptr_array_index(self->notes, i);
-    if (g_hash_table_contains(self->picker_selection, note->path)) {
+    gchar *workspace_path = workspace_path_for_note(note);
+    if (g_hash_table_contains(self->picker_selection, workspace_path)) {
       g_ptr_array_add(notes, export_note_copy(note));
-      g_hash_table_add(added, g_strdup(note->path));
+      g_hash_table_add(added, g_steal_pointer(&workspace_path));
     }
+    g_free(workspace_path);
   }
 
   GError *error = NULL;
@@ -1564,7 +1584,7 @@ static void present_file_picker(GtkButton *button,
                                                   g_free, NULL);
   for (guint i = 0; i < self->notes->len; i++) {
     ExportNote *note = g_ptr_array_index(self->notes, i);
-    g_hash_table_add(self->picker_selection, g_strdup(note->path));
+    g_hash_table_add(self->picker_selection, workspace_path_for_note(note));
   }
 
   self->picker_dialog = adw_dialog_new();
