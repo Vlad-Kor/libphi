@@ -88,3 +88,76 @@ fz_stream* phi_gio_stream_wrap(fz_context* ctx, GInputStream* stream) {
 	ret->seek = phi_gio_stream_seek;
 	return ret;
 }
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+
+/* MuPDF and GIO open files without FILE_SHARE_DELETE on Windows, so a viewed
+ * document could not be deleted or atomically replaced (as LaTeX tools do)
+ * until it was closed. This stream shares every access mode, like reading a
+ * file on POSIX systems. */
+typedef struct {
+	HANDLE handle;
+	guchar buffer[8192];
+} PhiWin32StreamState;
+
+G_NORETURN
+static void phi_win32_stream_throw(fz_context* ctx, const gchar* what) {
+	gchar* msg = g_win32_error_message(GetLastError());
+	gchar buffer[sizeof(ctx->error.message)];
+	g_snprintf(buffer, sizeof buffer, "%s: %s", what, msg);
+	g_free(msg);
+	fz_throw(ctx, FZ_ERROR_SYSTEM, "%s", buffer);
+}
+
+static void phi_win32_stream_drop(fz_context*, PhiWin32StreamState* state) {
+	CloseHandle(state->handle);
+	g_free(state);
+}
+
+static int phi_win32_stream_next(fz_context* ctx, fz_stream* stream, G_GNUC_UNUSED size_t max) {
+	PhiWin32StreamState* state = (PhiWin32StreamState*)stream->state;
+	DWORD len = 0;
+	if (!ReadFile(state->handle, state->buffer, sizeof state->buffer, &len, NULL))
+		phi_win32_stream_throw(ctx, "read error");
+
+	if (len == 0)
+		return -1;
+
+	stream->rp = state->buffer;
+	stream->wp = &state->buffer[len];
+	stream->pos += len;
+	return *stream->rp++;
+}
+
+static void phi_win32_stream_seek(fz_context* ctx, fz_stream* stream, int64_t offset, int whence) {
+	PhiWin32StreamState* state = (PhiWin32StreamState*)stream->state;
+	DWORD method = whence == SEEK_SET ? FILE_BEGIN
+		: whence == SEEK_END ? FILE_END : FILE_CURRENT;
+	LARGE_INTEGER distance = { .QuadPart = offset };
+	LARGE_INTEGER position;
+	if (!SetFilePointerEx(state->handle, distance, &position, method))
+		phi_win32_stream_throw(ctx, "seek error");
+	stream->pos = position.QuadPart;
+	stream->rp = state->buffer;
+	stream->wp = state->buffer;
+}
+
+fz_stream* phi_win32_file_stream_open(fz_context* ctx, const gchar* path) {
+	wchar_t* wpath = g_utf8_to_utf16(path, -1, NULL, NULL, NULL);
+	HANDLE handle = wpath ? CreateFileW(wpath, GENERIC_READ,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, NULL)
+		: INVALID_HANDLE_VALUE;
+	g_free(wpath);
+	if (handle == INVALID_HANDLE_VALUE)
+		phi_win32_stream_throw(ctx, "cannot open file");
+
+	PhiWin32StreamState* state = g_new0(PhiWin32StreamState, 1);
+	state->handle = handle;
+
+	fz_stream* ret = fz_new_stream(ctx, state, phi_win32_stream_next, (fz_stream_drop_fn*)phi_win32_stream_drop);
+	ret->seek = phi_win32_stream_seek;
+	return ret;
+}
+#endif

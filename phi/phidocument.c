@@ -219,7 +219,12 @@ static fz_document* phi_document_open_source(PhiDocument* self,
 			document = fz_open_document_with_stream(ctx,
 				phi_document_magic(self->source_magic), stream);
 		} else if (path) {
+#ifdef G_OS_WIN32
+			stream = phi_win32_file_stream_open(ctx, path);
+			document = fz_open_document_with_stream(ctx, path, stream);
+#else
 			document = fz_open_document(ctx, path);
+#endif
 		} else {
 			stream = phi_gio_stream_wrap(ctx, G_INPUT_STREAM(input));
 			document = fz_open_document_with_stream(ctx,
@@ -320,6 +325,22 @@ PhiDocument* phi_document_new_from_bytes(GBytes* bytes, const gchar* magic,
  * Returns: (transfer full): a new #PhiDocument, or %NULL on error
  */
 PhiDocument* phi_document_new_from_file(GFile* file, GError** error) {
+#ifdef G_OS_WIN32
+	/* Open local files through the shared-access stream in
+	 * phi_document_open_source() rather than a GIO stream, which would keep
+	 * the file from being replaced while it is shown. */
+	if (g_file_is_native(file)) {
+		PhiDocument* self = phi_document_new_with_context();
+		self->source_file = g_object_ref(file);
+		self->document = phi_document_open_source(self, self->ctx, NULL, error);
+		if (!self->document || !phi_document_finish_open(self, error)) {
+			g_object_unref(self);
+			return NULL;
+		}
+		return self;
+	}
+#endif
+
 	const gchar* content_type = NULL;
 	GFileInfo* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
 	if (info && g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE))

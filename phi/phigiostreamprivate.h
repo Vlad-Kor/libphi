@@ -26,6 +26,10 @@ G_BEGIN_DECLS
 
 fz_stream* phi_gio_stream_wrap(fz_context* ctx, GInputStream* stream);
 
+#ifdef G_OS_WIN32
+fz_stream* phi_win32_file_stream_open(fz_context* ctx, const gchar* path);
+#endif
+
 G_END_DECLS
 
 #endif // __PHIGIOSTREAMPRIVATE_H__
