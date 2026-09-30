@@ -1,3 +1,7 @@
 # Shell scripts run in MSYS2 on Windows too, where checkouts may convert
 # line endings to CRLF.
 *.sh text eol=lf
+
+# The editor bundle embeds some of these files verbatim; build it from the
+# same bytes on every platform.
+web/editor/src/** text eol=lf

@@ -235,1082 +235,1082 @@ ${h}  `;r.push(`${h}${u}${c.replace(/\n/g,f)}`.trimEnd());for(let d of a)r.push(
 `,`
 $$`),"editor.codeBlock":Bi("```\n","\n```"),"editor.horizontalRule":t=>(t.dispatch(t.state.replaceSelection(`
 ---
-`)),!0),"editor.fold":O1,"editor.unfold":A1};for(let t=1;t<=6;t++)lc[`editor.heading${t}`]=SN(t);function TC(t,e){return lc[t]?.(e)??!1}var MC=[{key:"*",run:kN},{key:"Mod-b",run:lc["editor.bold"]},{key:"Mod-i",run:lc["editor.italic"]},{key:"Mod-k",run:lc["editor.link"]}];var FC=`/*\r
- * Adapted from Obsidian LaTeX Suite's default_snippets.js at commit 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.\r
- * Copyright (c) 2022 artisticat1; SPDX-License-Identifier: MIT\r
- *\r
- * Regular-expression triggers are stored as strings with the "r" option.\r
- * Phi's four built-in handler names preserve the upstream function snippets\r
- * without evaluating arbitrary JavaScript from the settings file.\r
- */\r
-[\r
-  {\r
-    "trigger": "mk",\r
-    "replacement": "$$0$",\r
-    "options": "tA"\r
-  },\r
-  {\r
-    "trigger": "mk",\r
-    "replacement": "\\\\($0\\\\)",\r
-    "options": "TA"\r
-  },\r
-  {\r
-    "trigger": "dm",\r
-    "replacement": "$$\\n$0\\n$$",\r
-    "options": "tAw"\r
-  },\r
-  {\r
-    "trigger": "(\\\\S\\\\s*)dm",\r
-    "replacement": "[[0]]\\n$$\\n$0\\n$$",\r
-    "options": "rtAw",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])beg",\r
-    "replacement": "[[0]]\\\\begin{$0}\\n$1\\n\\\\end{$0}",\r
-    "options": "rMA"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])beg",\r
-    "replacement": "[[0]]\\\\begin{$0} $1 \\\\end{$0}",\r
-    "options": "rnA"\r
-  },\r
-  {\r
-    "trigger": "@a",\r
-    "replacement": "\\\\alpha",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@b",\r
-    "replacement": "\\\\beta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@g",\r
-    "replacement": "\\\\gamma",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@G",\r
-    "replacement": "\\\\Gamma",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@d",\r
-    "replacement": "\\\\delta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@D",\r
-    "replacement": "\\\\Delta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@e",\r
-    "replacement": "\\\\epsilon",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": ":e",\r
-    "replacement": "\\\\varepsilon",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@z",\r
-    "replacement": "\\\\zeta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@t",\r
-    "replacement": "\\\\theta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@T",\r
-    "replacement": "\\\\Theta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": ":t",\r
-    "replacement": "\\\\vartheta",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@i",\r
-    "replacement": "\\\\iota",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@k",\r
-    "replacement": "\\\\kappa",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@l",\r
-    "replacement": "\\\\lambda",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@L",\r
-    "replacement": "\\\\Lambda",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@s",\r
-    "replacement": "\\\\sigma",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@S",\r
-    "replacement": "\\\\Sigma",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@u",\r
-    "replacement": "\\\\upsilon",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@U",\r
-    "replacement": "\\\\Upsilon",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@o",\r
-    "replacement": "\\\\omega",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "@O",\r
-    "replacement": "\\\\Omega",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "ome",\r
-    "replacement": "\\\\omega",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "Ome",\r
-    "replacement": "\\\\Omega",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "text",\r
-    "replacement": "\\\\text{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "\\"",\r
-    "replacement": "\\\\text{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sr",\r
-    "replacement": "^{2}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "cb",\r
-    "replacement": "^{3}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "rd",\r
-    "replacement": "^{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "_",\r
-    "replacement": "_{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sts",\r
-    "replacement": "_\\\\text{$0}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sq",\r
-    "replacement": "\\\\sqrt{ $0 }$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "//",\r
-    "replacement": "\\\\frac{$0}{$1}$2",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "\\\\bee",\r
-    "replacement": "e^{ $0 }$1",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "invs",\r
-    "replacement": "^{-1}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])(exp|log|ln)",\r
-    "replacement": "[[0]]\\\\[[1]]",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "conj",\r
-    "replacement": "^{*}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "Re",\r
-    "replacement": "\\\\mathrm{Re}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "Im",\r
-    "replacement": "\\\\mathrm{Im}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "bf",\r
-    "replacement": "\\\\mathbf{$0}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "rm",\r
-    "replacement": "\\\\mathrm{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])(det)",\r
-    "replacement": "[[0]]\\\\[[1]]",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "trace",\r
-    "replacement": "\\\\mathrm{Tr}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])hat",\r
-    "replacement": "\\\\hat{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])bar",\r
-    "replacement": "\\\\bar{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])dot",\r
-    "replacement": "\\\\dot{[[0]]}",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])ddot",\r
-    "replacement": "\\\\ddot{[[0]]}",\r
-    "options": "rmA",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])tilde",\r
-    "replacement": "\\\\tilde{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])und",\r
-    "replacement": "\\\\underline{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])vec",\r
-    "replacement": "\\\\vec{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z]),\\\\.",\r
-    "replacement": "\\\\mathbf{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "([a-zA-Z])\\\\.,",\r
-    "replacement": "\\\\mathbf{[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}),\\\\.",\r
-    "replacement": "\\\\boldsymbol{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK})\\\\.,",\r
-    "replacement": "\\\\boldsymbol{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "hat",\r
-    "replacement": "\\\\hat{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "bar",\r
-    "replacement": "\\\\bar{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "dot",\r
-    "replacement": "\\\\dot{$0}$1",\r
-    "options": "mA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "ddot",\r
-    "replacement": "\\\\ddot{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "cdot",\r
-    "replacement": "\\\\cdot",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "tilde",\r
-    "replacement": "\\\\tilde{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "und",\r
-    "replacement": "\\\\underline{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "vec",\r
-    "replacement": "\\\\vec{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "pmod",\r
-    "replacement": "\\\\pmod{\${0:n}}$1",\r
-    "options": "mA",\r
-    "description": "Parenthesized modulo (\\\\pmod{n})"\r
-  },\r
-  {\r
-    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])(\\\\d)",\r
-    "replacement": "[[0]]_{[[1]]}",\r
-    "options": "rmA",\r
-    "priority": -1,\r
-    "excludedMacros": [\r
-      "pu",\r
-      "ce"\r
-    ]\r
-  },\r
-  {\r
-    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])_{(\\\\d+)}(\\\\d)",\r
-    "replacement": "[[0]]_{[[1]][[2]]}",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}(\\\\d)",\r
-    "replacement": "\\\\[[0]]{[[1]]}_{[[2]]}",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",\r
-    "replacement": "\\\\[[0]]{[[1]]}_{[[2]][[3]]}",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}(\\\\d)",\r
-    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]]}",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",\r
-    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]][[4]]}",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "xnn",\r
-    "replacement": "x_{n}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "\\\\xii",\r
-    "replacement": "x_{i}",\r
-    "options": "mA",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "xjj",\r
-    "replacement": "x_{j}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "xp1",\r
-    "replacement": "x_{n+1}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "ynn",\r
-    "replacement": "y_{n}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "yii",\r
-    "replacement": "y_{i}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "yjj",\r
-    "replacement": "y_{j}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "ooo",\r
-    "replacement": "\\\\infty",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sum",\r
-    "replacement": "\\\\sum",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "prod",\r
-    "replacement": "\\\\prod",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "\\\\sum",\r
-    "replacement": "\\\\sum_{\${0:i}=\${1:1}}^{\${2:N}} $3",\r
-    "options": "m"\r
-  },\r
-  {\r
-    "trigger": "\\\\prod",\r
-    "replacement": "\\\\prod_{\${0:i}=\${1:1}}^{\${2:N}} $3",\r
-    "options": "m"\r
-  },\r
-  {\r
-    "trigger": "lim",\r
-    "replacement": "\\\\lim_{ \${0:n} \\\\to \${1:\\\\infty} } $2",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "+-",\r
-    "replacement": "\\\\pm",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "-+",\r
-    "replacement": "\\\\mp",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "...",\r
-    "replacement": "\\\\dots",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "nabl",\r
-    "replacement": "\\\\nabla",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "xx",\r
-    "replacement": "\\\\times",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "**",\r
-    "replacement": "\\\\cdot",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "para",\r
-    "replacement": "\\\\parallel",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "deg",\r
-    "replacement": "\\\\degree",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "===",\r
-    "replacement": "\\\\equiv",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "!=",\r
-    "replacement": "\\\\neq",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": ">=",\r
-    "replacement": "\\\\geq",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "<=",\r
-    "replacement": "\\\\leq",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": ">>",\r
-    "replacement": "\\\\gg",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "<<",\r
-    "replacement": "\\\\ll",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "simm",\r
-    "replacement": "\\\\sim",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sim=",\r
-    "replacement": "\\\\simeq",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "prop",\r
-    "replacement": "\\\\propto",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "<->",\r
-    "replacement": "\\\\leftrightarrow ",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "->",\r
-    "replacement": "\\\\to",\r
-    "options": "mA",\r
-    "excludedMacros": [\r
-      "ce"\r
-    ]\r
-  },\r
-  {\r
-    "trigger": "!>",\r
-    "replacement": "\\\\mapsto",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "=>",\r
-    "replacement": "\\\\implies",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "=<",\r
-    "replacement": "\\\\impliedby",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "and",\r
-    "replacement": "\\\\cap",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "orr",\r
-    "replacement": "\\\\cup",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "inn",\r
-    "replacement": "\\\\in",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "notin",\r
-    "replacement": "\\\\not\\\\in",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\\\\\",\r
-    "replacement": "\\\\setminus",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sub=",\r
-    "replacement": "\\\\subseteq",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "sup=",\r
-    "replacement": "\\\\supseteq",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "eset",\r
-    "replacement": "\\\\emptyset",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "set",\r
-    "replacement": "\\\\{ $0 \\\\}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "(n?)e\\\\\\\\xi sts",\r
-    "replacement": "\\\\[[0]]exists",\r
-    "options": "rmA",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "LL",\r
-    "replacement": "\\\\mathcal{L}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "HH",\r
-    "replacement": "\\\\mathcal{H}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "CC",\r
-    "replacement": "\\\\mathbb{C}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "RR",\r
-    "replacement": "\\\\mathbb{R}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "ZZ",\r
-    "replacement": "\\\\mathbb{Z}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "NN",\r
-    "replacement": "\\\\mathbb{N}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "QQ",\r
-    "replacement": "\\\\mathbb{Q}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])(\${GREEK})",\r
-    "replacement": "[[0]]\\\\[[1]]",\r
-    "options": "rmA",\r
-    "description": "Add backslash before Greek letters"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])(\${SYMBOL})",\r
-    "replacement": "[[0]]\\\\[[1]]",\r
-    "options": "rmA",\r
-    "description": "Add backslash before symbols"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS})([A-Za-z])",\r
-    "replacement": "",\r
-    "options": "rmA",\r
-    "priority": 2,\r
-    "handler": "space-after-symbol"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${SYMBOLS}|\${MORE_SYMBOLS})([0-9])",\r
-    "replacement": "\\\\[[0]] [[1]]",\r
-    "options": "mA",\r
-    "description": "Add space after symbols when followed by a number."\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) sr",\r
-    "replacement": "\\\\[[0]]^{2}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) cb",\r
-    "replacement": "\\\\[[0]]^{3}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) rd",\r
-    "replacement": "\\\\[[0]]^{$0}$1",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}) hat",\r
-    "replacement": "\\\\hat{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}) dot",\r
-    "replacement": "\\\\dot{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}) bar",\r
-    "replacement": "\\\\bar{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}) vec",\r
-    "replacement": "\\\\vec{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}) tilde",\r
-    "replacement": "\\\\tilde{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(\${GREEK}) und",\r
-    "replacement": "\\\\underline{\\\\[[0]]}",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "par",\r
-    "replacement": "\\\\frac{ \\\\partial \${0:y} }{ \\\\partial \${1:x} } $2",\r
-    "options": "m"\r
-  },\r
-  {\r
-    "trigger": "par([0-9])",\r
-    "replacement": "\\\\frac{ \\\\partial^{[[0]]} \${0:y} }{ \\\\partial \${1:x}^{[[0]]} } $2",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "parn",\r
-    "replacement": "\\\\frac{ \\\\partial^{\${0:n}} \${1:y} }{ \\\\partial \${2:x}^{\${0:n}} } $2",\r
-    "options": "rmA"\r
-  },\r
-  {\r
-    "trigger": "pa([A-Za-z])([A-Za-z])",\r
-    "replacement": "\\\\frac{ \\\\partial [[0]] }{ \\\\partial [[1]] } ",\r
-    "options": "rm"\r
-  },\r
-  {\r
-    "trigger": "ddt",\r
-    "replacement": "\\\\frac{d}{dt} ",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])int",\r
-    "replacement": "[[0]]\\\\int",\r
-    "options": "rmA",\r
-    "priority": -1\r
-  },\r
-  {\r
-    "trigger": "\\\\int",\r
-    "replacement": "\\\\int $0 \\\\, d\${1:x} $2",\r
-    "options": "m"\r
-  },\r
-  {\r
-    "trigger": "dint",\r
-    "replacement": "\\\\int_{\${0:0}}^{\${1:1}} $2 \\\\, d\${3:x} $4",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "oint",\r
-    "replacement": "\\\\oint",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "iint",\r
-    "replacement": "\\\\iint",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "iiint",\r
-    "replacement": "\\\\iiint",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "oinf",\r
-    "replacement": "\\\\int_{0}^{\\\\infty} $0 \\\\, d\${1:x} $2",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "infi",\r
-    "replacement": "\\\\int_{-\\\\infty}^{\\\\infty} $0 \\\\, d\${1:x} $2",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([^\\\\\\\\])(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)",\r
-    "replacement": "[[0]]\\\\[[1]]",\r
-    "options": "rmA",\r
-    "description": "Add backslash before trig funcs"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)([A-Za-gi-z])",\r
-    "replacement": "\\\\[[0]] [[1]]",\r
-    "options": "rmA",\r
-    "description": "Add space after trig funcs. Skips letter h to allow sinh, cosh, etc."\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\(sinh|cosh|tanh|coth)([A-Za-z])",\r
-    "replacement": "\\\\[[0]] [[1]]",\r
-    "options": "rmA",\r
-    "description": "Add space after hyperbolic trig funcs"\r
-  },\r
-  {\r
-    "trigger": "(arccsc|arcsec|arccot)",\r
-    "replacement": "\\\\operatorname{[[0]]}$0",\r
-    "options": "rmA",\r
-    "description": "Inverse trig functions, Are not built-in MathJax functions",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "U",\r
-    "replacement": "\\\\underbrace{ \${VISUAL} }_{ $0 }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "O",\r
-    "replacement": "\\\\overbrace{ \${VISUAL} }^{ $0 }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "B",\r
-    "replacement": "\\\\underset{ $0 }{ \${VISUAL} }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "C",\r
-    "replacement": "\\\\cancel{ \${VISUAL} }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "K",\r
-    "replacement": "\\\\cancelto{ $0 }{ \${VISUAL} }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "S",\r
-    "replacement": "\\\\sqrt{ \${VISUAL} }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "kbt",\r
-    "replacement": "k_{B}T",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "msun",\r
-    "replacement": "M_{\\\\odot}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "dag",\r
-    "replacement": "^{\\\\dagger}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "o+",\r
-    "replacement": "\\\\oplus ",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "ox",\r
-    "replacement": "\\\\otimes ",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "bra",\r
-    "replacement": "\\\\bra{$0} $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "ket",\r
-    "replacement": "\\\\ket{$0} $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "brk",\r
-    "replacement": "\\\\braket{ $0 | $1 } $2",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "outer",\r
-    "replacement": "\\\\ket{\${0:\\\\psi}} \\\\bra{\${0:\\\\psi}} $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "pu",\r
-    "replacement": "\\\\pu{ $0 }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "cee",\r
-    "replacement": "\\\\ce{ $0 }",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "he4",\r
-    "replacement": "{}^{4}_{2}He ",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "he3",\r
-    "replacement": "{}^{3}_{2}He ",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "iso",\r
-    "replacement": "{}^{\${0:4}}_{\${1:2}}\${2:He}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "([pbBvV]mat)",\r
-    "replacement": "\\\\begin{[[0]]rix}\\n$0\\n\\\\end{[[0]]rix}",\r
-    "options": "rMA",\r
-    "description": "Matrix environments with new lines"\r
-  },\r
-  {\r
-    "trigger": "(matrix|cases|align|array)",\r
-    "replacement": "\\\\begin{[[0]]}\\n$0\\n\\\\end{[[0]]}",\r
-    "options": "rMA",\r
-    "description": "Miscellaneous environments with new lines"\r
-  },\r
-  {\r
-    "trigger": "([pbBvV]mat)",\r
-    "replacement": "\\\\begin{[[0]]rix}$0\\\\end{[[0]]rix}",\r
-    "options": "rnA"\r
-  },\r
-  {\r
-    "trigger": "(matrix|cases|align|array)",\r
-    "replacement": "\\\\begin{[[0]]}$0\\\\end{[[0]]}",\r
-    "options": "rnA"\r
-  },\r
-  {\r
-    "trigger": "avg",\r
-    "replacement": "\\\\langle $0 \\\\rangle $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "norm",\r
-    "replacement": "\\\\lvert $0 \\\\rvert $1",\r
-    "options": "mA",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "Norm",\r
-    "replacement": "\\\\lVert $0 \\\\rVert $1",\r
-    "options": "mA",\r
-    "priority": 1\r
-  },\r
-  {\r
-    "trigger": "ceil",\r
-    "replacement": "\\\\lceil $0 \\\\rceil $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "floor",\r
-    "replacement": "\\\\lfloor $0 \\\\rfloor $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "mod",\r
-    "replacement": "|$0|$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "(",\r
-    "replacement": "(\${VISUAL})",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "[",\r
-    "replacement": "[\${VISUAL}]",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "{",\r
-    "replacement": "{\${VISUAL}}",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "(",\r
-    "replacement": "($0)$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "{",\r
-    "replacement": "{$0}$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "[",\r
-    "replacement": "[$0]$1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "lr(",\r
-    "replacement": "\\\\left( $0 \\\\right) $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "lr{",\r
-    "replacement": "\\\\left\\\\{ $0 \\\\right\\\\} $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "lr[",\r
-    "replacement": "\\\\left[ $0 \\\\right] $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "lr|",\r
-    "replacement": "\\\\left| $0 \\\\right| $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "lra",\r
-    "replacement": "\\\\left< $0 \\\\right> $1",\r
-    "options": "mA"\r
-  },\r
-  {\r
-    "trigger": "\\\\\\\\([A-Za-z]+)(?:\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS}){0}",\r
-    "replacement": "",\r
-    "options": "rmAU",\r
-    "priority": 3,\r
-    "description": "Disable snippets while typing macros",\r
-    "handler": "protect-macro-prefix"\r
-  },\r
-  {\r
-    "trigger": "tayl",\r
-    "replacement": "\${0:f}(\${1:x} + \${2:h}) = \${0:f}(\${1:x}) + \${0:f}'(\${1:x})\${2:h} + \${0:f}''(\${1:x}) \\\\frac{\${2:h}^{2}}{2!} + \\\\dots$3",\r
-    "options": "mA",\r
-    "description": "Taylor expansion"\r
-  },\r
-  {\r
-    "trigger": "iden(\\\\d)",\r
-    "replacement": "",\r
-    "options": "rmA",\r
-    "description": "N x N identity matrix",\r
-    "handler": "identity-matrix"\r
-  },\r
-  {\r
-    "trigger": "(?<positive_lookbehind>(?:\\\\n|^)[ \\\\t]*>*)(?<marker>\\\\d+[.)]|[-*+])(?<whitespace>[ \\\\t]+)(?<text>.*)dm",\r
-    "replacement": "",\r
-    "options": "rtA",\r
-    "priority": 2,\r
-    "description": "Display math when in a list",\r
-    "handler": "display-math-list"\r
-  }\r
-]\r
-`;var IC=`/*\r
- * Adapted from Obsidian LaTeX Suite's default_snippet_variables.js at commit\r
- * 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.\r
- * Copyright (c) 2022 artisticat1\r
- * SPDX-License-Identifier: MIT\r
- */\r
-{\r
-  "\${GREEK}": "(?:alpha|beta|gamma|Gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|mu|nu|xi|omicron|pi|rho|varrho|sigma|Sigma|tau|upsilon|Upsilon|phi|varphi|Phi|chi|psi|omega|Omega)",\r
-  "\${SYMBOL}": "(?:parallel|perp|partial|nabla|hbar|ell|infty|oplus|ominus|otimes|oslash|square|star|dagger|vee|wedge|subseteq|subset|supseteq|supset|emptyset|exists|nexists|forall|implies|impliedby|iff|setminus|neg|lor|land|bigcup|bigcap|cdot|times|simeq|approx)",\r
-  "\${MORE_SYMBOLS}": "(?:leq|geq|neq|gg|ll|equiv|sim|propto|rightarrow|leftarrow|Rightarrow|Leftarrow|leftrightarrow|to|mapsto|cap|cup|in|sum|prod|exp|ln|log|det|dots|vdots|ddots|pm|mp|int|iint|iiint|oint)",\r
-  "\${ACCENT}": "(?:dot|ddot|hat|bar|tilde|vec|underline|overline|mathbf|mathcal|mathrm|mathbb)"\r
-}\r
+`)),!0),"editor.fold":O1,"editor.unfold":A1};for(let t=1;t<=6;t++)lc[`editor.heading${t}`]=SN(t);function TC(t,e){return lc[t]?.(e)??!1}var MC=[{key:"*",run:kN},{key:"Mod-b",run:lc["editor.bold"]},{key:"Mod-i",run:lc["editor.italic"]},{key:"Mod-k",run:lc["editor.link"]}];var FC=`/*
+ * Adapted from Obsidian LaTeX Suite's default_snippets.js at commit 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.
+ * Copyright (c) 2022 artisticat1; SPDX-License-Identifier: MIT
+ *
+ * Regular-expression triggers are stored as strings with the "r" option.
+ * Phi's four built-in handler names preserve the upstream function snippets
+ * without evaluating arbitrary JavaScript from the settings file.
+ */
+[
+  {
+    "trigger": "mk",
+    "replacement": "$$0$",
+    "options": "tA"
+  },
+  {
+    "trigger": "mk",
+    "replacement": "\\\\($0\\\\)",
+    "options": "TA"
+  },
+  {
+    "trigger": "dm",
+    "replacement": "$$\\n$0\\n$$",
+    "options": "tAw"
+  },
+  {
+    "trigger": "(\\\\S\\\\s*)dm",
+    "replacement": "[[0]]\\n$$\\n$0\\n$$",
+    "options": "rtAw",
+    "priority": 1
+  },
+  {
+    "trigger": "([^\\\\\\\\])beg",
+    "replacement": "[[0]]\\\\begin{$0}\\n$1\\n\\\\end{$0}",
+    "options": "rMA"
+  },
+  {
+    "trigger": "([^\\\\\\\\])beg",
+    "replacement": "[[0]]\\\\begin{$0} $1 \\\\end{$0}",
+    "options": "rnA"
+  },
+  {
+    "trigger": "@a",
+    "replacement": "\\\\alpha",
+    "options": "mA"
+  },
+  {
+    "trigger": "@b",
+    "replacement": "\\\\beta",
+    "options": "mA"
+  },
+  {
+    "trigger": "@g",
+    "replacement": "\\\\gamma",
+    "options": "mA"
+  },
+  {
+    "trigger": "@G",
+    "replacement": "\\\\Gamma",
+    "options": "mA"
+  },
+  {
+    "trigger": "@d",
+    "replacement": "\\\\delta",
+    "options": "mA"
+  },
+  {
+    "trigger": "@D",
+    "replacement": "\\\\Delta",
+    "options": "mA"
+  },
+  {
+    "trigger": "@e",
+    "replacement": "\\\\epsilon",
+    "options": "mA"
+  },
+  {
+    "trigger": ":e",
+    "replacement": "\\\\varepsilon",
+    "options": "mA"
+  },
+  {
+    "trigger": "@z",
+    "replacement": "\\\\zeta",
+    "options": "mA"
+  },
+  {
+    "trigger": "@t",
+    "replacement": "\\\\theta",
+    "options": "mA"
+  },
+  {
+    "trigger": "@T",
+    "replacement": "\\\\Theta",
+    "options": "mA"
+  },
+  {
+    "trigger": ":t",
+    "replacement": "\\\\vartheta",
+    "options": "mA"
+  },
+  {
+    "trigger": "@i",
+    "replacement": "\\\\iota",
+    "options": "mA"
+  },
+  {
+    "trigger": "@k",
+    "replacement": "\\\\kappa",
+    "options": "mA"
+  },
+  {
+    "trigger": "@l",
+    "replacement": "\\\\lambda",
+    "options": "mA"
+  },
+  {
+    "trigger": "@L",
+    "replacement": "\\\\Lambda",
+    "options": "mA"
+  },
+  {
+    "trigger": "@s",
+    "replacement": "\\\\sigma",
+    "options": "mA"
+  },
+  {
+    "trigger": "@S",
+    "replacement": "\\\\Sigma",
+    "options": "mA"
+  },
+  {
+    "trigger": "@u",
+    "replacement": "\\\\upsilon",
+    "options": "mA"
+  },
+  {
+    "trigger": "@U",
+    "replacement": "\\\\Upsilon",
+    "options": "mA"
+  },
+  {
+    "trigger": "@o",
+    "replacement": "\\\\omega",
+    "options": "mA"
+  },
+  {
+    "trigger": "@O",
+    "replacement": "\\\\Omega",
+    "options": "mA"
+  },
+  {
+    "trigger": "ome",
+    "replacement": "\\\\omega",
+    "options": "mA"
+  },
+  {
+    "trigger": "Ome",
+    "replacement": "\\\\Omega",
+    "options": "mA"
+  },
+  {
+    "trigger": "text",
+    "replacement": "\\\\text{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "\\"",
+    "replacement": "\\\\text{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "sr",
+    "replacement": "^{2}",
+    "options": "mA"
+  },
+  {
+    "trigger": "cb",
+    "replacement": "^{3}",
+    "options": "mA"
+  },
+  {
+    "trigger": "rd",
+    "replacement": "^{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "_",
+    "replacement": "_{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "sts",
+    "replacement": "_\\\\text{$0}",
+    "options": "mA"
+  },
+  {
+    "trigger": "sq",
+    "replacement": "\\\\sqrt{ $0 }$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "//",
+    "replacement": "\\\\frac{$0}{$1}$2",
+    "options": "mA"
+  },
+  {
+    "trigger": "\\\\bee",
+    "replacement": "e^{ $0 }$1",
+    "options": "rmA"
+  },
+  {
+    "trigger": "invs",
+    "replacement": "^{-1}",
+    "options": "mA"
+  },
+  {
+    "trigger": "([^\\\\\\\\])(exp|log|ln)",
+    "replacement": "[[0]]\\\\[[1]]",
+    "options": "rmA"
+  },
+  {
+    "trigger": "conj",
+    "replacement": "^{*}",
+    "options": "mA"
+  },
+  {
+    "trigger": "Re",
+    "replacement": "\\\\mathrm{Re}",
+    "options": "mA"
+  },
+  {
+    "trigger": "Im",
+    "replacement": "\\\\mathrm{Im}",
+    "options": "mA"
+  },
+  {
+    "trigger": "bf",
+    "replacement": "\\\\mathbf{$0}",
+    "options": "mA"
+  },
+  {
+    "trigger": "rm",
+    "replacement": "\\\\mathrm{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "([^\\\\\\\\])(det)",
+    "replacement": "[[0]]\\\\[[1]]",
+    "options": "rmA"
+  },
+  {
+    "trigger": "trace",
+    "replacement": "\\\\mathrm{Tr}",
+    "options": "mA"
+  },
+  {
+    "trigger": "([a-zA-Z])hat",
+    "replacement": "\\\\hat{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "([a-zA-Z])bar",
+    "replacement": "\\\\bar{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "([a-zA-Z])dot",
+    "replacement": "\\\\dot{[[0]]}",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "([a-zA-Z])ddot",
+    "replacement": "\\\\ddot{[[0]]}",
+    "options": "rmA",
+    "priority": 1
+  },
+  {
+    "trigger": "([a-zA-Z])tilde",
+    "replacement": "\\\\tilde{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "([a-zA-Z])und",
+    "replacement": "\\\\underline{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "([a-zA-Z])vec",
+    "replacement": "\\\\vec{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "([a-zA-Z]),\\\\.",
+    "replacement": "\\\\mathbf{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "([a-zA-Z])\\\\.,",
+    "replacement": "\\\\mathbf{[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}),\\\\.",
+    "replacement": "\\\\boldsymbol{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK})\\\\.,",
+    "replacement": "\\\\boldsymbol{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "hat",
+    "replacement": "\\\\hat{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "bar",
+    "replacement": "\\\\bar{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "dot",
+    "replacement": "\\\\dot{$0}$1",
+    "options": "mA",
+    "priority": -1
+  },
+  {
+    "trigger": "ddot",
+    "replacement": "\\\\ddot{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "cdot",
+    "replacement": "\\\\cdot",
+    "options": "mA"
+  },
+  {
+    "trigger": "tilde",
+    "replacement": "\\\\tilde{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "und",
+    "replacement": "\\\\underline{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "vec",
+    "replacement": "\\\\vec{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "pmod",
+    "replacement": "\\\\pmod{\${0:n}}$1",
+    "options": "mA",
+    "description": "Parenthesized modulo (\\\\pmod{n})"
+  },
+  {
+    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])(\\\\d)",
+    "replacement": "[[0]]_{[[1]]}",
+    "options": "rmA",
+    "priority": -1,
+    "excludedMacros": [
+      "pu",
+      "ce"
+    ]
+  },
+  {
+    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])_{(\\\\d+)}(\\\\d)",
+    "replacement": "[[0]]_{[[1]][[2]]}",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}(\\\\d)",
+    "replacement": "\\\\[[0]]{[[1]]}_{[[2]]}",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",
+    "replacement": "\\\\[[0]]{[[1]]}_{[[2]][[3]]}",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}(\\\\d)",
+    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]]}",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",
+    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]][[4]]}",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "xnn",
+    "replacement": "x_{n}",
+    "options": "mA"
+  },
+  {
+    "trigger": "\\\\xii",
+    "replacement": "x_{i}",
+    "options": "mA",
+    "priority": 1
+  },
+  {
+    "trigger": "xjj",
+    "replacement": "x_{j}",
+    "options": "mA"
+  },
+  {
+    "trigger": "xp1",
+    "replacement": "x_{n+1}",
+    "options": "mA"
+  },
+  {
+    "trigger": "ynn",
+    "replacement": "y_{n}",
+    "options": "mA"
+  },
+  {
+    "trigger": "yii",
+    "replacement": "y_{i}",
+    "options": "mA"
+  },
+  {
+    "trigger": "yjj",
+    "replacement": "y_{j}",
+    "options": "mA"
+  },
+  {
+    "trigger": "ooo",
+    "replacement": "\\\\infty",
+    "options": "mA"
+  },
+  {
+    "trigger": "sum",
+    "replacement": "\\\\sum",
+    "options": "mA"
+  },
+  {
+    "trigger": "prod",
+    "replacement": "\\\\prod",
+    "options": "mA"
+  },
+  {
+    "trigger": "\\\\sum",
+    "replacement": "\\\\sum_{\${0:i}=\${1:1}}^{\${2:N}} $3",
+    "options": "m"
+  },
+  {
+    "trigger": "\\\\prod",
+    "replacement": "\\\\prod_{\${0:i}=\${1:1}}^{\${2:N}} $3",
+    "options": "m"
+  },
+  {
+    "trigger": "lim",
+    "replacement": "\\\\lim_{ \${0:n} \\\\to \${1:\\\\infty} } $2",
+    "options": "mA"
+  },
+  {
+    "trigger": "+-",
+    "replacement": "\\\\pm",
+    "options": "mA"
+  },
+  {
+    "trigger": "-+",
+    "replacement": "\\\\mp",
+    "options": "mA"
+  },
+  {
+    "trigger": "...",
+    "replacement": "\\\\dots",
+    "options": "mA"
+  },
+  {
+    "trigger": "nabl",
+    "replacement": "\\\\nabla",
+    "options": "mA"
+  },
+  {
+    "trigger": "xx",
+    "replacement": "\\\\times",
+    "options": "mA"
+  },
+  {
+    "trigger": "**",
+    "replacement": "\\\\cdot",
+    "options": "mA"
+  },
+  {
+    "trigger": "para",
+    "replacement": "\\\\parallel",
+    "options": "mA"
+  },
+  {
+    "trigger": "deg",
+    "replacement": "\\\\degree",
+    "options": "mA"
+  },
+  {
+    "trigger": "===",
+    "replacement": "\\\\equiv",
+    "options": "mA"
+  },
+  {
+    "trigger": "!=",
+    "replacement": "\\\\neq",
+    "options": "mA"
+  },
+  {
+    "trigger": ">=",
+    "replacement": "\\\\geq",
+    "options": "mA"
+  },
+  {
+    "trigger": "<=",
+    "replacement": "\\\\leq",
+    "options": "mA"
+  },
+  {
+    "trigger": ">>",
+    "replacement": "\\\\gg",
+    "options": "mA"
+  },
+  {
+    "trigger": "<<",
+    "replacement": "\\\\ll",
+    "options": "mA"
+  },
+  {
+    "trigger": "simm",
+    "replacement": "\\\\sim",
+    "options": "mA"
+  },
+  {
+    "trigger": "sim=",
+    "replacement": "\\\\simeq",
+    "options": "mA"
+  },
+  {
+    "trigger": "prop",
+    "replacement": "\\\\propto",
+    "options": "mA"
+  },
+  {
+    "trigger": "<->",
+    "replacement": "\\\\leftrightarrow ",
+    "options": "mA"
+  },
+  {
+    "trigger": "->",
+    "replacement": "\\\\to",
+    "options": "mA",
+    "excludedMacros": [
+      "ce"
+    ]
+  },
+  {
+    "trigger": "!>",
+    "replacement": "\\\\mapsto",
+    "options": "mA"
+  },
+  {
+    "trigger": "=>",
+    "replacement": "\\\\implies",
+    "options": "mA"
+  },
+  {
+    "trigger": "=<",
+    "replacement": "\\\\impliedby",
+    "options": "mA"
+  },
+  {
+    "trigger": "and",
+    "replacement": "\\\\cap",
+    "options": "mA"
+  },
+  {
+    "trigger": "orr",
+    "replacement": "\\\\cup",
+    "options": "mA"
+  },
+  {
+    "trigger": "inn",
+    "replacement": "\\\\in",
+    "options": "mA"
+  },
+  {
+    "trigger": "notin",
+    "replacement": "\\\\not\\\\in",
+    "options": "mA"
+  },
+  {
+    "trigger": "\\\\\\\\\\\\",
+    "replacement": "\\\\setminus",
+    "options": "mA"
+  },
+  {
+    "trigger": "sub=",
+    "replacement": "\\\\subseteq",
+    "options": "mA"
+  },
+  {
+    "trigger": "sup=",
+    "replacement": "\\\\supseteq",
+    "options": "mA"
+  },
+  {
+    "trigger": "eset",
+    "replacement": "\\\\emptyset",
+    "options": "mA"
+  },
+  {
+    "trigger": "set",
+    "replacement": "\\\\{ $0 \\\\}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "(n?)e\\\\\\\\xi sts",
+    "replacement": "\\\\[[0]]exists",
+    "options": "rmA",
+    "priority": 1
+  },
+  {
+    "trigger": "LL",
+    "replacement": "\\\\mathcal{L}",
+    "options": "mA"
+  },
+  {
+    "trigger": "HH",
+    "replacement": "\\\\mathcal{H}",
+    "options": "mA"
+  },
+  {
+    "trigger": "CC",
+    "replacement": "\\\\mathbb{C}",
+    "options": "mA"
+  },
+  {
+    "trigger": "RR",
+    "replacement": "\\\\mathbb{R}",
+    "options": "mA"
+  },
+  {
+    "trigger": "ZZ",
+    "replacement": "\\\\mathbb{Z}",
+    "options": "mA"
+  },
+  {
+    "trigger": "NN",
+    "replacement": "\\\\mathbb{N}",
+    "options": "mA"
+  },
+  {
+    "trigger": "QQ",
+    "replacement": "\\\\mathbb{Q}",
+    "options": "mA"
+  },
+  {
+    "trigger": "([^\\\\\\\\])(\${GREEK})",
+    "replacement": "[[0]]\\\\[[1]]",
+    "options": "rmA",
+    "description": "Add backslash before Greek letters"
+  },
+  {
+    "trigger": "([^\\\\\\\\])(\${SYMBOL})",
+    "replacement": "[[0]]\\\\[[1]]",
+    "options": "rmA",
+    "description": "Add backslash before symbols"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS})([A-Za-z])",
+    "replacement": "",
+    "options": "rmA",
+    "priority": 2,
+    "handler": "space-after-symbol"
+  },
+  {
+    "trigger": "\\\\\\\\(\${SYMBOLS}|\${MORE_SYMBOLS})([0-9])",
+    "replacement": "\\\\[[0]] [[1]]",
+    "options": "mA",
+    "description": "Add space after symbols when followed by a number."
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) sr",
+    "replacement": "\\\\[[0]]^{2}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) cb",
+    "replacement": "\\\\[[0]]^{3}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) rd",
+    "replacement": "\\\\[[0]]^{$0}$1",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}) hat",
+    "replacement": "\\\\hat{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}) dot",
+    "replacement": "\\\\dot{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}) bar",
+    "replacement": "\\\\bar{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}) vec",
+    "replacement": "\\\\vec{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}) tilde",
+    "replacement": "\\\\tilde{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "\\\\\\\\(\${GREEK}) und",
+    "replacement": "\\\\underline{\\\\[[0]]}",
+    "options": "rmA"
+  },
+  {
+    "trigger": "par",
+    "replacement": "\\\\frac{ \\\\partial \${0:y} }{ \\\\partial \${1:x} } $2",
+    "options": "m"
+  },
+  {
+    "trigger": "par([0-9])",
+    "replacement": "\\\\frac{ \\\\partial^{[[0]]} \${0:y} }{ \\\\partial \${1:x}^{[[0]]} } $2",
+    "options": "rmA"
+  },
+  {
+    "trigger": "parn",
+    "replacement": "\\\\frac{ \\\\partial^{\${0:n}} \${1:y} }{ \\\\partial \${2:x}^{\${0:n}} } $2",
+    "options": "rmA"
+  },
+  {
+    "trigger": "pa([A-Za-z])([A-Za-z])",
+    "replacement": "\\\\frac{ \\\\partial [[0]] }{ \\\\partial [[1]] } ",
+    "options": "rm"
+  },
+  {
+    "trigger": "ddt",
+    "replacement": "\\\\frac{d}{dt} ",
+    "options": "mA"
+  },
+  {
+    "trigger": "([^\\\\\\\\])int",
+    "replacement": "[[0]]\\\\int",
+    "options": "rmA",
+    "priority": -1
+  },
+  {
+    "trigger": "\\\\int",
+    "replacement": "\\\\int $0 \\\\, d\${1:x} $2",
+    "options": "m"
+  },
+  {
+    "trigger": "dint",
+    "replacement": "\\\\int_{\${0:0}}^{\${1:1}} $2 \\\\, d\${3:x} $4",
+    "options": "mA"
+  },
+  {
+    "trigger": "oint",
+    "replacement": "\\\\oint",
+    "options": "mA"
+  },
+  {
+    "trigger": "iint",
+    "replacement": "\\\\iint",
+    "options": "mA"
+  },
+  {
+    "trigger": "iiint",
+    "replacement": "\\\\iiint",
+    "options": "mA"
+  },
+  {
+    "trigger": "oinf",
+    "replacement": "\\\\int_{0}^{\\\\infty} $0 \\\\, d\${1:x} $2",
+    "options": "mA"
+  },
+  {
+    "trigger": "infi",
+    "replacement": "\\\\int_{-\\\\infty}^{\\\\infty} $0 \\\\, d\${1:x} $2",
+    "options": "mA"
+  },
+  {
+    "trigger": "([^\\\\\\\\])(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)",
+    "replacement": "[[0]]\\\\[[1]]",
+    "options": "rmA",
+    "description": "Add backslash before trig funcs"
+  },
+  {
+    "trigger": "\\\\\\\\(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)([A-Za-gi-z])",
+    "replacement": "\\\\[[0]] [[1]]",
+    "options": "rmA",
+    "description": "Add space after trig funcs. Skips letter h to allow sinh, cosh, etc."
+  },
+  {
+    "trigger": "\\\\\\\\(sinh|cosh|tanh|coth)([A-Za-z])",
+    "replacement": "\\\\[[0]] [[1]]",
+    "options": "rmA",
+    "description": "Add space after hyperbolic trig funcs"
+  },
+  {
+    "trigger": "(arccsc|arcsec|arccot)",
+    "replacement": "\\\\operatorname{[[0]]}$0",
+    "options": "rmA",
+    "description": "Inverse trig functions, Are not built-in MathJax functions",
+    "priority": 1
+  },
+  {
+    "trigger": "U",
+    "replacement": "\\\\underbrace{ \${VISUAL} }_{ $0 }",
+    "options": "mA"
+  },
+  {
+    "trigger": "O",
+    "replacement": "\\\\overbrace{ \${VISUAL} }^{ $0 }",
+    "options": "mA"
+  },
+  {
+    "trigger": "B",
+    "replacement": "\\\\underset{ $0 }{ \${VISUAL} }",
+    "options": "mA"
+  },
+  {
+    "trigger": "C",
+    "replacement": "\\\\cancel{ \${VISUAL} }",
+    "options": "mA"
+  },
+  {
+    "trigger": "K",
+    "replacement": "\\\\cancelto{ $0 }{ \${VISUAL} }",
+    "options": "mA"
+  },
+  {
+    "trigger": "S",
+    "replacement": "\\\\sqrt{ \${VISUAL} }",
+    "options": "mA"
+  },
+  {
+    "trigger": "kbt",
+    "replacement": "k_{B}T",
+    "options": "mA"
+  },
+  {
+    "trigger": "msun",
+    "replacement": "M_{\\\\odot}",
+    "options": "mA"
+  },
+  {
+    "trigger": "dag",
+    "replacement": "^{\\\\dagger}",
+    "options": "mA"
+  },
+  {
+    "trigger": "o+",
+    "replacement": "\\\\oplus ",
+    "options": "mA"
+  },
+  {
+    "trigger": "ox",
+    "replacement": "\\\\otimes ",
+    "options": "mA"
+  },
+  {
+    "trigger": "bra",
+    "replacement": "\\\\bra{$0} $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "ket",
+    "replacement": "\\\\ket{$0} $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "brk",
+    "replacement": "\\\\braket{ $0 | $1 } $2",
+    "options": "mA"
+  },
+  {
+    "trigger": "outer",
+    "replacement": "\\\\ket{\${0:\\\\psi}} \\\\bra{\${0:\\\\psi}} $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "pu",
+    "replacement": "\\\\pu{ $0 }",
+    "options": "mA"
+  },
+  {
+    "trigger": "cee",
+    "replacement": "\\\\ce{ $0 }",
+    "options": "mA"
+  },
+  {
+    "trigger": "he4",
+    "replacement": "{}^{4}_{2}He ",
+    "options": "mA"
+  },
+  {
+    "trigger": "he3",
+    "replacement": "{}^{3}_{2}He ",
+    "options": "mA"
+  },
+  {
+    "trigger": "iso",
+    "replacement": "{}^{\${0:4}}_{\${1:2}}\${2:He}",
+    "options": "mA"
+  },
+  {
+    "trigger": "([pbBvV]mat)",
+    "replacement": "\\\\begin{[[0]]rix}\\n$0\\n\\\\end{[[0]]rix}",
+    "options": "rMA",
+    "description": "Matrix environments with new lines"
+  },
+  {
+    "trigger": "(matrix|cases|align|array)",
+    "replacement": "\\\\begin{[[0]]}\\n$0\\n\\\\end{[[0]]}",
+    "options": "rMA",
+    "description": "Miscellaneous environments with new lines"
+  },
+  {
+    "trigger": "([pbBvV]mat)",
+    "replacement": "\\\\begin{[[0]]rix}$0\\\\end{[[0]]rix}",
+    "options": "rnA"
+  },
+  {
+    "trigger": "(matrix|cases|align|array)",
+    "replacement": "\\\\begin{[[0]]}$0\\\\end{[[0]]}",
+    "options": "rnA"
+  },
+  {
+    "trigger": "avg",
+    "replacement": "\\\\langle $0 \\\\rangle $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "norm",
+    "replacement": "\\\\lvert $0 \\\\rvert $1",
+    "options": "mA",
+    "priority": 1
+  },
+  {
+    "trigger": "Norm",
+    "replacement": "\\\\lVert $0 \\\\rVert $1",
+    "options": "mA",
+    "priority": 1
+  },
+  {
+    "trigger": "ceil",
+    "replacement": "\\\\lceil $0 \\\\rceil $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "floor",
+    "replacement": "\\\\lfloor $0 \\\\rfloor $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "mod",
+    "replacement": "|$0|$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "(",
+    "replacement": "(\${VISUAL})",
+    "options": "mA"
+  },
+  {
+    "trigger": "[",
+    "replacement": "[\${VISUAL}]",
+    "options": "mA"
+  },
+  {
+    "trigger": "{",
+    "replacement": "{\${VISUAL}}",
+    "options": "mA"
+  },
+  {
+    "trigger": "(",
+    "replacement": "($0)$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "{",
+    "replacement": "{$0}$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "[",
+    "replacement": "[$0]$1",
+    "options": "mA"
+  },
+  {
+    "trigger": "lr(",
+    "replacement": "\\\\left( $0 \\\\right) $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "lr{",
+    "replacement": "\\\\left\\\\{ $0 \\\\right\\\\} $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "lr[",
+    "replacement": "\\\\left[ $0 \\\\right] $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "lr|",
+    "replacement": "\\\\left| $0 \\\\right| $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "lra",
+    "replacement": "\\\\left< $0 \\\\right> $1",
+    "options": "mA"
+  },
+  {
+    "trigger": "\\\\\\\\([A-Za-z]+)(?:\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS}){0}",
+    "replacement": "",
+    "options": "rmAU",
+    "priority": 3,
+    "description": "Disable snippets while typing macros",
+    "handler": "protect-macro-prefix"
+  },
+  {
+    "trigger": "tayl",
+    "replacement": "\${0:f}(\${1:x} + \${2:h}) = \${0:f}(\${1:x}) + \${0:f}'(\${1:x})\${2:h} + \${0:f}''(\${1:x}) \\\\frac{\${2:h}^{2}}{2!} + \\\\dots$3",
+    "options": "mA",
+    "description": "Taylor expansion"
+  },
+  {
+    "trigger": "iden(\\\\d)",
+    "replacement": "",
+    "options": "rmA",
+    "description": "N x N identity matrix",
+    "handler": "identity-matrix"
+  },
+  {
+    "trigger": "(?<positive_lookbehind>(?:\\\\n|^)[ \\\\t]*>*)(?<marker>\\\\d+[.)]|[-*+])(?<whitespace>[ \\\\t]+)(?<text>.*)dm",
+    "replacement": "",
+    "options": "rtA",
+    "priority": 2,
+    "description": "Display math when in a list",
+    "handler": "display-math-list"
+  }
+]
+`;var IC=`/*
+ * Adapted from Obsidian LaTeX Suite's default_snippet_variables.js at commit
+ * 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.
+ * Copyright (c) 2022 artisticat1
+ * SPDX-License-Identifier: MIT
+ */
+{
+  "\${GREEK}": "(?:alpha|beta|gamma|Gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|mu|nu|xi|omicron|pi|rho|varrho|sigma|Sigma|tau|upsilon|Upsilon|phi|varphi|Phi|chi|psi|omega|Omega)",
+  "\${SYMBOL}": "(?:parallel|perp|partial|nabla|hbar|ell|infty|oplus|ominus|otimes|oslash|square|star|dagger|vee|wedge|subseteq|subset|supseteq|supset|emptyset|exists|nexists|forall|implies|impliedby|iff|setminus|neg|lor|land|bigcup|bigcap|cdot|times|simeq|approx)",
+  "\${MORE_SYMBOLS}": "(?:leq|geq|neq|gg|ll|equiv|sim|propto|rightarrow|leftarrow|Rightarrow|Leftarrow|leftrightarrow|to|mapsto|cap|cup|in|sum|prod|exp|ln|log|det|dots|vdots|ddots|pm|mp|int|iint|iiint|oint)",
+  "\${ACCENT}": "(?:dot|ddot|hat|bar|tilde|vec|underline|overline|mathbf|mathcal|mathrm|mathbb)"
+}
 `;var ci=te.define(),cr=be.define({create:()=>null,update(t,e){let n=!1;t&&e.docChanged&&e.changes.iterChanges((o,a,l,c,u)=>{o===t.to&&a===t.to&&u.lines>1&&(n=!0)});let i=t&&{from:e.changes.mapPos(t.from,-1),to:e.changes.mapPos(t.to,n?-1:1)};for(let o of e.effects)o.is(ci)&&(i=o.value);if(!i)return null;let r=e.state.selection.main;return(r.empty?r.head>=i.from&&r.head<=i.to:r.from>=i.from&&r.to<=i.to)?i:null}});var wA=new Set(["contentFrom","definition","markerFrom","markerTo","prefixFrom","prefixTo","taskFrom"]);function WC(t){return dt("markdown/analysis-full",()=>{let e=ia(t);return{text:t,nodes:e,math:e.filter(n=>n.kind==="math"||n.kind==="display-math"),updateKind:"full",changed:{from:0,to:t.length}}})}function YC(t,e){let n=t.meta?{...t.meta}:void 0;if(n)for(let[i,r]of Object.entries(n))typeof r=="number"&&wA.has(i)&&(n[i]=e.mapPos(r,1));return{...t,from:e.mapPos(t.from,1),to:e.mapPos(t.to,-1),contentFrom:t.contentFrom==null?void 0:e.mapPos(t.contentFrom,1),contentTo:t.contentTo==null?void 0:e.mapPos(t.contentTo,-1),meta:n}}var _C=/[#*_~`$<>\[\]!^|\\%]/,BC=/^\s*(?:[-+*]|\d+[.)])\s/,RC=/^\s*(?:-[ \t]*){3,}$|^[{}]\s*$/;function CN(t,e){let n=[];if(e.changes.iterChanges((a,l,c,u,h)=>{n.push({fromA:a,toA:l,fromB:c,toB:u,inserted:h.toString()})}),n.length!==1)return!1;let i=n[0];if(e.startState.sliceDoc(i.fromA,i.toA).includes(`
 `)||i.inserted.includes(`
 `))return!1;let s=e.startState.doc.lineAt(i.fromA),o=e.newDoc.lineAt(i.fromB);return _C.test(s.text)||_C.test(o.text)||BC.test(s.text)||BC.test(o.text)||RC.test(s.text)||RC.test(o.text)?!1:!t.nodes.some(a=>a.from<=s.to&&a.to>=s.from)}var yA=16384,DN=/<[A-Za-z/]/,EN=/^ {0,3}(?:`{3,}|~{3,})/m,bA=/^(---|\{)\s*\n/,LC=/^(?:---|\})[ \t]*$/m;function NC(t,e){return DN.test(t)||t.includes("%%")||t.includes("[^")?!1:e||!(t.includes("$$")||t.includes("\\[")||t.includes("\\]")||EN.test(t))}function QN(t,e,n){if(t.length!==e.length)return!1;for(let i=0;i<t.length;i++){let r=t[i],s=e[i];if(r.kind!==s.kind||r.from+n!==s.from||r.to+n!==s.to||r.text!==s.text||(r.contentFrom==null?s.contentFrom!=null:r.contentFrom+n!==s.contentFrom)||(r.contentTo==null?s.contentTo!=null:r.contentTo+n!==s.contentTo))return!1;let o=r.meta??{},a=s.meta??{},l=Object.keys(o);if(l.length!==Object.keys(a).length)return!1;for(let c of l){let u=o[c],h=typeof u=="number"&&wA.has(c)?u+n:u;if(a[c]!==h)return!1}}return!0}var $N=[...wA];function ZC(t,e,n=-1/0){if(!e)return t;let i=t.meta;if(i)for(let r of $N){let s=i[r];typeof s!="number"||s<n||(i===t.meta&&(i={...i}),i[r]=s+e)}return{...t,from:t.from+e,to:t.to+e,contentFrom:t.contentFrom==null?void 0:t.contentFrom+e,contentTo:t.contentTo==null?void 0:t.contentTo+e,meta:i}}function PN(t){let e=1/0,n=-1/0,i=1/0,r=-1/0,s=!1;return t.changes.iterChanges((o,a,l,c,u)=>{e=Math.min(e,o),n=Math.max(n,a),i=Math.min(i,l),r=Math.max(r,c),(/[<>]/.test(u.toString())||/[<>]/.test(t.startState.sliceDoc(o,a)))&&(s=!0)}),{fromA:e,toA:n,fromB:i,toB:r,delimiters:s}}var TN=new Set(["code-block","mermaid","display-math"]);function MN(t,e,n){let i=e.startState.doc,r;for(let l of t.nodes){if(l.from>n.fromA)break;TN.has(l.kind)&&l.to>=n.toA&&(r=l)}if(!r)return null;let s=i.lineAt(r.from),o=i.lineAt(r.to);if(r.from!==s.from||r.to!==o.to||s.number===o.number||n.fromA<=s.to||n.toA>=o.from)return null;if(r.kind==="display-math"){let l=s.text.trim(),c=o.text.trim();if(!(l==="$$"&&c==="$$"||l==="\\["&&c==="\\]"))return null}let a=e.newDoc.length-i.length;return{from:r.from,oldTo:r.to,newTo:r.to+a,container:r}}function FN(t,e){let n=t.newDoc,i=n.lineAt(e.fromB);for(;i.number>1;){let o=n.line(i.number-1);if(!o.length)break;if(i=o,e.fromB-i.from>yA)return null}let r=n.lineAt(e.toB);for(;r.number<n.lines;){let o=n.line(r.number+1);if(!o.length)break;if(r=o,r.to-e.toB>yA)return null}let s=n.length-t.startState.doc.length;return i.from>e.fromA||r.to-s<e.toA?null:{from:i.from,oldTo:r.to-s,newTo:r.to}}function IN(t,e,n){let i=PN(e);if(i.delimiters||!Number.isFinite(i.fromA))return null;let r=MN(t,e,i)??FN(e,i);if(!r||r.newTo-r.from>yA)return null;let o=t.text.slice(r.from,r.oldTo),a=n.slice(r.from,r.newTo),l=!!r.container;if(!NC(o,l)||!NC(a,l))return null;let c=t.nodes[0]?.kind==="frontmatter";if(r.from===0&&(bA.test(o)||bA.test(a))||!c&&bA.test(n)&&(LC.test(o)||LC.test(a)))return null;let u=[],h=[],f=[];for(let g of t.nodes)if(g.to<r.from)u.push(g);else if(g.from>r.oldTo)f.push(g);else if(g.from>=r.from&&g.to<=r.oldTo)h.push(g);else return null;if(!QN(ia(o),h,r.from))return null;let d=ia(a);if(r.container){let g=r.container.kind,O=d.find(A=>A.from===0&&A.to===a.length&&A.kind===g);if(!O||g!=="display-math"&&O.meta?.incomplete!==r.container.meta?.incomplete)return null}let p=e.changes,m=[...u.map(g=>typeof g.meta?.definition=="number"&&g.meta.definition>=r.from?YC(g,p):g),...d.map(g=>ZC(g,r.from)),...f.map(g=>ZC(g,r.newTo-r.oldTo,r.oldTo))];return{text:n,nodes:m,math:m.filter(g=>g.kind==="math"||g.kind==="display-math"),updateKind:"region",changed:{from:r.from,to:r.newTo}}}function _N(t,e){let n=e.newDoc.toString();return CN(t,e)?dt("markdown/analysis-map",()=>{let i=t.nodes.map(o=>YC(o,e.changes)),r=e.newDoc.length,s=0;return e.changes.iterChangedRanges((o,a,l,c)=>{r=Math.min(r,e.newDoc.lineAt(l).from),s=Math.max(s,e.newDoc.lineAt(c).to)}),{text:n,nodes:i,math:i.filter(o=>o.kind==="math"||o.kind==="display-math"),updateKind:"mapped",changed:{from:r,to:s}}}):dt("markdown/analysis-region",()=>IN(t,e,n))??WC(n)}var Ri=be.define({create:t=>WC(t.doc.toString()),update(t,e){return e.docChanged?_N(t,e):t}});function we(t){return t.field(Ri)}function Zs(t,e){let n=0,i=t.math.length;for(;n<i;){let s=n+i>>>1;t.math[s].from<=e.from?n=s+1:i=s}let r=t.math[Math.max(0,n-1)];return r&&(lr(r,e)||e.from===e.to&&e.from===r.to)?r:t.math.slice(n).find(s=>s.from<e.to&&lr(s,e))}function BN(t,e,n){let i=[];for(let s of n){let o=t.doc.lineAt(s.from).from,a=t.doc.lineAt(s.to).to;for(let l=!0;l;){l=!1;for(let c of e){if(c.from>a)break;c.to<o||c.from>=o&&c.to<=a||(o=Math.min(o,t.doc.lineAt(c.from).from),a=Math.max(a,t.doc.lineAt(c.to).to),l=!0)}}i.push({from:o,to:a})}i.sort((s,o)=>s.from-o.from);let r=[];for(let s of i){let o=r.at(-1);o&&s.from<=o.to+1?o.to=Math.max(o.to,s.to):r.push({...s})}return r}var XC=new WeakMap;function Xs(t){let e=XC.get(t);return e||(e=RN(t),XC.set(t,e)),e}function RN(t){let e=t.state,n=we(e);if(t.docChanged&&n.updateKind==="full")return"all";let i=t.changes,r=[];t.docChanged&&r.push(n.changed);let s=t.startState.field(cr,!1),o=e.field(cr,!1);if(t.selection||t.docChanged||s!==o){for(let c of t.startState.selection.ranges)r.push({from:i.mapPos(c.from,-1),to:i.mapPos(c.to,1)});for(let c of e.selection.ranges)r.push(c);s&&r.push({from:i.mapPos(s.from,-1),to:i.mapPos(s.to,1)}),o&&r.push(o)}if(!r.length)return[];let a=BN(e,n.nodes,r);return a.reduce((c,u)=>c+u.to-u.from,0)>e.doc.length/2?"all":a}function Ws(t,e){return t.filter(n=>e.some(i=>n.from>=i.from&&n.from<=i.to))}var xA=md(zC(),1),LN=new Set(["space-after-symbol","protect-macro-prefix","identity-matrix","display-math-list"]);function jC(t){let e=xA.default.parse(t);if(!Array.isArray(e))throw new Error("Snippet file must contain an array");return e.filter(n=>!!n&&typeof n=="object").filter(n=>typeof n.trigger=="string"&&typeof n.replacement=="string").map(n=>({trigger:String(n.trigger),replacement:String(n.replacement),options:typeof n.options=="string"?n.options:"m",priority:typeof n.priority=="number"?n.priority:0,handler:typeof n.handler=="string"&&LN.has(n.handler)?n.handler:void 0,description:typeof n.description=="string"?n.description:void 0,flags:typeof n.flags=="string"?n.flags:void 0,triggerKey:typeof n.triggerKey=="string"?n.triggerKey:void 0,language:typeof n.language=="string"?n.language:void 0,excludedMacros:Array.isArray(n.excludedMacros)?n.excludedMacros.map(String):void 0,excludedEnvironments:Array.isArray(n.excludedEnvironments)?n.excludedEnvironments.map(String):void 0,includedMacros:Array.isArray(n.includedMacros)?n.includedMacros.map(String):void 0})).sort((n,i)=>i.priority-n.priority)}function VC(t){let e=xA.default.parse(t);if(!e||typeof e!="object"||Array.isArray(e))throw new Error("Snippet variables must contain an object");let n={};for(let[i,r]of Object.entries(e)){if(typeof r!="string")continue;let o=/^\$\{([^}]+)\}$/.exec(i)?.[1]??i;/^[A-Z][A-Z0-9_]*$/.test(o)&&(n[o]=r)}return n}function qC(t,e=[],n=""){let i=t.replace(/\[\[(\d+)\]\]/g,(l,c)=>e[Number(c)]??"");i=i.replace(/\$\{VISUAL\}/g,n);let r=[],s="",o=0,a=/\$\{(\d+):([^}]*)\}|\$(\d+)/g;for(let l of i.matchAll(a)){s+=i.slice(o,l.index);let c=Number(l[1]??l[3]),u=l[2]??"",h=s.length;s+=u,r.push({index:c,from:h,to:s.length}),o=l.index+l[0].length}return s+=i.slice(o),r.sort((l,c)=>l.index-c.index||l.from-c.from),{text:s,tabstops:r}}var ur=te.define(),EA=te.define(),HC=Ft.define(),sa=z.define({combine:t=>t.at(-1)??!0});function Li(t){return t.facet(sa)}var QA=be.define({create:()=>null,update(t,e){if(e.isUserEvent("undo")||e.isUserEvent("redo"))return null;let n=t&&{...t,stops:t.stops.map((i,r)=>{let s=r===t.active,o=i.from===i.to,a=s||o?1:-1;return{...i,from:e.changes.mapPos(i.from,s?-1:1),to:e.changes.mapPos(i.to,a)}})};for(let i of e.effects)if(i.is(ur))n=i.value;else if(i.is(EA)){let r=n?n.stops.slice(n.active+1):[],s=[...i.value,...r];n=s.length?{stops:s,active:i.value.length?0:-1}:null}return n}}),ra=[],UC=[],KC=[],vA=new Map,CA={};function JC(t){return t.options.includes("v")||t.replacement.includes("${VISUAL}")}function DA(t){return t.replace(/\$\{([A-Z_]+)\}/g,(e,n)=>CA[n]?`(?:${CA[n]})`:"(?!)")}function NN(t){return t.flatMap(e=>{if(!e.options.includes("r"))return[e];try{let n=(e.flags??"").replace(/[gy]/g,"");return[{...e,expression:new RegExp(`(?:${DA(e.trigger)})$`,n)}]}catch(n){return ut(n,"latex-suite/regex"),[]}})}function ZN(){UC=ra.filter(e=>!e.options.includes("A")),KC=ra.filter(e=>e.options.includes("A")&&(e.options.includes("r")||e.trigger.length===0)),vA=new Map;let t=new Set(ra.flatMap(e=>e.options.includes("A")&&!e.options.includes("r")&&e.trigger.length?[e.trigger.at(-1)]:[]));for(let e of t)vA.set(e,ra.filter(n=>n.options.includes("A")&&(n.options.includes("r")||n.trigger.length===0||n.trigger.endsWith(e))))}function If(t,e){try{let n=VC(e?.trim()?e:IC),i=jC(t?.trim()?t:FC);CA=n,ra=NN(i),ZN()}catch(n){ut(n,"latex-suite/snippets")}}If();function XN(t,e){let n=Math.max(0,e-4e3),i=[];for(let r=n;r<e;r++){if(t[r]==="\\"){let s=/^\\([A-Za-z]+)\s*\{/.exec(t.slice(r,e));if(s){i.push(s[1]),r+=s[0].length-1;continue}r++;continue}t[r]==="{"?i.push(null):t[r]==="}"&&i.pop()}return new Set(i.filter(r=>!!r))}function eD(t,e,n){return!(t.options.includes("c")&&e.code!=="block"||t.options.includes("C")&&e.code!=="inline"||t.options.includes("t")&&(e.math!=="none"||e.code!=="none")||t.options.includes("M")&&e.math!=="display"||t.options.includes("n")&&e.math!=="inline"||t.options.includes("m")&&e.math==="none"||t.excludedMacros?.some(i=>n?.has(i))||t.includedMacros?.length&&!t.includedMacros.some(i=>n?.has(i)))}function $A(t,e,n,i=!1){let r=Math.max(0,e-32768),s=t.sliceDoc(r,e),o=s.length,a=Math.max(0,o-512),l=s.slice(a),c=n?vA.get(l.at(-1)??"")??KC:UC,u,h;for(let f of c){if(n&&JC(f)&&!i)continue;let d=[],p,m=f.trigger,g=o-f.trigger.length;if(f.options.includes("r")){let O=f.expression?.exec(l);if(!O)continue;g=a+O.index,d=O.slice(1),p=O.groups,m=O[0]}else if(!l.endsWith(f.trigger)||f.options.includes("w")&&g>0&&/[\p{L}\p{N}_]/u.test(s[g-1]))continue;if(!u){let O=rc(s,o);u={code:O,math:sc(s,o,O)}}if((f.excludedMacros?.length||f.includedMacros?.length)&&!h&&(h=XN(s,o)),!!eD(f,u,h))return{snippet:f,from:r+g,captures:d,groups:p,matchedText:m}}return null}function WN(t){switch(t.snippet.handler){case"space-after-symbol":{let e=DA(t.snippet.trigger).replace("([A-Za-z])","");return new RegExp(e).test(t.matchedText)?t.matchedText:`\\${t.captures[0]} ${t.captures[1]}`}case"protect-macro-prefix":{let e=t.captures[0]??"",n=DA(t.snippet.trigger).replace("\\\\([A-Za-z]+)","");return new RegExp(`\\b${e}`).test(n)?t.matchedText:null}case"identity-matrix":{let e=Number(t.captures[0]);return!Number.isInteger(e)||e<1||e>9?null:`\\begin{pmatrix}
