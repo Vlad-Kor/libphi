@@ -1,0 +1,30 @@
+# Builds the Flatpak bundle from the selected branch. Start it by hand under
+# Actions > Flatpak > Run workflow; the .flatpak is attached to the run as an
+# artifact. Nothing is released or published.
+name: Flatpak
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      # Has flatpak-builder and the GNOME runtime/SDK the manifest uses;
+      # keep the version in step with runtime-version in ai.korsakov.Phi.yml.
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      # flatpak-builder sandboxes the build with bubblewrap.
+      options: --privileged
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # The action has no release tags; pin the master commit.
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@933e9e8ca36e85046ebca8e211f0785c6becac40
+        with:
+          manifest-path: ai.korsakov.Phi.yml
+          bundle: Phi.flatpak
+          cache-key: flatpak-builder-${{ github.sha }}
