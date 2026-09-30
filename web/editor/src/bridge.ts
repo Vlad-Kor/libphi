@@ -16,8 +16,13 @@ export function sendNative(
 ): void {
   const message: NativeMessage = { protocol: 1, type, payload };
   if (id) message.id = id;
+  // Every native web view backend installs window.phiHost before the page
+  // runs (see src/web-view.h). Plain WebKit harnesses used by the tests
+  // register the "native" message handler directly.
+  const host = window.phiHost;
   const handler = window.webkit?.messageHandlers?.native;
-  if (handler) handler.postMessage(JSON.stringify(message));
+  if (host) host.postMessage("native", JSON.stringify(message));
+  else if (handler) handler.postMessage(JSON.stringify(message));
   else window.dispatchEvent(new CustomEvent("phi-native-message", { detail: message }));
 }
 

@@ -2,6 +2,7 @@ declare global {
   interface Window {
     nativeEditorReceive?: (message: NativeMessage | string) => void;
     phiMarkdownEditor?: NativeMarkdownEditor;
+    phiHost?: { postMessage(channel: string, message: string): void };
     webkit?: {
       messageHandlers?: {
         native?: { postMessage(value: string): void };

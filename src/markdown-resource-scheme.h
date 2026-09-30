@@ -1,5 +1,5 @@
 /*
- * Phi Markdown editor - WebKit app:// and vault:// resources
+ * Phi Markdown editor - app:// and vault:// resources
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
@@ -8,8 +8,7 @@
 #define PDFV_MARKDOWN_RESOURCE_SCHEME_H
 
 #include "markdown-vault-adapter.h"
-
-#include <webkit/webkit.h>
+#include "web-view.h"
 
 G_BEGIN_DECLS
 
@@ -17,12 +16,12 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE(PdfvMarkdownResourceScheme, pdfv_markdown_resource_scheme,
                      PDFV, MARKDOWN_RESOURCE_SCHEME, GObject)
 
+/* Registers the schemes with PdfvWebView on first use, so create one before
+ * the first web view. */
 PdfvMarkdownResourceScheme *pdfv_markdown_resource_scheme_new(
     PdfvMarkdownVaultAdapter *vault);
-WebKitWebContext *pdfv_markdown_resource_scheme_get_context(
-    PdfvMarkdownResourceScheme *self);
 void pdfv_markdown_resource_scheme_bind_web_view(
-    PdfvMarkdownResourceScheme *self, WebKitWebView *web_view);
+    PdfvMarkdownResourceScheme *self, PdfvWebView *web_view);
 gchar *pdfv_markdown_resource_scheme_load_default_snippets(GError **error);
 gchar *pdfv_markdown_resource_scheme_load_default_snippet_variables(
     GError **error);

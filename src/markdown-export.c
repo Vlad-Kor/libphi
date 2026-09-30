@@ -10,12 +10,12 @@
 #include "markdown-editor-bridge.h"
 #include "markdown-resource-scheme.h"
 #include "markdown-vault-adapter.h"
+#include "web-view.h"
 
 #include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
-#include <webkit/webkit.h>
 
 #include <string.h>
 
@@ -39,8 +39,7 @@ struct _PdfvMarkdownExport {
   GWeakRef parent;
   AdwDialog *dialog;
   AdwDialog *picker_dialog;
-  WebKitWebView *web_view;
-  WebKitUserContentManager *content_manager;
+  PdfvWebView *web_view;
   PdfvMarkdownVaultAdapter *vault;
   PdfvMarkdownResourceScheme *resources;
   PdfvMarkdownEditorBridge *bridge;
@@ -79,9 +78,8 @@ struct _PdfvMarkdownExport {
   guint64 preview_generation_revision;
   guint64 cached_preview_revision;
   guint64 export_requested_revision;
-  WebKitPrintOperation *print_operation;
+  GCancellable *print_cancellable; /* set while a print is running */
   guint print_idle_id;
-  gchar *print_error;
   gchar *print_source_filename;
   gchar *temporary_filename;
   gchar *suggested_filename;
@@ -518,14 +516,6 @@ static void choose_export_destination(PdfvMarkdownExport *self) {
   g_object_unref(parent_object);
 }
 
-static void on_print_failed(WebKitPrintOperation *operation, GError *error,
-                            PdfvMarkdownExport *self) {
-  (void)operation;
-  g_free(self->print_error);
-  self->print_error = g_strdup(error ? error->message
-                                     : "Could not generate PDF");
-}
-
 typedef struct {
   gchar *source;
   gchar *output;
@@ -917,34 +907,45 @@ static void begin_pdf_finalization(PdfvMarkdownExport *self) {
   g_object_unref(task);
 }
 
-static void on_print_finished(WebKitPrintOperation *operation,
-                              PdfvMarkdownExport *self) {
-  (void)operation;
-  g_clear_object(&self->print_operation);
-  if (self->print_error) {
-    report_preview_generation_error(self, self->print_error);
+static void on_print_finished(GObject *source, GAsyncResult *result,
+                              gpointer user_data) {
+  PdfvMarkdownExport *self = user_data;
+  GError *error = NULL;
+  gboolean printed = pdfv_web_view_print_to_pdf_finish(PDFV_WEB_VIEW(source),
+                                                       result, &error);
+  if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+    g_clear_error(&error);
+    g_object_unref(self);
+    return;
+  }
+  g_clear_object(&self->print_cancellable);
+  if (!printed) {
+    report_preview_generation_error(
+        self, error ? error->message : "Could not generate PDF");
+    g_clear_error(&error);
     print_source_file_remove(self);
-    g_clear_pointer(&self->print_error, g_free);
     finish_preview_generation(self);
+    g_object_unref(self);
     return;
   }
   GStatBuf info;
   if (!self->print_source_filename ||
       g_stat(self->print_source_filename, &info) != 0 || info.st_size <= 0) {
     report_preview_generation_error(self,
-                                    "WebKit did not produce a PDF file");
+                                    "The web view did not produce a PDF file");
     print_source_file_remove(self);
     finish_preview_generation(self);
+    g_object_unref(self);
     return;
   }
   begin_pdf_finalization(self);
+  g_object_unref(self);
 }
 
 static void start_preview_print(PdfvMarkdownExport *self) {
-  if (self->print_operation)
+  if (self->print_cancellable)
     return;
   print_source_file_remove(self);
-  g_clear_pointer(&self->print_error, g_free);
 
   GError *error = NULL;
   gint descriptor = g_file_open_tmp("phi-export-XXXXXX.pdf",
@@ -959,26 +960,6 @@ static void start_preview_print(PdfvMarkdownExport *self) {
   g_close(descriptor, NULL);
   g_unlink(self->print_source_filename);
 
-  gchar *uri = g_filename_to_uri(self->print_source_filename, NULL, &error);
-  if (!uri) {
-    report_preview_generation_error(self, error->message);
-    g_clear_error(&error);
-    print_source_file_remove(self);
-    finish_preview_generation(self);
-    return;
-  }
-
-  self->print_operation = webkit_print_operation_new(self->web_view);
-  GtkPrintSettings *settings = gtk_print_settings_new();
-  gtk_print_settings_set_printer(settings, "Print to File");
-  gtk_print_settings_set(settings, GTK_PRINT_SETTINGS_OUTPUT_URI, uri);
-  gtk_print_settings_set(settings, GTK_PRINT_SETTINGS_OUTPUT_FILE_FORMAT,
-                         "pdf");
-  gtk_print_settings_set_orientation(settings,
-                                     GTK_PAGE_ORIENTATION_PORTRAIT);
-  webkit_print_operation_set_print_settings(self->print_operation, settings);
-  g_object_unref(settings);
-
   gdouble scale = CLAMP(self->export_scale, MIN_EXPORT_SCALE,
                         MAX_EXPORT_SCALE) / 100.0;
   GtkPageSetup *setup = gtk_page_setup_new();
@@ -991,18 +972,15 @@ static void start_preview_print(PdfvMarkdownExport *self) {
   gtk_page_setup_set_left_margin(setup, 0, GTK_UNIT_MM);
   gtk_page_setup_set_right_margin(setup, 0, GTK_UNIT_MM);
   gtk_page_setup_set_orientation(setup, GTK_PAGE_ORIENTATION_PORTRAIT);
-  webkit_print_operation_set_page_setup(self->print_operation, setup);
   gtk_paper_size_free(paper);
-  g_object_unref(setup);
 
-  g_signal_connect(self->print_operation, "failed",
-                   G_CALLBACK(on_print_failed), self);
-  g_signal_connect(self->print_operation, "finished",
-                   G_CALLBACK(on_print_finished), self);
+  self->print_cancellable = g_cancellable_new();
   if (self->preview_generation_revision == self->preview_revision)
     set_preview_loading(self, "Rendering preview…");
-  webkit_print_operation_print(self->print_operation);
-  g_free(uri);
+  pdfv_web_view_print_to_pdf(self->web_view, self->print_source_filename,
+                             setup, self->print_cancellable,
+                             on_print_finished, g_object_ref(self));
+  g_object_unref(setup);
 }
 
 typedef struct {
@@ -1022,7 +1000,7 @@ static gboolean start_print_idle(gpointer user_data) {
 }
 
 static void schedule_preview_print(PdfvMarkdownExport *self) {
-  if (self->print_operation || self->print_idle_id)
+  if (self->print_cancellable || self->print_idle_id)
     return;
   PrintIdleRequest *request = g_new0(PrintIdleRequest, 1);
   request->export = g_object_ref(self);
@@ -1054,7 +1032,7 @@ static void request_exact_preview(PdfvMarkdownExport *self, guint64 revision) {
     return;
   if (self->temporary_filename && self->cached_preview_revision == revision)
     return;
-  if (self->preview_generation_active || self->print_operation ||
+  if (self->preview_generation_active || self->print_cancellable ||
       self->print_idle_id) {
     if (!self->preview_generation_active ||
         self->preview_generation_revision != revision)
@@ -1712,41 +1690,22 @@ static void on_bridge_error(PdfvMarkdownEditorBridge *bridge,
   set_status(self, message, TRUE);
 }
 
-static gboolean on_decide_policy(WebKitWebView *web_view,
-                                 WebKitPolicyDecision *decision,
-                                 WebKitPolicyDecisionType type,
-                                 PdfvMarkdownExport *self) {
+static gboolean on_decide_navigation(PdfvWebView *web_view, const gchar *uri,
+                                     gboolean user_gesture,
+                                     gboolean new_window,
+                                     PdfvMarkdownExport *self) {
   (void)web_view;
+  (void)user_gesture;
   (void)self;
-  if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)
-    return FALSE;
-  WebKitNavigationAction *action =
-      webkit_navigation_policy_decision_get_navigation_action(
-          WEBKIT_NAVIGATION_POLICY_DECISION(decision));
-  WebKitURIRequest *request = webkit_navigation_action_get_request(action);
-  const gchar *uri = request ? webkit_uri_request_get_uri(request) : NULL;
-  if (uri && g_str_has_prefix(uri, "app://editor/export-preview.html"))
-    return FALSE;
-  webkit_policy_decision_ignore(decision);
-  return TRUE;
+  return new_window ||
+      !g_str_has_prefix(uri, "app://editor/export-preview.html");
 }
 
-static gboolean on_permission_request(WebKitWebView *web_view,
-                                      WebKitPermissionRequest *request,
-                                      PdfvMarkdownExport *self) {
-  (void)web_view;
-  (void)self;
-  webkit_permission_request_deny(request);
-  return TRUE;
-}
-
-static gboolean on_context_menu(WebKitWebView *web_view,
-                                WebKitContextMenu *menu,
-                                WebKitHitTestResult *hit,
+static gboolean on_context_menu(PdfvWebView *web_view,
+                                PdfvWebContextMenu *menu,
                                 PdfvMarkdownExport *self) {
   (void)web_view;
   (void)menu;
-  (void)hit;
   (void)self;
   return TRUE;
 }
@@ -1879,9 +1838,9 @@ static void pdfv_markdown_export_dispose(GObject *object) {
     g_source_remove(self->print_idle_id);
     self->print_idle_id = 0;
   }
-  if (self->print_operation)
-    g_signal_handlers_disconnect_by_data(self->print_operation, self);
-  g_clear_object(&self->print_operation);
+  if (self->print_cancellable)
+    g_cancellable_cancel(self->print_cancellable);
+  g_clear_object(&self->print_cancellable);
   g_clear_object(&self->picker_tree);
   if (self->bridge)
     g_signal_handlers_disconnect_by_data(self->bridge, self);
@@ -1889,10 +1848,9 @@ static void pdfv_markdown_export_dispose(GObject *object) {
     g_signal_handlers_disconnect_by_data(self->web_view, self);
   g_clear_object(&self->bridge);
   /* GtkPaned owns the floating GtkWidget reference. The bridge's explicit
-   * WebKitWebView reference was released above; leave widget destruction to
-   * the dialog hierarchy. */
+   * web view reference was released above; leave widget destruction to the
+   * dialog hierarchy. */
   self->web_view = NULL;
-  g_clear_object(&self->content_manager);
   g_clear_object(&self->resources);
   g_clear_object(&self->vault);
   g_clear_object(&self->workspace);
@@ -1908,7 +1866,6 @@ static void pdfv_markdown_export_finalize(GObject *object) {
   g_clear_pointer(&self->picker_selection, g_hash_table_unref);
   g_free(self->current_path);
   g_free(self->preamble);
-  g_free(self->print_error);
   g_free(self->suggested_filename);
   g_free(self->metadata_title);
   g_free(self->metadata_author);
@@ -1959,31 +1916,20 @@ void pdfv_markdown_export_present(
   g_free(current_text);
   self->vault = pdfv_markdown_vault_adapter_new(vault_root);
   self->resources = pdfv_markdown_resource_scheme_new(self->vault);
-  self->content_manager = webkit_user_content_manager_new();
-  self->web_view = WEBKIT_WEB_VIEW(g_object_new(
-      WEBKIT_TYPE_WEB_VIEW,
-      "web-context", pdfv_markdown_resource_scheme_get_context(self->resources),
-      "user-content-manager", self->content_manager, NULL));
+  self->web_view = pdfv_web_view_new(NULL);
   const GdkRGBA transparent = {0, 0, 0, 0};
-  webkit_web_view_set_background_color(self->web_view, &transparent);
+  pdfv_web_view_set_background_color(self->web_view, &transparent);
   pdfv_markdown_resource_scheme_bind_web_view(self->resources,
                                                self->web_view);
-  WebKitSettings *settings = webkit_web_view_get_settings(self->web_view);
-  g_object_set(settings, "enable-html5-database", FALSE,
-               "enable-html5-local-storage", FALSE, "enable-page-cache", FALSE,
-               NULL);
   gtk_widget_set_hexpand(GTK_WIDGET(self->web_view), TRUE);
   gtk_widget_set_vexpand(GTK_WIDGET(self->web_view), TRUE);
-  self->bridge = pdfv_markdown_editor_bridge_new(
-      self->web_view, self->content_manager);
+  self->bridge = pdfv_markdown_editor_bridge_new(self->web_view);
   g_signal_connect(self->bridge, "message", G_CALLBACK(on_bridge_message),
                    self);
   g_signal_connect(self->bridge, "bridge-error",
                    G_CALLBACK(on_bridge_error), self);
-  g_signal_connect(self->web_view, "decide-policy",
-                   G_CALLBACK(on_decide_policy), self);
-  g_signal_connect(self->web_view, "permission-request",
-                   G_CALLBACK(on_permission_request), self);
+  g_signal_connect(self->web_view, "decide-navigation",
+                   G_CALLBACK(on_decide_navigation), self);
   g_signal_connect(self->web_view, "context-menu",
                    G_CALLBACK(on_context_menu), self);
 
@@ -2052,8 +1998,7 @@ void pdfv_markdown_export_present(
   g_signal_connect(self->dialog, "closed", G_CALLBACK(on_dialog_closed), self);
   g_object_set_data_full(G_OBJECT(self->dialog), "phi-markdown-export",
                          g_object_ref(self), g_object_unref);
-  webkit_web_view_load_uri(self->web_view,
-                           "app://editor/export-preview.html");
+  pdfv_web_view_load_uri(self->web_view, "app://editor/export-preview.html");
   adw_dialog_present(self->dialog, parent);
   g_object_unref(self);
 }

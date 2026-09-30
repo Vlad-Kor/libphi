@@ -13,7 +13,7 @@
 `+yt+"}"}}return ie.pop(),le=yt,di}function Tc(Be){if(Be.length===0)return Ar(Be,!0);var yt=String.fromCodePoint(Be.codePointAt(0));if(!qe.isIdStartChar(yt))return Ar(Be,!0);for(var oe=yt.length;oe<Be.length;oe++)if(!qe.isIdContinueChar(String.fromCodePoint(Be.codePointAt(oe))))return Ar(Be,!0);return Be}function cd(Be){if(ie.indexOf(Be)>=0)throw TypeError("Converting circular structure to JSON5");ie.push(Be);var yt=le;le=le+je;for(var oe=[],Xe=0;Xe<Be.length;Xe++){var en=Wi(String(Xe),Be);oe.push(en!==void 0?en:"null")}var ot;if(oe.length===0)ot="[]";else if(je===""){var Zt=oe.join(",");ot="["+Zt+"]"}else{var Xn=`,
 `+le,dn=oe.join(Xn);ot=`[
 `+le+dn+`,
-`+yt+"]"}return ie.pop(),le=yt,ot}},Js={parse:ma,stringify:Ks},En=Js,gr=En;return gr}))});var Rc=new Map,UE=0;function Qe(t,e={},n){let i={protocol:1,type:t,payload:e};n&&(i.id=n);let r=window.webkit?.messageHandlers?.native;r?r.postMessage(JSON.stringify(i)):window.dispatchEvent(new CustomEvent("phi-native-message",{detail:i}))}function mi(t,e={},n=5e3){let i=`web-${Date.now()}-${++UE}`;return new Promise((r,s)=>{let o=window.setTimeout(()=>{Rc.delete(i),s(new Error(`Native request timed out: ${t}`))},n);Rc.set(i,{resolve:r,reject:s,timer:o}),Qe(t,e,i)})}function Lc(t){if(t.type!=="request/response"||!t.id)return!1;let e=Rc.get(t.id);return e?(Rc.delete(t.id),window.clearTimeout(e.timer),t.payload?.error?e.reject(new Error(String(t.payload.error))):e.resolve(t.payload?.result),!0):!1}function ut(t,e,n=""){let i=t instanceof Error?t:new Error(String(t));Qe("log/error",{message:i.message,stack:i.stack??"",documentPath:n,component:e})}var Od=[],x0=[];(()=>{let t="lc,34,7n,7,7b,19,,,,2,,2,,,20,b,1c,l,g,,2t,7,2,6,2,2,,4,z,,u,r,2j,b,1m,9,9,,o,4,,9,,3,,5,17,3,3b,f,,w,1j,,,,4,8,4,,3,7,a,2,t,,1m,,,,2,4,8,,9,,a,2,q,,2,2,1l,,4,2,4,2,2,3,3,,u,2,3,,b,2,1l,,4,5,,2,4,,k,2,m,6,,,1m,,,2,,4,8,,7,3,a,2,u,,1n,,,,c,,9,,14,,3,,1l,3,5,3,,4,7,2,b,2,t,,1m,,2,,2,,3,,5,2,7,2,b,2,s,2,1l,2,,,2,4,8,,9,,a,2,t,,20,,4,,2,3,,,8,,29,,2,7,c,8,2q,,2,9,b,6,22,2,r,,,,,,1j,e,,5,,2,5,b,,10,9,,2u,4,,6,,2,2,2,p,2,4,3,g,4,d,,2,2,6,,f,,jj,3,qa,3,t,3,t,2,u,2,1s,2,,7,8,,2,b,9,,19,3,3b,2,y,,3a,3,4,2,9,,6,3,63,2,2,,1m,,,7,,,,,2,8,6,a,2,,1c,h,1r,4,1c,7,,,5,,14,9,c,2,w,4,2,2,,3,1k,,,2,3,,,3,1m,8,2,2,48,3,,d,,7,4,,6,,3,2,5i,1m,,5,ek,,5f,x,2da,3,3x,,2o,w,fe,6,2x,2,n9w,4,,a,w,2,28,2,7k,,3,,4,,p,2,5,,47,2,q,i,d,,12,8,p,b,1a,3,1c,,2,4,2,2,13,,1v,6,2,2,2,2,c,,8,,1b,,1f,,,3,2,2,5,2,,,16,2,8,,6m,,2,,4,,fn4,,kh,g,g,g,a6,2,gt,,6a,,45,5,1ae,3,,2,5,4,14,3,4,,4l,2,fx,4,ar,2,49,b,4w,,1i,f,1k,3,1d,4,2,2,1x,3,10,5,,8,1q,,c,2,1g,9,a,4,2,,2n,3,2,,,2,6,,4g,,3,8,l,2,1l,2,,,,,m,,e,7,3,5,5f,8,2,3,,,n,,29,,2,6,,,2,,,2,,2,6j,,2,4,6,2,,2,r,2,2d,8,2,,,2,2y,,,,2,6,,,2t,3,2,4,,5,77,9,,2,6t,,a,2,,,4,,40,4,2,2,4,,w,a,14,6,2,4,8,,9,6,2,3,1a,d,,2,ba,7,,6,,,2a,m,2,7,,2,,2,3e,6,3,,,2,,7,,,20,2,3,,,,9n,2,f0b,5,1n,7,t4,,1r,4,29,,f5k,2,43q,,,3,4,5,8,8,2,7,u,4,44,3,1iz,1j,4,1e,8,,e,,m,5,,f,11s,7,,h,2,7,,2,,5,79,7,c5,4,15s,7,31,7,240,5,gx7k,2o,3k,6o".split(",").map(e=>e?parseInt(e,36):1);for(let e=0,n=0;e<t.length;e++)(e%2?x0:Od).push(n=n+t[e])})();function KE(t){if(t<768)return!1;for(let e=0,n=Od.length;;){let i=e+n>>1;if(t<Od[i])n=i;else if(t>=x0[i])e=i+1;else return!0;if(e==n)return!1}}function w0(t){return t>=127462&&t<=127487}var k0=8205;function v0(t,e,n=!0,i=!0){return(n?C0:JE)(t,e,i)}function C0(t,e,n){if(e==t.length)return e;e&&D0(t.charCodeAt(e))&&E0(t.charCodeAt(e-1))&&e--;let i=gd(t,e);for(e+=S0(i);e<t.length;){let r=gd(t,e);if(i==k0||r==k0||n&&KE(r))e+=S0(r),i=r;else if(w0(r)){let s=0,o=e-2;for(;o>=0&&w0(gd(t,o));)s++,o-=2;if(s%2==0)break;e+=2}else break}return e}function JE(t,e,n){for(;e>1;){let i=C0(t,e-2,n);if(i<e)return i;e--}return 0}function gd(t,e){let n=t.charCodeAt(e);if(!E0(n)||e+1==t.length)return n;let i=t.charCodeAt(e+1);return D0(i)?(n-55296<<10)+(i-56320)+65536:n}function D0(t){return t>=56320&&t<57344}function E0(t){return t>=55296&&t<56320}function S0(t){return t<65536?1:2}var ge=class t{lineAt(e){if(e<0||e>this.length)throw new RangeError(`Invalid position ${e} in document of length ${this.length}`);return this.lineInner(e,!1,1,0)}line(e){if(e<1||e>this.lines)throw new RangeError(`Invalid line number ${e} in ${this.lines}-line document`);return this.lineInner(e,!0,1,0)}replace(e,n,i){[e,n]=so(this,e,n);let r=[];return this.decompose(0,e,r,2),i.length&&i.decompose(0,i.length,r,3),this.decompose(n,this.length,r,1),no.from(r,this.length-(n-e)+i.length)}append(e){return this.replace(this.length,this.length,e)}slice(e,n=this.length){[e,n]=so(this,e,n);let i=[];return this.decompose(e,n,i,0),no.from(i,n-e)}eq(e){if(e==this)return!0;if(e.length!=this.length||e.lines!=this.lines)return!1;let n=this.scanIdentical(e,1),i=this.length-this.scanIdentical(e,-1),r=new as(this),s=new as(e);for(let o=n,a=n;;){if(r.next(o),s.next(o),o=0,r.lineBreak!=s.lineBreak||r.done!=s.done||r.value!=s.value)return!1;if(a+=r.value.length,r.done||a>=i)return!0}}iter(e=1){return new as(this,e)}iterRange(e,n=this.length){return new Yc(this,e,n)}iterLines(e,n){let i;if(e==null)i=this.iter();else{n==null&&(n=this.lines+1);let r=this.line(e).from;i=this.iterRange(r,Math.max(r,n==this.lines+1?this.length:n<=1?0:this.line(n-1).to))}return new zc(i)}toString(){return this.sliceString(0)}toJSON(){let e=[];return this.flatten(e),e}constructor(){}static of(e){if(e.length==0)throw new RangeError("A document must have at least one line");return e.length==1&&!e[0]?t.empty:e.length<=32?new pn(e):no.from(pn.split(e,[]))}},pn=class t extends ge{constructor(e,n=eQ(e)){super(),this.text=e,this.length=n}get lines(){return this.text.length}get children(){return null}lineInner(e,n,i,r){for(let s=0;;s++){let o=this.text[s],a=r+o.length;if((n?i:a)>=e)return new bd(r,a,i,o);r=a+1,i++}}decompose(e,n,i,r){let s=e<=0&&n>=this.length?this:new t(Q0(this.text,e,n),Math.min(n,this.length)-Math.max(0,e));if(r&1){let o=i.pop(),a=Wc(s.text,o.text.slice(),0,s.length);if(a.length<=32)i.push(new t(a,o.length+s.length));else{let l=a.length>>1;i.push(new t(a.slice(0,l)),new t(a.slice(l)))}}else i.push(s)}replace(e,n,i){if(!(i instanceof t))return super.replace(e,n,i);[e,n]=so(this,e,n);let r=Wc(this.text,Wc(i.text,Q0(this.text,0,e)),n),s=this.length+i.length-(n-e);return r.length<=32?new t(r,s):no.from(t.split(r,[]),s)}sliceString(e,n=this.length,i=`
+`+yt+"]"}return ie.pop(),le=yt,ot}},Js={parse:ma,stringify:Ks},En=Js,gr=En;return gr}))});var Rc=new Map,UE=0;function Qe(t,e={},n){let i={protocol:1,type:t,payload:e};n&&(i.id=n);let r=window.phiHost,s=window.webkit?.messageHandlers?.native;r?r.postMessage("native",JSON.stringify(i)):s?s.postMessage(JSON.stringify(i)):window.dispatchEvent(new CustomEvent("phi-native-message",{detail:i}))}function mi(t,e={},n=5e3){let i=`web-${Date.now()}-${++UE}`;return new Promise((r,s)=>{let o=window.setTimeout(()=>{Rc.delete(i),s(new Error(`Native request timed out: ${t}`))},n);Rc.set(i,{resolve:r,reject:s,timer:o}),Qe(t,e,i)})}function Lc(t){if(t.type!=="request/response"||!t.id)return!1;let e=Rc.get(t.id);return e?(Rc.delete(t.id),window.clearTimeout(e.timer),t.payload?.error?e.reject(new Error(String(t.payload.error))):e.resolve(t.payload?.result),!0):!1}function ut(t,e,n=""){let i=t instanceof Error?t:new Error(String(t));Qe("log/error",{message:i.message,stack:i.stack??"",documentPath:n,component:e})}var Od=[],x0=[];(()=>{let t="lc,34,7n,7,7b,19,,,,2,,2,,,20,b,1c,l,g,,2t,7,2,6,2,2,,4,z,,u,r,2j,b,1m,9,9,,o,4,,9,,3,,5,17,3,3b,f,,w,1j,,,,4,8,4,,3,7,a,2,t,,1m,,,,2,4,8,,9,,a,2,q,,2,2,1l,,4,2,4,2,2,3,3,,u,2,3,,b,2,1l,,4,5,,2,4,,k,2,m,6,,,1m,,,2,,4,8,,7,3,a,2,u,,1n,,,,c,,9,,14,,3,,1l,3,5,3,,4,7,2,b,2,t,,1m,,2,,2,,3,,5,2,7,2,b,2,s,2,1l,2,,,2,4,8,,9,,a,2,t,,20,,4,,2,3,,,8,,29,,2,7,c,8,2q,,2,9,b,6,22,2,r,,,,,,1j,e,,5,,2,5,b,,10,9,,2u,4,,6,,2,2,2,p,2,4,3,g,4,d,,2,2,6,,f,,jj,3,qa,3,t,3,t,2,u,2,1s,2,,7,8,,2,b,9,,19,3,3b,2,y,,3a,3,4,2,9,,6,3,63,2,2,,1m,,,7,,,,,2,8,6,a,2,,1c,h,1r,4,1c,7,,,5,,14,9,c,2,w,4,2,2,,3,1k,,,2,3,,,3,1m,8,2,2,48,3,,d,,7,4,,6,,3,2,5i,1m,,5,ek,,5f,x,2da,3,3x,,2o,w,fe,6,2x,2,n9w,4,,a,w,2,28,2,7k,,3,,4,,p,2,5,,47,2,q,i,d,,12,8,p,b,1a,3,1c,,2,4,2,2,13,,1v,6,2,2,2,2,c,,8,,1b,,1f,,,3,2,2,5,2,,,16,2,8,,6m,,2,,4,,fn4,,kh,g,g,g,a6,2,gt,,6a,,45,5,1ae,3,,2,5,4,14,3,4,,4l,2,fx,4,ar,2,49,b,4w,,1i,f,1k,3,1d,4,2,2,1x,3,10,5,,8,1q,,c,2,1g,9,a,4,2,,2n,3,2,,,2,6,,4g,,3,8,l,2,1l,2,,,,,m,,e,7,3,5,5f,8,2,3,,,n,,29,,2,6,,,2,,,2,,2,6j,,2,4,6,2,,2,r,2,2d,8,2,,,2,2y,,,,2,6,,,2t,3,2,4,,5,77,9,,2,6t,,a,2,,,4,,40,4,2,2,4,,w,a,14,6,2,4,8,,9,6,2,3,1a,d,,2,ba,7,,6,,,2a,m,2,7,,2,,2,3e,6,3,,,2,,7,,,20,2,3,,,,9n,2,f0b,5,1n,7,t4,,1r,4,29,,f5k,2,43q,,,3,4,5,8,8,2,7,u,4,44,3,1iz,1j,4,1e,8,,e,,m,5,,f,11s,7,,h,2,7,,2,,5,79,7,c5,4,15s,7,31,7,240,5,gx7k,2o,3k,6o".split(",").map(e=>e?parseInt(e,36):1);for(let e=0,n=0;e<t.length;e++)(e%2?x0:Od).push(n=n+t[e])})();function KE(t){if(t<768)return!1;for(let e=0,n=Od.length;;){let i=e+n>>1;if(t<Od[i])n=i;else if(t>=x0[i])e=i+1;else return!0;if(e==n)return!1}}function w0(t){return t>=127462&&t<=127487}var k0=8205;function v0(t,e,n=!0,i=!0){return(n?C0:JE)(t,e,i)}function C0(t,e,n){if(e==t.length)return e;e&&D0(t.charCodeAt(e))&&E0(t.charCodeAt(e-1))&&e--;let i=gd(t,e);for(e+=S0(i);e<t.length;){let r=gd(t,e);if(i==k0||r==k0||n&&KE(r))e+=S0(r),i=r;else if(w0(r)){let s=0,o=e-2;for(;o>=0&&w0(gd(t,o));)s++,o-=2;if(s%2==0)break;e+=2}else break}return e}function JE(t,e,n){for(;e>1;){let i=C0(t,e-2,n);if(i<e)return i;e--}return 0}function gd(t,e){let n=t.charCodeAt(e);if(!E0(n)||e+1==t.length)return n;let i=t.charCodeAt(e+1);return D0(i)?(n-55296<<10)+(i-56320)+65536:n}function D0(t){return t>=56320&&t<57344}function E0(t){return t>=55296&&t<56320}function S0(t){return t<65536?1:2}var ge=class t{lineAt(e){if(e<0||e>this.length)throw new RangeError(`Invalid position ${e} in document of length ${this.length}`);return this.lineInner(e,!1,1,0)}line(e){if(e<1||e>this.lines)throw new RangeError(`Invalid line number ${e} in ${this.lines}-line document`);return this.lineInner(e,!0,1,0)}replace(e,n,i){[e,n]=so(this,e,n);let r=[];return this.decompose(0,e,r,2),i.length&&i.decompose(0,i.length,r,3),this.decompose(n,this.length,r,1),no.from(r,this.length-(n-e)+i.length)}append(e){return this.replace(this.length,this.length,e)}slice(e,n=this.length){[e,n]=so(this,e,n);let i=[];return this.decompose(e,n,i,0),no.from(i,n-e)}eq(e){if(e==this)return!0;if(e.length!=this.length||e.lines!=this.lines)return!1;let n=this.scanIdentical(e,1),i=this.length-this.scanIdentical(e,-1),r=new as(this),s=new as(e);for(let o=n,a=n;;){if(r.next(o),s.next(o),o=0,r.lineBreak!=s.lineBreak||r.done!=s.done||r.value!=s.value)return!1;if(a+=r.value.length,r.done||a>=i)return!0}}iter(e=1){return new as(this,e)}iterRange(e,n=this.length){return new Yc(this,e,n)}iterLines(e,n){let i;if(e==null)i=this.iter();else{n==null&&(n=this.lines+1);let r=this.line(e).from;i=this.iterRange(r,Math.max(r,n==this.lines+1?this.length:n<=1?0:this.line(n-1).to))}return new zc(i)}toString(){return this.sliceString(0)}toJSON(){let e=[];return this.flatten(e),e}constructor(){}static of(e){if(e.length==0)throw new RangeError("A document must have at least one line");return e.length==1&&!e[0]?t.empty:e.length<=32?new pn(e):no.from(pn.split(e,[]))}},pn=class t extends ge{constructor(e,n=eQ(e)){super(),this.text=e,this.length=n}get lines(){return this.text.length}get children(){return null}lineInner(e,n,i,r){for(let s=0;;s++){let o=this.text[s],a=r+o.length;if((n?i:a)>=e)return new bd(r,a,i,o);r=a+1,i++}}decompose(e,n,i,r){let s=e<=0&&n>=this.length?this:new t(Q0(this.text,e,n),Math.min(n,this.length)-Math.max(0,e));if(r&1){let o=i.pop(),a=Wc(s.text,o.text.slice(),0,s.length);if(a.length<=32)i.push(new t(a,o.length+s.length));else{let l=a.length>>1;i.push(new t(a.slice(0,l)),new t(a.slice(l)))}}else i.push(s)}replace(e,n,i){if(!(i instanceof t))return super.replace(e,n,i);[e,n]=so(this,e,n);let r=Wc(this.text,Wc(i.text,Q0(this.text,0,e)),n),s=this.length+i.length-(n-e);return r.length<=32?new t(r,s):no.from(t.split(r,[]),s)}sliceString(e,n=this.length,i=`
 `){[e,n]=so(this,e,n);let r="";for(let s=0,o=0;s<=n&&o<this.text.length;o++){let a=this.text[o],l=s+a.length;s>e&&o&&(r+=i),e<l&&n>s&&(r+=a.slice(Math.max(0,e-s),n-s)),s=l+1}return r}flatten(e){for(let n of this.text)e.push(n)}scanIdentical(){return 0}static split(e,n){let i=[],r=-1;for(let s of e)i.push(s),r+=s.length+1,i.length==32&&(n.push(new t(i,r)),i=[],r=-1);return r>-1&&n.push(new t(i,r)),n}},no=class t extends ge{constructor(e,n){super(),this.children=e,this.length=n,this.lines=0;for(let i of e)this.lines+=i.lines}lineInner(e,n,i,r){for(let s=0;;s++){let o=this.children[s],a=r+o.length,l=i+o.lines-1;if((n?l:a)>=e)return o.lineInner(e,n,i,r);r=a+1,i=l+1}}decompose(e,n,i,r){for(let s=0,o=0;o<=n&&s<this.children.length;s++){let a=this.children[s],l=o+a.length;if(e<=l&&n>=o){let c=r&((o<=e?1:0)|(l>=n?2:0));o>=e&&l<=n&&!c?i.push(a):a.decompose(e-o,n-o,i,c)}o=l+1}}replace(e,n,i){if([e,n]=so(this,e,n),i.lines<this.lines)for(let r=0,s=0;r<this.children.length;r++){let o=this.children[r],a=s+o.length;if(e>=s&&n<=a){let l=o.replace(e-s,n-s,i),c=this.lines-o.lines+l.lines;if(l.lines<c>>4&&l.lines>c>>6){let u=this.children.slice();return u[r]=l,new t(u,this.length-(n-e)+i.length)}return super.replace(s,a,l)}s=a+1}return super.replace(e,n,i)}sliceString(e,n=this.length,i=`
 `){[e,n]=so(this,e,n);let r="";for(let s=0,o=0;s<this.children.length&&o<=n;s++){let a=this.children[s],l=o+a.length;o>e&&s&&(r+=i),e<l&&n>o&&(r+=a.sliceString(e-o,n-o,i)),o=l+1}return r}flatten(e){for(let n of this.children)n.flatten(e)}scanIdentical(e,n){if(!(e instanceof t))return 0;let i=0,[r,s,o,a]=n>0?[0,0,this.children.length,e.children.length]:[this.children.length-1,e.children.length-1,-1,-1];for(;;r+=n,s+=n){if(r==o||s==a)return i;let l=this.children[r],c=e.children[s];if(l!=c)return i+l.scanIdentical(c,n);i+=l.length+1}}static from(e,n=e.reduce((i,r)=>i+r.length+1,-1)){let i=0;for(let d of e)i+=d.lines;if(i<32){let d=[];for(let p of e)p.flatten(d);return new pn(d,n)}let r=Math.max(32,i>>5),s=r<<1,o=r>>1,a=[],l=0,c=-1,u=[];function h(d){let p;if(d.lines>s&&d instanceof t)for(let m of d.children)h(m);else d.lines>o&&(l>o||!l)?(f(),a.push(d)):d instanceof pn&&l&&(p=u[u.length-1])instanceof pn&&d.lines+p.lines<=32?(l+=d.lines,c+=d.length+1,u[u.length-1]=new pn(p.text.concat(d.text),p.length+1+d.length)):(l+d.lines>r&&f(),l+=d.lines,c+=d.length+1,u.push(d))}function f(){l!=0&&(a.push(u.length==1?u[0]:t.from(u,c)),c=-1,l=u.length=0)}for(let d of e)h(d);return f(),a.length==1?a[0]:new t(a,n)}};ge.empty=new pn([""],0);function eQ(t){let e=-1;for(let n of t)e+=n.length+1;return e}function Wc(t,e,n=0,i=1e9){for(let r=0,s=0,o=!0;s<t.length&&r<=i;s++){let a=t[s],l=r+a.length;l>=n&&(l>i&&(a=a.slice(0,i-r)),r<n&&(a=a.slice(n-r)),o?(e[e.length-1]+=a,o=!1):e.push(a)),r=l+1}return e}function Q0(t,e,n){return Wc(t,[""],e,n)}var as=class{constructor(e,n=1){this.dir=n,this.done=!1,this.lineBreak=!1,this.value="",this.nodes=[e],this.offsets=[n>0?1:(e instanceof pn?e.text.length:e.children.length)<<1]}nextInner(e,n){for(this.done=this.lineBreak=!1;;){let i=this.nodes.length-1,r=this.nodes[i],s=this.offsets[i],o=s>>1,a=r instanceof pn?r.text.length:r.children.length;if(o==(n>0?a:0)){if(i==0)return this.done=!0,this.value="",this;n>0&&this.offsets[i-1]++,this.nodes.pop(),this.offsets.pop()}else if((s&1)==(n>0?0:1)){if(this.offsets[i]+=n,e==0)return this.lineBreak=!0,this.value=`
 `,this;e--}else if(r instanceof pn){let l=r.text[o+(n<0?-1:0)];if(this.offsets[i]+=n,l.length>Math.max(0,e))return this.value=e==0?l:n>0?l.slice(e):l.slice(0,l.length-e),this;e-=l.length}else{let l=r.children[o+(n<0?-1:0)];e>l.length?(e-=l.length,this.offsets[i]+=n):(n<0&&this.offsets[i]--,this.nodes.push(l),this.offsets.push(n>0?1:(l instanceof pn?l.text.length:l.children.length)<<1))}}}next(e=0){return e<0&&(this.nextInner(-e,-this.dir),e=this.value.length),this.nextInner(e,this.dir)}},Yc=class{constructor(e,n,i){this.value="",this.done=!1,this.cursor=new as(e,n>i?-1:1),this.pos=n>i?e.length:0,this.from=Math.min(n,i),this.to=Math.max(n,i)}nextInner(e,n){if(n<0?this.pos<=this.from:this.pos>=this.to)return this.value="",this.done=!0,this;e+=Math.max(0,n<0?this.pos-this.to:this.from-this.pos);let i=n<0?this.pos-this.from:this.to-this.pos;e>i&&(e=i),i-=e;let{value:r}=this.cursor.next(e);return this.pos+=(r.length+e)*n,this.value=r.length<=i?r:n<0?r.slice(r.length-i):r.slice(0,i),this.done=!this.value,this}next(e=0){return e<0?e=Math.max(e,this.from-this.pos):e>0&&(e=Math.min(e,this.to-this.pos)),this.nextInner(e,this.cursor.dir)}get lineBreak(){return this.cursor.lineBreak&&this.value!=""}},zc=class{constructor(e){this.inner=e,this.afterBreak=!0,this.value="",this.done=!1}next(e=0){let{done:n,lineBreak:i,value:r}=this.inner.next(e);return n&&this.afterBreak?(this.value="",this.afterBreak=!1):n?(this.done=!0,this.value=""):i?this.afterBreak?this.value="":(this.afterBreak=!0,this.next()):(this.value=r,this.afterBreak=!1),this}get lineBreak(){return!1}};typeof Symbol<"u"&&(ge.prototype[Symbol.iterator]=function(){return this.iter()},as.prototype[Symbol.iterator]=Yc.prototype[Symbol.iterator]=zc.prototype[Symbol.iterator]=function(){return this});var bd=class{constructor(e,n,i,r){this.from=e,this.to=n,this.number=i,this.text=r}get length(){return this.to-this.from}};function so(t,e,n){return e=Math.max(0,Math.min(t.length,e)),[e,Math.max(e,Math.min(t.length,n))]}function at(t,e,n=!0,i=!0){return v0(t,e,n,i)}function tQ(t){return t>=56320&&t<57344}function nQ(t){return t>=55296&&t<56320}function Pt(t,e){let n=t.charCodeAt(e);if(!nQ(n)||e+1==t.length)return n;let i=t.charCodeAt(e+1);return tQ(i)?(n-55296<<10)+(i-56320)+65536:n}function va(t){return t<=65535?String.fromCharCode(t):(t-=65536,String.fromCharCode((t>>10)+55296,(t&1023)+56320))}function mn(t){return t<65536?1:2}var yd=/\r\n?|\n/,wt=(function(t){return t[t.Simple=0]="Simple",t[t.TrackDel=1]="TrackDel",t[t.TrackBefore=2]="TrackBefore",t[t.TrackAfter=3]="TrackAfter",t})(wt||(wt={})),Yi=class t{constructor(e){this.sections=e}get length(){let e=0;for(let n=0;n<this.sections.length;n+=2)e+=this.sections[n];return e}get newLength(){let e=0;for(let n=0;n<this.sections.length;n+=2){let i=this.sections[n+1];e+=i<0?this.sections[n]:i}return e}get empty(){return this.sections.length==0||this.sections.length==2&&this.sections[1]<0}iterGaps(e){for(let n=0,i=0,r=0;n<this.sections.length;){let s=this.sections[n++],o=this.sections[n++];o<0?(e(i,r,s),r+=s):r+=o,i+=s}}iterChangedRanges(e,n=!1){wd(this,e,n)}get invertedDesc(){let e=[];for(let n=0;n<this.sections.length;){let i=this.sections[n++],r=this.sections[n++];r<0?e.push(i,r):e.push(r,i)}return new t(e)}composeDesc(e){return this.empty?e:e.empty?this:F0(this,e)}mapDesc(e,n=!1){return e.empty?this:kd(this,e,n)}mapPos(e,n=-1,i=wt.Simple){let r=0,s=0;for(let o=0;o<this.sections.length;){let a=this.sections[o++],l=this.sections[o++],c=r+a;if(l<0){if(c>e)return s+(e-r);s+=a}else{if(i!=wt.Simple&&c>=e&&(i==wt.TrackDel&&r<e&&c>e||i==wt.TrackBefore&&r<e||i==wt.TrackAfter&&c>e))return null;if(c>e||c==e&&n<0&&!a)return e==r||n<0?s:s+l;s+=l}r=c}if(e>r)throw new RangeError(`Position ${e} is out of range for changeset of length ${r}`);return s}touchesRange(e,n=e){for(let i=0,r=0;i<this.sections.length&&r<=n;){let s=this.sections[i++],o=this.sections[i++],a=r+s;if(o>=0&&r<=n&&a>=e)return r<e&&a>n?"cover":!0;r=a}return!1}toString(){let e="";for(let n=0;n<this.sections.length;){let i=this.sections[n++],r=this.sections[n++];e+=(e?" ":"")+i+(r>=0?":"+r:"")}return e}toJSON(){return this.sections}static fromJSON(e){if(!Array.isArray(e)||e.length%2||e.some(n=>typeof n!="number"))throw new RangeError("Invalid JSON representation of ChangeDesc");return new t(e)}static create(e){return new t(e)}},Wt=class t extends Yi{constructor(e,n){super(e),this.inserted=n}apply(e){if(this.length!=e.length)throw new RangeError("Applying change set to a document with the wrong length");return wd(this,(n,i,r,s,o)=>e=e.replace(r,r+(i-n),o),!1),e}mapDesc(e,n=!1){return kd(this,e,n,!0)}invert(e){let n=this.sections.slice(),i=[];for(let r=0,s=0;r<n.length;r+=2){let o=n[r],a=n[r+1];if(a>=0){n[r]=a,n[r+1]=o;let l=r>>1;for(;i.length<l;)i.push(ge.empty);i.push(o?e.slice(s,s+o):ge.empty)}s+=o}return new t(n,i)}compose(e){return this.empty?e:e.empty?this:F0(this,e,!0)}map(e,n=!1){return e.empty?this:kd(this,e,n,!0)}iterChanges(e,n=!1){wd(this,e,n)}get desc(){return Yi.create(this.sections)}filter(e){let n=[],i=[],r=[],s=new ls(this);e:for(let o=0,a=0;;){let l=o==e.length?1e9:e[o++];for(;a<l||a==l&&s.len==0;){if(s.done)break e;let u=Math.min(s.len,l-a);Mt(r,u,-1);let h=s.ins==-1?-1:s.off==0?s.ins:0;Mt(n,u,h),h>0&&br(i,n,s.text),s.forward(u),a+=u}let c=e[o++];for(;a<c;){if(s.done)break e;let u=Math.min(s.len,c-a);Mt(n,u,-1),Mt(r,u,s.ins==-1?-1:s.off==0?s.ins:0),s.forward(u),a+=u}}return{changes:new t(n,i),filtered:Yi.create(r)}}toJSON(){let e=[];for(let n=0;n<this.sections.length;n+=2){let i=this.sections[n],r=this.sections[n+1];r<0?e.push(i):r==0?e.push([i]):e.push([i].concat(this.inserted[n>>1].toJSON()))}return e}static of(e,n,i){let r=[],s=[],o=0,a=null;function l(u=!1){if(!u&&!r.length)return;o<n&&Mt(r,n-o,-1);let h=new t(r,s);a=a?a.compose(h.map(a)):h,r=[],s=[],o=0}function c(u){if(Array.isArray(u))for(let h of u)c(h);else if(u instanceof t){if(u.length!=n)throw new RangeError(`Mismatched change set length (got ${u.length}, expected ${n})`);l(),a=a?a.compose(u.map(a)):u}else{let{from:h,to:f=h,insert:d}=u;if(h>f||h<0||f>n)throw new RangeError(`Invalid change range ${h} to ${f} (in doc of length ${n})`);let p=d?typeof d=="string"?ge.of(d.split(i||yd)):d:ge.empty,m=p.length;if(h==f&&m==0)return;h<o&&l(),h>o&&Mt(r,h-o,-1),Mt(r,f-h,m),br(s,r,p),o=f}}return c(e),l(!a),a}static empty(e){return new t(e?[e,-1]:[],[])}static fromJSON(e){if(!Array.isArray(e))throw new RangeError("Invalid JSON representation of ChangeSet");let n=[],i=[];for(let r=0;r<e.length;r++){let s=e[r];if(typeof s=="number")n.push(s,-1);else{if(!Array.isArray(s)||typeof s[0]!="number"||s.some((o,a)=>a&&typeof o!="string"))throw new RangeError("Invalid JSON representation of ChangeSet");if(s.length==1)n.push(s[0],0);else{for(;i.length<r;)i.push(ge.empty);i[r]=ge.of(s.slice(1)),n.push(s[0],i[r].length)}}}return new t(n,i)}static createSet(e,n){return new t(e,n)}};function Mt(t,e,n,i=!1){if(e==0&&n<=0)return;let r=t.length-2;r>=0&&n<=0&&n==t[r+1]?t[r]+=e:r>=0&&e==0&&t[r]==0?t[r+1]+=n:i?(t[r]+=e,t[r+1]+=n):t.push(e,n)}function br(t,e,n){if(n.length==0)return;let i=e.length-2>>1;if(i<t.length)t[t.length-1]=t[t.length-1].append(n);else{for(;t.length<i;)t.push(ge.empty);t.push(n)}}function wd(t,e,n){let i=t.inserted;for(let r=0,s=0,o=0;o<t.sections.length;){let a=t.sections[o++],l=t.sections[o++];if(l<0)r+=a,s+=a;else{let c=r,u=s,h=ge.empty;for(;c+=a,u+=l,l&&i&&(h=h.append(i[o-2>>1])),!(n||o==t.sections.length||t.sections[o+1]<0);)a=t.sections[o++],l=t.sections[o++];e(r,c,s,u,h),r=c,s=u}}}function kd(t,e,n,i=!1){let r=[],s=i?[]:null,o=new ls(t),a=new ls(e);for(let l=-1;;){if(o.done&&a.len||a.done&&o.len)throw new Error("Mismatched change set lengths");if(o.ins==-1&&a.ins==-1){let c=Math.min(o.len,a.len);Mt(r,c,-1),o.forward(c),a.forward(c)}else if(a.ins>=0&&(o.ins<0||l==o.i||o.off==0&&(a.len<o.len||a.len==o.len&&!n))){let c=a.len;for(Mt(r,a.ins,-1);c;){let u=Math.min(o.len,c);o.ins>=0&&l<o.i&&o.len<=u&&(Mt(r,0,o.ins),s&&br(s,r,o.text),l=o.i),o.forward(u),c-=u}a.next()}else if(o.ins>=0){let c=0,u=o.len;for(;u;)if(a.ins==-1){let h=Math.min(u,a.len);c+=h,u-=h,a.forward(h)}else if(a.ins==0&&a.len<u)u-=a.len,a.next();else break;Mt(r,c,l<o.i?o.ins:0),s&&l<o.i&&br(s,r,o.text),l=o.i,o.forward(o.len-u)}else{if(o.done&&a.done)return s?Wt.createSet(r,s):Yi.create(r);throw new Error("Mismatched change set lengths")}}}function F0(t,e,n=!1){let i=[],r=n?[]:null,s=new ls(t),o=new ls(e);for(let a=!1;;){if(s.done&&o.done)return r?Wt.createSet(i,r):Yi.create(i);if(s.ins==0)Mt(i,s.len,0,a),s.next();else if(o.len==0&&!o.done)Mt(i,0,o.ins,a),r&&br(r,i,o.text),o.next();else{if(s.done||o.done)throw new Error("Mismatched change set lengths");{let l=Math.min(s.len2,o.len),c=i.length;if(s.ins==-1){let u=o.ins==-1?-1:o.off?0:o.ins;Mt(i,l,u,a),r&&u&&br(r,i,o.text)}else o.ins==-1?(Mt(i,s.off?0:s.len,l,a),r&&br(r,i,s.textBit(l))):(Mt(i,s.off?0:s.len,o.off?0:o.ins,a),r&&!o.off&&br(r,i,o.text));a=(s.ins>l||o.ins>=0&&o.len>l)&&(a||i.length>c),s.forward2(l),o.forward(l)}}}}var ls=class{constructor(e){this.set=e,this.i=0,this.next()}next(){let{sections:e}=this.set;this.i<e.length?(this.len=e[this.i++],this.ins=e[this.i++]):(this.len=0,this.ins=-2),this.off=0}get done(){return this.ins==-2}get len2(){return this.ins<0?this.len:this.ins}get text(){let{inserted:e}=this.set,n=this.i-2>>1;return n>=e.length?ge.empty:e[n]}textBit(e){let{inserted:n}=this.set,i=this.i-2>>1;return i>=n.length&&!e?ge.empty:n[i].slice(this.off,e==null?void 0:this.off+e)}forward(e){e==this.len?this.next():(this.len-=e,this.off+=e)}forward2(e){this.ins==-1?this.forward(e):e==this.ins?this.next():(this.ins-=e,this.off+=e)}},rs=class t{constructor(e,n,i,r){this.from=e,this.to=n,this.flags=i,this.goalColumn=r}get anchor(){return this.flags&32?this.to:this.from}get head(){return this.flags&32?this.from:this.to}get empty(){return this.from==this.to}get assoc(){return this.flags&8?-1:this.flags&16?1:0}get undirectional(){return(this.flags&64)>0}get bidiLevel(){let e=this.flags&7;return e==7?null:e}map(e,n=-1){let i,r;return this.empty?i=r=e.mapPos(this.from,n):(i=e.mapPos(this.from,1),r=e.mapPos(this.to,-1)),i==this.from&&r==this.to?this:new t(i,r,this.flags,this.goalColumn)}extend(e,n=e,i=0){if(e<=this.anchor&&n>=this.anchor)return Q.range(e,n,void 0,void 0,i);let r=Math.abs(e-this.anchor)>Math.abs(n-this.anchor)?e:n;return Q.range(this.anchor,r,void 0,void 0,i)}eq(e,n=!1){return this.anchor==e.anchor&&this.head==e.head&&this.goalColumn==e.goalColumn&&(!n||!this.empty||this.assoc==e.assoc)}toJSON(){return{anchor:this.anchor,head:this.head}}static fromJSON(e){if(!e||typeof e.anchor!="number"||typeof e.head!="number")throw new RangeError("Invalid JSON representation for SelectionRange");return Q.range(e.anchor,e.head)}static create(e,n,i,r){return new t(e,n,i,r)}},Q=class t{constructor(e,n){this.ranges=e,this.mainIndex=n}map(e,n=-1){return e.empty?this:t.create(this.ranges.map(i=>i.map(e,n)),this.mainIndex)}eq(e,n=!1){if(this.ranges.length!=e.ranges.length||this.mainIndex!=e.mainIndex)return!1;for(let i=0;i<this.ranges.length;i++)if(!this.ranges[i].eq(e.ranges[i],n))return!1;return!0}get main(){return this.ranges[this.mainIndex]}asSingle(){return this.ranges.length==1?this:new t([this.main],0)}addRange(e,n=!0){return t.create([e].concat(this.ranges),n?0:this.mainIndex+1)}replaceRange(e,n=this.mainIndex){let i=this.ranges.slice();return i[n]=e,t.create(i,this.mainIndex)}toJSON(){return{ranges:this.ranges.map(e=>e.toJSON()),main:this.mainIndex}}static fromJSON(e){if(!e||!Array.isArray(e.ranges)||typeof e.main!="number"||e.main>=e.ranges.length)throw new RangeError("Invalid JSON representation for EditorSelection");return new t(e.ranges.map(n=>rs.fromJSON(n)),e.main)}static single(e,n=e){return new t([t.range(e,n)],0)}static create(e,n=0){if(e.length==0)throw new RangeError("A selection needs at least one range");for(let i=0,r=0;r<e.length;r++){let s=e[r];if(s.empty?s.from<=i:s.from<i)return t.normalized(e.slice(),n);i=s.to}return new t(e,n)}static cursor(e,n=0,i,r){return rs.create(e,e,(n==0?0:n<0?8:16)|(i==null?7:Math.min(6,i)),r)}static range(e,n,i,r,s){let o=r==null?7:Math.min(6,r);return!s&&e!=n&&(s=n<e?1:-1),s&&(o|=s<0?8:16),n<e?rs.create(n,e,o|32,i):rs.create(e,n,o,i)}static undirectionalRange(e,n){return rs.create(e,n,64,void 0)}static normalized(e,n=0){let i=e[n];e.sort((r,s)=>r.from-s.from),n=e.indexOf(i);for(let r=1;r<e.length;r++){let s=e[r],o=e[r-1];if(s.empty?s.from<=o.to:s.from<o.to){let a=o.from,l=Math.max(s.to,o.to);r<=n&&n--,e.splice(--r,2,s.anchor>s.head?t.range(l,a):t.range(a,l))}}return new t(e,n)}};function I0(t,e){for(let n of t.ranges)if(n.to>e)throw new RangeError("Selection points outside of document")}var Td=0,z=class t{constructor(e,n,i,r,s){this.combine=e,this.compareInput=n,this.compare=i,this.isStatic=r,this.id=Td++,this.default=e([]),this.extensions=typeof s=="function"?s(this):s}get reader(){return this}static define(e={}){return new t(e.combine||(n=>n),e.compareInput||((n,i)=>n===i),e.compare||(e.combine?(n,i)=>n===i:Md),!!e.static,e.enables)}of(e){return new io([],this,0,e)}compute(e,n){if(this.isStatic)throw new Error("Can't compute a static facet");return new io(e,this,1,n)}computeN(e,n){if(this.isStatic)throw new Error("Can't compute a static facet");return new io(e,this,2,n)}from(e,n){return n||(n=i=>i),this.compute([e],i=>n(i.field(e)))}};function Md(t,e){return t==e||t.length==e.length&&t.every((n,i)=>n===e[i])}var io=class{constructor(e,n,i,r){this.dependencies=e,this.facet=n,this.type=i,this.value=r,this.id=Td++}dynamicSlot(e){var n;let i=this.value,r=this.facet.compareInput,s=this.id,o=e[s]>>1,a=this.type==2,l=!1,c=!1,u=[];for(let h of this.dependencies)h=="doc"?l=!0:h=="selection"?c=!0:(((n=e[h.id])!==null&&n!==void 0?n:1)&1)==0&&u.push(e[h.id]);return{create(h){return h.values[o]=i(h),1},update(h,f){if(l&&f.docChanged||c&&(f.docChanged||f.selection)||Sd(h,u)){let d=i(h);if(a?!$0(d,h.values[o],r):!r(d,h.values[o]))return h.values[o]=d,1}return 0},reconfigure:(h,f)=>{let d,p=f.config.address[s];if(p!=null){let m=qc(f,p);if(this.dependencies.every(g=>g instanceof z?f.facet(g)===h.facet(g):g instanceof be?f.field(g,!1)==h.field(g,!1):!0)||(a?$0(d=i(h),m,r):r(d=i(h),m)))return h.values[o]=m,0}else d=i(h);return h.values[o]=d,1}}}get extension(){return this}};function $0(t,e,n){if(t.length!=e.length)return!1;for(let i=0;i<t.length;i++)if(!n(t[i],e[i]))return!1;return!0}function Sd(t,e){let n=!1;for(let i of e)wa(t,i)&1&&(n=!0);return n}function iQ(t,e,n){let i=n.map(l=>t[l.id]),r=n.map(l=>l.type),s=i.filter(l=>!(l&1)),o=t[e.id]>>1;function a(l){let c=[];for(let u=0;u<i.length;u++){let h=qc(l,i[u]);if(r[u]==2)for(let f of h)c.push(f);else c.push(h)}return e.combine(c)}return{create(l){for(let c of i)wa(l,c);return l.values[o]=a(l),1},update(l,c){if(!Sd(l,s))return 0;let u=a(l);return e.compare(u,l.values[o])?0:(l.values[o]=u,1)},reconfigure(l,c){let u=Sd(l,i),h=c.config.facets[e.id],f=c.facet(e);if(h&&!u&&Md(n,h))return l.values[o]=f,0;let d=a(l);return e.compare(d,f)?(l.values[o]=f,0):(l.values[o]=d,1)}}}var Nc=z.define({static:!0}),be=class t{constructor(e,n,i,r,s){this.id=e,this.createF=n,this.updateF=i,this.compareF=r,this.spec=s,this.provides=void 0}static define(e){let n=new t(Td++,e.create,e.update,e.compare||((i,r)=>i===r),e);return e.provide&&(n.provides=e.provide(n)),n}create(e){let n=e.facet(Nc).find(i=>i.field==this);return(n?.create||this.createF)(e)}slot(e){let n=e[this.id]>>1;return{create:i=>(i.values[n]=this.create(i),1),update:(i,r)=>{let s=i.values[n],o=this.updateF(s,r);return this.compareF(s,o)?0:(i.values[n]=o,1)},reconfigure:(i,r)=>{let s=i.facet(Nc),o=r.facet(Nc),a;return(a=s.find(l=>l.field==this))&&a!=o.find(l=>l.field==this)?(i.values[n]=a.create(i),1):r.config.address[this.id]!=null?(i.values[n]=r.field(this),0):(i.values[n]=this.create(i),1)}}}init(e){return[this,Nc.of({field:this,create:e})]}get extension(){return this}},ss={lowest:4,low:3,default:2,high:1,highest:0};function ya(t){return e=>new jc(e,t)}var Ve={highest:ya(ss.highest),high:ya(ss.high),default:ya(ss.default),low:ya(ss.low),lowest:ya(ss.lowest)},jc=class{constructor(e,n){this.inner=e,this.prec=n}get extension(){return this}},gi=class t{of(e){return new ka(this,e)}reconfigure(e){return t.reconfigure.of({compartment:this,extension:e})}get(e){return e.config.compartments.get(this)}},ka=class{constructor(e,n){this.compartment=e,this.inner=n}get extension(){return this}},Vc=class t{constructor(e,n,i,r,s,o){for(this.base=e,this.compartments=n,this.dynamicSlots=i,this.address=r,this.staticValues=s,this.facets=o,this.statusTemplate=[];this.statusTemplate.length<i.length;)this.statusTemplate.push(0)}staticFacet(e){let n=this.address[e.id];return n==null?e.default:this.staticValues[n>>1]}static resolve(e,n,i){let r=[],s=Object.create(null),o=new Map;for(let f of rQ(e,n,o))f instanceof be?r.push(f):(s[f.facet.id]||(s[f.facet.id]=[])).push(f);let a=Object.create(null),l=[],c=[];for(let f of r)a[f.id]=c.length<<1,c.push(d=>f.slot(d));let u=i?.config.facets;for(let f in s){let d=s[f],p=d[0].facet,m=u&&u[f]||[];if(d.every(g=>g.type==0))if(a[p.id]=l.length<<1|1,Md(m,d))l.push(i.facet(p));else{let g=p.combine(d.map(O=>O.value));l.push(i&&p.compare(g,i.facet(p))?i.facet(p):g)}else{for(let g of d)g.type==0?(a[g.id]=l.length<<1|1,l.push(g.value)):(a[g.id]=c.length<<1,c.push(O=>g.dynamicSlot(O)));a[p.id]=c.length<<1,c.push(g=>iQ(g,p,d))}}let h=c.map(f=>f(a));return new t(e,o,h,a,l,s)}};function rQ(t,e,n){let i=[[],[],[],[],[]],r=new Map;function s(o,a){let l=r.get(o);if(l!=null){if(l<=a)return;let c=i[l].indexOf(o);c>-1&&i[l].splice(c,1),o instanceof ka&&n.delete(o.compartment)}if(r.set(o,a),Array.isArray(o))for(let c of o)s(c,a);else if(o instanceof ka){if(n.has(o.compartment))throw new RangeError("Duplicate use of compartment in extensions");let c=e.get(o.compartment)||o.inner;n.set(o.compartment,c),s(c,a)}else if(o instanceof jc)s(o.inner,o.prec);else if(o instanceof be)i[a].push(o),o.provides&&s(o.provides,a);else if(o instanceof io)i[a].push(o),o.facet.extensions&&s(o.facet.extensions,ss.default);else{let c=o.extension;if(!c)throw new Error(`Unrecognized extension value in extension set (${o}).`);if(c==o)throw new Error(`Unrecognized extension value in extension set (${o}). This sometimes happens because multiple instances of @codemirror/state are loaded, breaking instanceof checks.`);s(c,a)}}return s(t,ss.default),i.reduce((o,a)=>o.concat(a))}function wa(t,e){if(e&1)return 2;let n=e>>1,i=t.status[n];if(i==4)throw new Error("Cyclic dependency between fields and/or facets");if(i&2)return i;t.status[n]=4;let r=t.computeSlot(t,t.config.dynamicSlots[n]);return t.status[n]=2|r}function qc(t,e){return e&1?t.config.staticValues[e>>1]:t.values[e>>1]}var _0=z.define(),xd=z.define({combine:t=>t.some(e=>e),static:!0}),B0=z.define({combine:t=>t.length?t[0]:void 0,static:!0}),R0=z.define(),L0=z.define(),N0=z.define(),Z0=z.define({combine:t=>t.length?t[0]:!1}),Ft=class{constructor(e,n){this.type=e,this.value=n}static define(){return new vd}},vd=class{of(e){return new Ft(this,e)}},Cd=class{constructor(e){this.map=e}of(e){return new te(this,e)}},te=class t{constructor(e,n){this.type=e,this.value=n}map(e){let n=this.type.map(this.value,e);return n===void 0?void 0:n==this.value?this:new t(this.type,n)}is(e){return this.type==e}static define(e={}){return new Cd(e.map||(n=>n))}static mapEffects(e,n){if(!e.length)return e;let i=[];for(let r of e){let s=r.map(n);s&&i.push(s)}return i}};te.reconfigure=te.define();te.appendConfig=te.define();var $e=class t{constructor(e,n,i,r,s,o){this.startState=e,this.changes=n,this.selection=i,this.effects=r,this.annotations=s,this.scrollIntoView=o,this._doc=null,this._state=null,i&&I0(i,n.newLength),s.some(a=>a.type==t.time)||(this.annotations=s.concat(t.time.of(Date.now())))}static create(e,n,i,r,s,o){return new t(e,n,i,r,s,o)}get newDoc(){return this._doc||(this._doc=this.changes.apply(this.startState.doc))}get newSelection(){return this.selection||this.startState.selection.map(this.changes)}get state(){return this._state||this.startState.applyTransaction(this),this._state}annotation(e){for(let n of this.annotations)if(n.type==e)return n.value}get docChanged(){return!this.changes.empty}get reconfigured(){return this.startState.config!=this.state.config}isUserEvent(e){let n=this.annotation(t.userEvent);return!!(n&&(n==e||n.length>e.length&&n.slice(0,e.length)==e&&n[e.length]=="."))}};$e.time=Ft.define();$e.userEvent=Ft.define();$e.addToHistory=Ft.define();$e.remote=Ft.define();function sQ(t,e){let n=[];for(let i=0,r=0;;){let s,o;if(i<t.length&&(r==e.length||e[r]>=t[i]))s=t[i++],o=t[i++];else if(r<e.length)s=e[r++],o=e[r++];else return n;!n.length||n[n.length-1]<s?n.push(s,o):n[n.length-1]<o&&(n[n.length-1]=o)}}function X0(t,e,n){var i;let r,s,o;return n?(r=e.changes,s=Wt.empty(e.changes.length),o=t.changes.compose(e.changes)):(r=e.changes.map(t.changes),s=t.changes.mapDesc(e.changes,!0),o=t.changes.compose(r)),{changes:o,selection:e.selection?e.selection.map(s):(i=t.selection)===null||i===void 0?void 0:i.map(r),effects:te.mapEffects(t.effects,r).concat(te.mapEffects(e.effects,s)),annotations:t.annotations.length?t.annotations.concat(e.annotations):e.annotations,scrollIntoView:t.scrollIntoView||e.scrollIntoView}}function Dd(t,e,n){let i=e.selection,r=ro(e.annotations);return e.userEvent&&(r=r.concat($e.userEvent.of(e.userEvent))),{changes:e.changes instanceof Wt?e.changes:Wt.of(e.changes||[],n,t.facet(B0)),selection:i&&(i instanceof Q?i:Q.single(i.anchor,i.head)),effects:ro(e.effects),annotations:r,scrollIntoView:!!e.scrollIntoView}}function W0(t,e,n){let i=Dd(t,e.length?e[0]:{},t.doc.length);e.length&&e[0].filter===!1&&(n=!1);for(let s=1;s<e.length;s++){e[s].filter===!1&&(n=!1);let o=!!e[s].sequential;i=X0(i,Dd(t,e[s],o?i.changes.newLength:t.doc.length),o)}let r=$e.create(t,i.changes,i.selection,i.effects,i.annotations,i.scrollIntoView);return aQ(n?oQ(r):r)}function oQ(t){let e=t.startState,n=!0;for(let r of e.facet(R0)){let s=r(t);if(s===!1){n=!1;break}Array.isArray(s)&&(n=n===!0?s:sQ(n,s))}if(n!==!0){let r,s;if(n===!1)s=t.changes.invertedDesc,r=Wt.empty(e.doc.length);else{let o=t.changes.filter(n);r=o.changes,s=o.filtered.mapDesc(o.changes).invertedDesc}t=$e.create(e,r,t.selection&&t.selection.map(s),te.mapEffects(t.effects,s),t.annotations,t.scrollIntoView)}let i=e.facet(L0);for(let r=i.length-1;r>=0;r--){let s=i[r](t);s instanceof $e?t=s:Array.isArray(s)&&s.length==1&&s[0]instanceof $e?t=s[0]:t=W0(e,ro(s),!1)}return t}function aQ(t){let e=t.startState,n=e.facet(N0),i=t;for(let r=n.length-1;r>=0;r--){let s=n[r](t);s&&Object.keys(s).length&&(i=X0(i,Dd(e,s,t.changes.newLength),!0))}return i==t?t:$e.create(e,t.changes,t.selection,i.effects,i.annotations,i.scrollIntoView)}var lQ=[];function ro(t){return t==null?lQ:Array.isArray(t)?t:[t]}var Ge=(function(t){return t[t.Word=0]="Word",t[t.Space=1]="Space",t[t.Other=2]="Other",t})(Ge||(Ge={})),cQ=/[\u00df\u0587\u0590-\u05f4\u0600-\u06ff\u3040-\u309f\u30a0-\u30ff\u3400-\u4db5\u4e00-\u9fcc\uac00-\ud7af]/,Ed;try{Ed=new RegExp("[\\p{Alphabetic}\\p{Number}_]","u")}catch{}function uQ(t){if(Ed)return Ed.test(t);for(let e=0;e<t.length;e++){let n=t[e];if(/\w/.test(n)||n>"\x80"&&(n.toUpperCase()!=n.toLowerCase()||cQ.test(n)))return!0}return!1}function hQ(t){return e=>{if(!/\S/.test(e))return Ge.Space;if(uQ(e))return Ge.Word;for(let n=0;n<t.length;n++)if(e.indexOf(t[n])>-1)return Ge.Word;return Ge.Other}}var Oe=class t{constructor(e,n,i,r,s,o){this.config=e,this.doc=n,this.selection=i,this.values=r,this.status=e.statusTemplate.slice(),this.computeSlot=s,o&&(o._state=this);for(let a=0;a<this.config.dynamicSlots.length;a++)wa(this,a<<1);this.computeSlot=null}field(e,n=!0){let i=this.config.address[e.id];if(i==null){if(n)throw new RangeError("Field is not present in this state");return}return wa(this,i),qc(this,i)}update(...e){return W0(this,e,!0)}applyTransaction(e){let n=this.config,{base:i,compartments:r}=n;for(let a of e.effects)a.is(gi.reconfigure)?(n&&(r=new Map,n.compartments.forEach((l,c)=>r.set(c,l)),n=null),r.set(a.value.compartment,a.value.extension)):a.is(te.reconfigure)?(n=null,i=a.value):a.is(te.appendConfig)&&(n=null,i=ro(i).concat(a.value));let s;n?s=e.startState.values.slice():(n=Vc.resolve(i,r,this),s=new t(n,this.doc,this.selection,n.dynamicSlots.map(()=>null),(l,c)=>c.reconfigure(l,this),null).values);let o=e.startState.facet(xd)?e.newSelection:e.newSelection.asSingle();new t(n,e.newDoc,o,s,(a,l)=>l.update(a,e),e)}replaceSelection(e){return typeof e=="string"&&(e=this.toText(e)),this.changeByRange(n=>({changes:{from:n.from,to:n.to,insert:e},range:Q.cursor(n.from+e.length)}))}changeByRange(e){let n=this.selection,i=e(n.ranges[0]),r=this.changes(i.changes),s=[i.range],o=ro(i.effects);for(let a=1;a<n.ranges.length;a++){let l=e(n.ranges[a]),c=this.changes(l.changes),u=c.map(r);for(let f=0;f<a;f++)s[f]=s[f].map(u);let h=r.mapDesc(c,!0);s.push(l.range.map(h)),r=r.compose(u),o=te.mapEffects(o,u).concat(te.mapEffects(ro(l.effects),h))}return{changes:r,selection:Q.create(s,n.mainIndex),effects:o}}changes(e=[]){return e instanceof Wt?e:Wt.of(e,this.doc.length,this.facet(t.lineSeparator))}toText(e){return ge.of(e.split(this.facet(t.lineSeparator)||yd))}sliceDoc(e=0,n=this.doc.length){return this.doc.sliceString(e,n,this.lineBreak)}facet(e){let n=this.config.address[e.id];return n==null?e.default:(wa(this,n),qc(this,n))}toJSON(e){let n={doc:this.sliceDoc(),selection:this.selection.toJSON()};if(e)for(let i in e){let r=e[i];r instanceof be&&this.config.address[r.id]!=null&&(n[i]=r.spec.toJSON(this.field(e[i]),this))}return n}static fromJSON(e,n={},i){if(!e||typeof e.doc!="string")throw new RangeError("Invalid JSON representation for EditorState");let r=[];if(i){for(let s in i)if(Object.prototype.hasOwnProperty.call(e,s)){let o=i[s],a=e[s];r.push(o.init(l=>o.spec.fromJSON(a,l)))}}return t.create({doc:e.doc,selection:Q.fromJSON(e.selection),extensions:n.extensions?r.concat([n.extensions]):r})}static create(e={}){let n=Vc.resolve(e.extensions||[],new Map),i=e.doc instanceof ge?e.doc:ge.of((e.doc||"").split(n.staticFacet(t.lineSeparator)||yd)),r=e.selection?e.selection instanceof Q?e.selection:Q.single(e.selection.anchor,e.selection.head):Q.single(0);return I0(r,i.length),n.staticFacet(xd)||(r=r.asSingle()),new t(n,i,r,n.dynamicSlots.map(()=>null),(s,o)=>o.create(s),null)}get tabSize(){return this.facet(t.tabSize)}get lineBreak(){return this.facet(t.lineSeparator)||`
@@ -235,1082 +235,1082 @@ ${h}  `;r.push(`${h}${u}${c.replace(/\n/g,f)}`.trimEnd());for(let d of a)r.push(
 `,`
 $$`),"editor.codeBlock":Bi("```\n","\n```"),"editor.horizontalRule":t=>(t.dispatch(t.state.replaceSelection(`
 ---
-`)),!0),"editor.fold":O1,"editor.unfold":A1};for(let t=1;t<=6;t++)lc[`editor.heading${t}`]=SN(t);function TC(t,e){return lc[t]?.(e)??!1}var MC=[{key:"*",run:kN},{key:"Mod-b",run:lc["editor.bold"]},{key:"Mod-i",run:lc["editor.italic"]},{key:"Mod-k",run:lc["editor.link"]}];var FC=`/*
- * Adapted from Obsidian LaTeX Suite's default_snippets.js at commit 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.
- * Copyright (c) 2022 artisticat1; SPDX-License-Identifier: MIT
- *
- * Regular-expression triggers are stored as strings with the "r" option.
- * Phi's four built-in handler names preserve the upstream function snippets
- * without evaluating arbitrary JavaScript from the settings file.
- */
-[
-  {
-    "trigger": "mk",
-    "replacement": "$$0$",
-    "options": "tA"
-  },
-  {
-    "trigger": "mk",
-    "replacement": "\\\\($0\\\\)",
-    "options": "TA"
-  },
-  {
-    "trigger": "dm",
-    "replacement": "$$\\n$0\\n$$",
-    "options": "tAw"
-  },
-  {
-    "trigger": "(\\\\S\\\\s*)dm",
-    "replacement": "[[0]]\\n$$\\n$0\\n$$",
-    "options": "rtAw",
-    "priority": 1
-  },
-  {
-    "trigger": "([^\\\\\\\\])beg",
-    "replacement": "[[0]]\\\\begin{$0}\\n$1\\n\\\\end{$0}",
-    "options": "rMA"
-  },
-  {
-    "trigger": "([^\\\\\\\\])beg",
-    "replacement": "[[0]]\\\\begin{$0} $1 \\\\end{$0}",
-    "options": "rnA"
-  },
-  {
-    "trigger": "@a",
-    "replacement": "\\\\alpha",
-    "options": "mA"
-  },
-  {
-    "trigger": "@b",
-    "replacement": "\\\\beta",
-    "options": "mA"
-  },
-  {
-    "trigger": "@g",
-    "replacement": "\\\\gamma",
-    "options": "mA"
-  },
-  {
-    "trigger": "@G",
-    "replacement": "\\\\Gamma",
-    "options": "mA"
-  },
-  {
-    "trigger": "@d",
-    "replacement": "\\\\delta",
-    "options": "mA"
-  },
-  {
-    "trigger": "@D",
-    "replacement": "\\\\Delta",
-    "options": "mA"
-  },
-  {
-    "trigger": "@e",
-    "replacement": "\\\\epsilon",
-    "options": "mA"
-  },
-  {
-    "trigger": ":e",
-    "replacement": "\\\\varepsilon",
-    "options": "mA"
-  },
-  {
-    "trigger": "@z",
-    "replacement": "\\\\zeta",
-    "options": "mA"
-  },
-  {
-    "trigger": "@t",
-    "replacement": "\\\\theta",
-    "options": "mA"
-  },
-  {
-    "trigger": "@T",
-    "replacement": "\\\\Theta",
-    "options": "mA"
-  },
-  {
-    "trigger": ":t",
-    "replacement": "\\\\vartheta",
-    "options": "mA"
-  },
-  {
-    "trigger": "@i",
-    "replacement": "\\\\iota",
-    "options": "mA"
-  },
-  {
-    "trigger": "@k",
-    "replacement": "\\\\kappa",
-    "options": "mA"
-  },
-  {
-    "trigger": "@l",
-    "replacement": "\\\\lambda",
-    "options": "mA"
-  },
-  {
-    "trigger": "@L",
-    "replacement": "\\\\Lambda",
-    "options": "mA"
-  },
-  {
-    "trigger": "@s",
-    "replacement": "\\\\sigma",
-    "options": "mA"
-  },
-  {
-    "trigger": "@S",
-    "replacement": "\\\\Sigma",
-    "options": "mA"
-  },
-  {
-    "trigger": "@u",
-    "replacement": "\\\\upsilon",
-    "options": "mA"
-  },
-  {
-    "trigger": "@U",
-    "replacement": "\\\\Upsilon",
-    "options": "mA"
-  },
-  {
-    "trigger": "@o",
-    "replacement": "\\\\omega",
-    "options": "mA"
-  },
-  {
-    "trigger": "@O",
-    "replacement": "\\\\Omega",
-    "options": "mA"
-  },
-  {
-    "trigger": "ome",
-    "replacement": "\\\\omega",
-    "options": "mA"
-  },
-  {
-    "trigger": "Ome",
-    "replacement": "\\\\Omega",
-    "options": "mA"
-  },
-  {
-    "trigger": "text",
-    "replacement": "\\\\text{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "\\"",
-    "replacement": "\\\\text{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "sr",
-    "replacement": "^{2}",
-    "options": "mA"
-  },
-  {
-    "trigger": "cb",
-    "replacement": "^{3}",
-    "options": "mA"
-  },
-  {
-    "trigger": "rd",
-    "replacement": "^{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "_",
-    "replacement": "_{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "sts",
-    "replacement": "_\\\\text{$0}",
-    "options": "mA"
-  },
-  {
-    "trigger": "sq",
-    "replacement": "\\\\sqrt{ $0 }$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "//",
-    "replacement": "\\\\frac{$0}{$1}$2",
-    "options": "mA"
-  },
-  {
-    "trigger": "\\\\bee",
-    "replacement": "e^{ $0 }$1",
-    "options": "rmA"
-  },
-  {
-    "trigger": "invs",
-    "replacement": "^{-1}",
-    "options": "mA"
-  },
-  {
-    "trigger": "([^\\\\\\\\])(exp|log|ln)",
-    "replacement": "[[0]]\\\\[[1]]",
-    "options": "rmA"
-  },
-  {
-    "trigger": "conj",
-    "replacement": "^{*}",
-    "options": "mA"
-  },
-  {
-    "trigger": "Re",
-    "replacement": "\\\\mathrm{Re}",
-    "options": "mA"
-  },
-  {
-    "trigger": "Im",
-    "replacement": "\\\\mathrm{Im}",
-    "options": "mA"
-  },
-  {
-    "trigger": "bf",
-    "replacement": "\\\\mathbf{$0}",
-    "options": "mA"
-  },
-  {
-    "trigger": "rm",
-    "replacement": "\\\\mathrm{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "([^\\\\\\\\])(det)",
-    "replacement": "[[0]]\\\\[[1]]",
-    "options": "rmA"
-  },
-  {
-    "trigger": "trace",
-    "replacement": "\\\\mathrm{Tr}",
-    "options": "mA"
-  },
-  {
-    "trigger": "([a-zA-Z])hat",
-    "replacement": "\\\\hat{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "([a-zA-Z])bar",
-    "replacement": "\\\\bar{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "([a-zA-Z])dot",
-    "replacement": "\\\\dot{[[0]]}",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "([a-zA-Z])ddot",
-    "replacement": "\\\\ddot{[[0]]}",
-    "options": "rmA",
-    "priority": 1
-  },
-  {
-    "trigger": "([a-zA-Z])tilde",
-    "replacement": "\\\\tilde{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "([a-zA-Z])und",
-    "replacement": "\\\\underline{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "([a-zA-Z])vec",
-    "replacement": "\\\\vec{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "([a-zA-Z]),\\\\.",
-    "replacement": "\\\\mathbf{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "([a-zA-Z])\\\\.,",
-    "replacement": "\\\\mathbf{[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}),\\\\.",
-    "replacement": "\\\\boldsymbol{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK})\\\\.,",
-    "replacement": "\\\\boldsymbol{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "hat",
-    "replacement": "\\\\hat{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "bar",
-    "replacement": "\\\\bar{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "dot",
-    "replacement": "\\\\dot{$0}$1",
-    "options": "mA",
-    "priority": -1
-  },
-  {
-    "trigger": "ddot",
-    "replacement": "\\\\ddot{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "cdot",
-    "replacement": "\\\\cdot",
-    "options": "mA"
-  },
-  {
-    "trigger": "tilde",
-    "replacement": "\\\\tilde{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "und",
-    "replacement": "\\\\underline{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "vec",
-    "replacement": "\\\\vec{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "pmod",
-    "replacement": "\\\\pmod{\${0:n}}$1",
-    "options": "mA",
-    "description": "Parenthesized modulo (\\\\pmod{n})"
-  },
-  {
-    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])(\\\\d)",
-    "replacement": "[[0]]_{[[1]]}",
-    "options": "rmA",
-    "priority": -1,
-    "excludedMacros": [
-      "pu",
-      "ce"
-    ]
-  },
-  {
-    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])_{(\\\\d+)}(\\\\d)",
-    "replacement": "[[0]]_{[[1]][[2]]}",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}(\\\\d)",
-    "replacement": "\\\\[[0]]{[[1]]}_{[[2]]}",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",
-    "replacement": "\\\\[[0]]{[[1]]}_{[[2]][[3]]}",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}(\\\\d)",
-    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]]}",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",
-    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]][[4]]}",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "xnn",
-    "replacement": "x_{n}",
-    "options": "mA"
-  },
-  {
-    "trigger": "\\\\xii",
-    "replacement": "x_{i}",
-    "options": "mA",
-    "priority": 1
-  },
-  {
-    "trigger": "xjj",
-    "replacement": "x_{j}",
-    "options": "mA"
-  },
-  {
-    "trigger": "xp1",
-    "replacement": "x_{n+1}",
-    "options": "mA"
-  },
-  {
-    "trigger": "ynn",
-    "replacement": "y_{n}",
-    "options": "mA"
-  },
-  {
-    "trigger": "yii",
-    "replacement": "y_{i}",
-    "options": "mA"
-  },
-  {
-    "trigger": "yjj",
-    "replacement": "y_{j}",
-    "options": "mA"
-  },
-  {
-    "trigger": "ooo",
-    "replacement": "\\\\infty",
-    "options": "mA"
-  },
-  {
-    "trigger": "sum",
-    "replacement": "\\\\sum",
-    "options": "mA"
-  },
-  {
-    "trigger": "prod",
-    "replacement": "\\\\prod",
-    "options": "mA"
-  },
-  {
-    "trigger": "\\\\sum",
-    "replacement": "\\\\sum_{\${0:i}=\${1:1}}^{\${2:N}} $3",
-    "options": "m"
-  },
-  {
-    "trigger": "\\\\prod",
-    "replacement": "\\\\prod_{\${0:i}=\${1:1}}^{\${2:N}} $3",
-    "options": "m"
-  },
-  {
-    "trigger": "lim",
-    "replacement": "\\\\lim_{ \${0:n} \\\\to \${1:\\\\infty} } $2",
-    "options": "mA"
-  },
-  {
-    "trigger": "+-",
-    "replacement": "\\\\pm",
-    "options": "mA"
-  },
-  {
-    "trigger": "-+",
-    "replacement": "\\\\mp",
-    "options": "mA"
-  },
-  {
-    "trigger": "...",
-    "replacement": "\\\\dots",
-    "options": "mA"
-  },
-  {
-    "trigger": "nabl",
-    "replacement": "\\\\nabla",
-    "options": "mA"
-  },
-  {
-    "trigger": "xx",
-    "replacement": "\\\\times",
-    "options": "mA"
-  },
-  {
-    "trigger": "**",
-    "replacement": "\\\\cdot",
-    "options": "mA"
-  },
-  {
-    "trigger": "para",
-    "replacement": "\\\\parallel",
-    "options": "mA"
-  },
-  {
-    "trigger": "deg",
-    "replacement": "\\\\degree",
-    "options": "mA"
-  },
-  {
-    "trigger": "===",
-    "replacement": "\\\\equiv",
-    "options": "mA"
-  },
-  {
-    "trigger": "!=",
-    "replacement": "\\\\neq",
-    "options": "mA"
-  },
-  {
-    "trigger": ">=",
-    "replacement": "\\\\geq",
-    "options": "mA"
-  },
-  {
-    "trigger": "<=",
-    "replacement": "\\\\leq",
-    "options": "mA"
-  },
-  {
-    "trigger": ">>",
-    "replacement": "\\\\gg",
-    "options": "mA"
-  },
-  {
-    "trigger": "<<",
-    "replacement": "\\\\ll",
-    "options": "mA"
-  },
-  {
-    "trigger": "simm",
-    "replacement": "\\\\sim",
-    "options": "mA"
-  },
-  {
-    "trigger": "sim=",
-    "replacement": "\\\\simeq",
-    "options": "mA"
-  },
-  {
-    "trigger": "prop",
-    "replacement": "\\\\propto",
-    "options": "mA"
-  },
-  {
-    "trigger": "<->",
-    "replacement": "\\\\leftrightarrow ",
-    "options": "mA"
-  },
-  {
-    "trigger": "->",
-    "replacement": "\\\\to",
-    "options": "mA",
-    "excludedMacros": [
-      "ce"
-    ]
-  },
-  {
-    "trigger": "!>",
-    "replacement": "\\\\mapsto",
-    "options": "mA"
-  },
-  {
-    "trigger": "=>",
-    "replacement": "\\\\implies",
-    "options": "mA"
-  },
-  {
-    "trigger": "=<",
-    "replacement": "\\\\impliedby",
-    "options": "mA"
-  },
-  {
-    "trigger": "and",
-    "replacement": "\\\\cap",
-    "options": "mA"
-  },
-  {
-    "trigger": "orr",
-    "replacement": "\\\\cup",
-    "options": "mA"
-  },
-  {
-    "trigger": "inn",
-    "replacement": "\\\\in",
-    "options": "mA"
-  },
-  {
-    "trigger": "notin",
-    "replacement": "\\\\not\\\\in",
-    "options": "mA"
-  },
-  {
-    "trigger": "\\\\\\\\\\\\",
-    "replacement": "\\\\setminus",
-    "options": "mA"
-  },
-  {
-    "trigger": "sub=",
-    "replacement": "\\\\subseteq",
-    "options": "mA"
-  },
-  {
-    "trigger": "sup=",
-    "replacement": "\\\\supseteq",
-    "options": "mA"
-  },
-  {
-    "trigger": "eset",
-    "replacement": "\\\\emptyset",
-    "options": "mA"
-  },
-  {
-    "trigger": "set",
-    "replacement": "\\\\{ $0 \\\\}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "(n?)e\\\\\\\\xi sts",
-    "replacement": "\\\\[[0]]exists",
-    "options": "rmA",
-    "priority": 1
-  },
-  {
-    "trigger": "LL",
-    "replacement": "\\\\mathcal{L}",
-    "options": "mA"
-  },
-  {
-    "trigger": "HH",
-    "replacement": "\\\\mathcal{H}",
-    "options": "mA"
-  },
-  {
-    "trigger": "CC",
-    "replacement": "\\\\mathbb{C}",
-    "options": "mA"
-  },
-  {
-    "trigger": "RR",
-    "replacement": "\\\\mathbb{R}",
-    "options": "mA"
-  },
-  {
-    "trigger": "ZZ",
-    "replacement": "\\\\mathbb{Z}",
-    "options": "mA"
-  },
-  {
-    "trigger": "NN",
-    "replacement": "\\\\mathbb{N}",
-    "options": "mA"
-  },
-  {
-    "trigger": "QQ",
-    "replacement": "\\\\mathbb{Q}",
-    "options": "mA"
-  },
-  {
-    "trigger": "([^\\\\\\\\])(\${GREEK})",
-    "replacement": "[[0]]\\\\[[1]]",
-    "options": "rmA",
-    "description": "Add backslash before Greek letters"
-  },
-  {
-    "trigger": "([^\\\\\\\\])(\${SYMBOL})",
-    "replacement": "[[0]]\\\\[[1]]",
-    "options": "rmA",
-    "description": "Add backslash before symbols"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS})([A-Za-z])",
-    "replacement": "",
-    "options": "rmA",
-    "priority": 2,
-    "handler": "space-after-symbol"
-  },
-  {
-    "trigger": "\\\\\\\\(\${SYMBOLS}|\${MORE_SYMBOLS})([0-9])",
-    "replacement": "\\\\[[0]] [[1]]",
-    "options": "mA",
-    "description": "Add space after symbols when followed by a number."
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) sr",
-    "replacement": "\\\\[[0]]^{2}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) cb",
-    "replacement": "\\\\[[0]]^{3}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) rd",
-    "replacement": "\\\\[[0]]^{$0}$1",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}) hat",
-    "replacement": "\\\\hat{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}) dot",
-    "replacement": "\\\\dot{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}) bar",
-    "replacement": "\\\\bar{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}) vec",
-    "replacement": "\\\\vec{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}) tilde",
-    "replacement": "\\\\tilde{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "\\\\\\\\(\${GREEK}) und",
-    "replacement": "\\\\underline{\\\\[[0]]}",
-    "options": "rmA"
-  },
-  {
-    "trigger": "par",
-    "replacement": "\\\\frac{ \\\\partial \${0:y} }{ \\\\partial \${1:x} } $2",
-    "options": "m"
-  },
-  {
-    "trigger": "par([0-9])",
-    "replacement": "\\\\frac{ \\\\partial^{[[0]]} \${0:y} }{ \\\\partial \${1:x}^{[[0]]} } $2",
-    "options": "rmA"
-  },
-  {
-    "trigger": "parn",
-    "replacement": "\\\\frac{ \\\\partial^{\${0:n}} \${1:y} }{ \\\\partial \${2:x}^{\${0:n}} } $2",
-    "options": "rmA"
-  },
-  {
-    "trigger": "pa([A-Za-z])([A-Za-z])",
-    "replacement": "\\\\frac{ \\\\partial [[0]] }{ \\\\partial [[1]] } ",
-    "options": "rm"
-  },
-  {
-    "trigger": "ddt",
-    "replacement": "\\\\frac{d}{dt} ",
-    "options": "mA"
-  },
-  {
-    "trigger": "([^\\\\\\\\])int",
-    "replacement": "[[0]]\\\\int",
-    "options": "rmA",
-    "priority": -1
-  },
-  {
-    "trigger": "\\\\int",
-    "replacement": "\\\\int $0 \\\\, d\${1:x} $2",
-    "options": "m"
-  },
-  {
-    "trigger": "dint",
-    "replacement": "\\\\int_{\${0:0}}^{\${1:1}} $2 \\\\, d\${3:x} $4",
-    "options": "mA"
-  },
-  {
-    "trigger": "oint",
-    "replacement": "\\\\oint",
-    "options": "mA"
-  },
-  {
-    "trigger": "iint",
-    "replacement": "\\\\iint",
-    "options": "mA"
-  },
-  {
-    "trigger": "iiint",
-    "replacement": "\\\\iiint",
-    "options": "mA"
-  },
-  {
-    "trigger": "oinf",
-    "replacement": "\\\\int_{0}^{\\\\infty} $0 \\\\, d\${1:x} $2",
-    "options": "mA"
-  },
-  {
-    "trigger": "infi",
-    "replacement": "\\\\int_{-\\\\infty}^{\\\\infty} $0 \\\\, d\${1:x} $2",
-    "options": "mA"
-  },
-  {
-    "trigger": "([^\\\\\\\\])(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)",
-    "replacement": "[[0]]\\\\[[1]]",
-    "options": "rmA",
-    "description": "Add backslash before trig funcs"
-  },
-  {
-    "trigger": "\\\\\\\\(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)([A-Za-gi-z])",
-    "replacement": "\\\\[[0]] [[1]]",
-    "options": "rmA",
-    "description": "Add space after trig funcs. Skips letter h to allow sinh, cosh, etc."
-  },
-  {
-    "trigger": "\\\\\\\\(sinh|cosh|tanh|coth)([A-Za-z])",
-    "replacement": "\\\\[[0]] [[1]]",
-    "options": "rmA",
-    "description": "Add space after hyperbolic trig funcs"
-  },
-  {
-    "trigger": "(arccsc|arcsec|arccot)",
-    "replacement": "\\\\operatorname{[[0]]}$0",
-    "options": "rmA",
-    "description": "Inverse trig functions, Are not built-in MathJax functions",
-    "priority": 1
-  },
-  {
-    "trigger": "U",
-    "replacement": "\\\\underbrace{ \${VISUAL} }_{ $0 }",
-    "options": "mA"
-  },
-  {
-    "trigger": "O",
-    "replacement": "\\\\overbrace{ \${VISUAL} }^{ $0 }",
-    "options": "mA"
-  },
-  {
-    "trigger": "B",
-    "replacement": "\\\\underset{ $0 }{ \${VISUAL} }",
-    "options": "mA"
-  },
-  {
-    "trigger": "C",
-    "replacement": "\\\\cancel{ \${VISUAL} }",
-    "options": "mA"
-  },
-  {
-    "trigger": "K",
-    "replacement": "\\\\cancelto{ $0 }{ \${VISUAL} }",
-    "options": "mA"
-  },
-  {
-    "trigger": "S",
-    "replacement": "\\\\sqrt{ \${VISUAL} }",
-    "options": "mA"
-  },
-  {
-    "trigger": "kbt",
-    "replacement": "k_{B}T",
-    "options": "mA"
-  },
-  {
-    "trigger": "msun",
-    "replacement": "M_{\\\\odot}",
-    "options": "mA"
-  },
-  {
-    "trigger": "dag",
-    "replacement": "^{\\\\dagger}",
-    "options": "mA"
-  },
-  {
-    "trigger": "o+",
-    "replacement": "\\\\oplus ",
-    "options": "mA"
-  },
-  {
-    "trigger": "ox",
-    "replacement": "\\\\otimes ",
-    "options": "mA"
-  },
-  {
-    "trigger": "bra",
-    "replacement": "\\\\bra{$0} $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "ket",
-    "replacement": "\\\\ket{$0} $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "brk",
-    "replacement": "\\\\braket{ $0 | $1 } $2",
-    "options": "mA"
-  },
-  {
-    "trigger": "outer",
-    "replacement": "\\\\ket{\${0:\\\\psi}} \\\\bra{\${0:\\\\psi}} $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "pu",
-    "replacement": "\\\\pu{ $0 }",
-    "options": "mA"
-  },
-  {
-    "trigger": "cee",
-    "replacement": "\\\\ce{ $0 }",
-    "options": "mA"
-  },
-  {
-    "trigger": "he4",
-    "replacement": "{}^{4}_{2}He ",
-    "options": "mA"
-  },
-  {
-    "trigger": "he3",
-    "replacement": "{}^{3}_{2}He ",
-    "options": "mA"
-  },
-  {
-    "trigger": "iso",
-    "replacement": "{}^{\${0:4}}_{\${1:2}}\${2:He}",
-    "options": "mA"
-  },
-  {
-    "trigger": "([pbBvV]mat)",
-    "replacement": "\\\\begin{[[0]]rix}\\n$0\\n\\\\end{[[0]]rix}",
-    "options": "rMA",
-    "description": "Matrix environments with new lines"
-  },
-  {
-    "trigger": "(matrix|cases|align|array)",
-    "replacement": "\\\\begin{[[0]]}\\n$0\\n\\\\end{[[0]]}",
-    "options": "rMA",
-    "description": "Miscellaneous environments with new lines"
-  },
-  {
-    "trigger": "([pbBvV]mat)",
-    "replacement": "\\\\begin{[[0]]rix}$0\\\\end{[[0]]rix}",
-    "options": "rnA"
-  },
-  {
-    "trigger": "(matrix|cases|align|array)",
-    "replacement": "\\\\begin{[[0]]}$0\\\\end{[[0]]}",
-    "options": "rnA"
-  },
-  {
-    "trigger": "avg",
-    "replacement": "\\\\langle $0 \\\\rangle $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "norm",
-    "replacement": "\\\\lvert $0 \\\\rvert $1",
-    "options": "mA",
-    "priority": 1
-  },
-  {
-    "trigger": "Norm",
-    "replacement": "\\\\lVert $0 \\\\rVert $1",
-    "options": "mA",
-    "priority": 1
-  },
-  {
-    "trigger": "ceil",
-    "replacement": "\\\\lceil $0 \\\\rceil $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "floor",
-    "replacement": "\\\\lfloor $0 \\\\rfloor $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "mod",
-    "replacement": "|$0|$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "(",
-    "replacement": "(\${VISUAL})",
-    "options": "mA"
-  },
-  {
-    "trigger": "[",
-    "replacement": "[\${VISUAL}]",
-    "options": "mA"
-  },
-  {
-    "trigger": "{",
-    "replacement": "{\${VISUAL}}",
-    "options": "mA"
-  },
-  {
-    "trigger": "(",
-    "replacement": "($0)$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "{",
-    "replacement": "{$0}$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "[",
-    "replacement": "[$0]$1",
-    "options": "mA"
-  },
-  {
-    "trigger": "lr(",
-    "replacement": "\\\\left( $0 \\\\right) $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "lr{",
-    "replacement": "\\\\left\\\\{ $0 \\\\right\\\\} $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "lr[",
-    "replacement": "\\\\left[ $0 \\\\right] $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "lr|",
-    "replacement": "\\\\left| $0 \\\\right| $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "lra",
-    "replacement": "\\\\left< $0 \\\\right> $1",
-    "options": "mA"
-  },
-  {
-    "trigger": "\\\\\\\\([A-Za-z]+)(?:\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS}){0}",
-    "replacement": "",
-    "options": "rmAU",
-    "priority": 3,
-    "description": "Disable snippets while typing macros",
-    "handler": "protect-macro-prefix"
-  },
-  {
-    "trigger": "tayl",
-    "replacement": "\${0:f}(\${1:x} + \${2:h}) = \${0:f}(\${1:x}) + \${0:f}'(\${1:x})\${2:h} + \${0:f}''(\${1:x}) \\\\frac{\${2:h}^{2}}{2!} + \\\\dots$3",
-    "options": "mA",
-    "description": "Taylor expansion"
-  },
-  {
-    "trigger": "iden(\\\\d)",
-    "replacement": "",
-    "options": "rmA",
-    "description": "N x N identity matrix",
-    "handler": "identity-matrix"
-  },
-  {
-    "trigger": "(?<positive_lookbehind>(?:\\\\n|^)[ \\\\t]*>*)(?<marker>\\\\d+[.)]|[-*+])(?<whitespace>[ \\\\t]+)(?<text>.*)dm",
-    "replacement": "",
-    "options": "rtA",
-    "priority": 2,
-    "description": "Display math when in a list",
-    "handler": "display-math-list"
-  }
-]
-`;var IC=`/*
- * Adapted from Obsidian LaTeX Suite's default_snippet_variables.js at commit
- * 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.
- * Copyright (c) 2022 artisticat1
- * SPDX-License-Identifier: MIT
- */
-{
-  "\${GREEK}": "(?:alpha|beta|gamma|Gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|mu|nu|xi|omicron|pi|rho|varrho|sigma|Sigma|tau|upsilon|Upsilon|phi|varphi|Phi|chi|psi|omega|Omega)",
-  "\${SYMBOL}": "(?:parallel|perp|partial|nabla|hbar|ell|infty|oplus|ominus|otimes|oslash|square|star|dagger|vee|wedge|subseteq|subset|supseteq|supset|emptyset|exists|nexists|forall|implies|impliedby|iff|setminus|neg|lor|land|bigcup|bigcap|cdot|times|simeq|approx)",
-  "\${MORE_SYMBOLS}": "(?:leq|geq|neq|gg|ll|equiv|sim|propto|rightarrow|leftarrow|Rightarrow|Leftarrow|leftrightarrow|to|mapsto|cap|cup|in|sum|prod|exp|ln|log|det|dots|vdots|ddots|pm|mp|int|iint|iiint|oint)",
-  "\${ACCENT}": "(?:dot|ddot|hat|bar|tilde|vec|underline|overline|mathbf|mathcal|mathrm|mathbb)"
-}
+`)),!0),"editor.fold":O1,"editor.unfold":A1};for(let t=1;t<=6;t++)lc[`editor.heading${t}`]=SN(t);function TC(t,e){return lc[t]?.(e)??!1}var MC=[{key:"*",run:kN},{key:"Mod-b",run:lc["editor.bold"]},{key:"Mod-i",run:lc["editor.italic"]},{key:"Mod-k",run:lc["editor.link"]}];var FC=`/*\r
+ * Adapted from Obsidian LaTeX Suite's default_snippets.js at commit 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.\r
+ * Copyright (c) 2022 artisticat1; SPDX-License-Identifier: MIT\r
+ *\r
+ * Regular-expression triggers are stored as strings with the "r" option.\r
+ * Phi's four built-in handler names preserve the upstream function snippets\r
+ * without evaluating arbitrary JavaScript from the settings file.\r
+ */\r
+[\r
+  {\r
+    "trigger": "mk",\r
+    "replacement": "$$0$",\r
+    "options": "tA"\r
+  },\r
+  {\r
+    "trigger": "mk",\r
+    "replacement": "\\\\($0\\\\)",\r
+    "options": "TA"\r
+  },\r
+  {\r
+    "trigger": "dm",\r
+    "replacement": "$$\\n$0\\n$$",\r
+    "options": "tAw"\r
+  },\r
+  {\r
+    "trigger": "(\\\\S\\\\s*)dm",\r
+    "replacement": "[[0]]\\n$$\\n$0\\n$$",\r
+    "options": "rtAw",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])beg",\r
+    "replacement": "[[0]]\\\\begin{$0}\\n$1\\n\\\\end{$0}",\r
+    "options": "rMA"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])beg",\r
+    "replacement": "[[0]]\\\\begin{$0} $1 \\\\end{$0}",\r
+    "options": "rnA"\r
+  },\r
+  {\r
+    "trigger": "@a",\r
+    "replacement": "\\\\alpha",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@b",\r
+    "replacement": "\\\\beta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@g",\r
+    "replacement": "\\\\gamma",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@G",\r
+    "replacement": "\\\\Gamma",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@d",\r
+    "replacement": "\\\\delta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@D",\r
+    "replacement": "\\\\Delta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@e",\r
+    "replacement": "\\\\epsilon",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": ":e",\r
+    "replacement": "\\\\varepsilon",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@z",\r
+    "replacement": "\\\\zeta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@t",\r
+    "replacement": "\\\\theta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@T",\r
+    "replacement": "\\\\Theta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": ":t",\r
+    "replacement": "\\\\vartheta",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@i",\r
+    "replacement": "\\\\iota",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@k",\r
+    "replacement": "\\\\kappa",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@l",\r
+    "replacement": "\\\\lambda",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@L",\r
+    "replacement": "\\\\Lambda",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@s",\r
+    "replacement": "\\\\sigma",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@S",\r
+    "replacement": "\\\\Sigma",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@u",\r
+    "replacement": "\\\\upsilon",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@U",\r
+    "replacement": "\\\\Upsilon",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@o",\r
+    "replacement": "\\\\omega",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "@O",\r
+    "replacement": "\\\\Omega",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "ome",\r
+    "replacement": "\\\\omega",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "Ome",\r
+    "replacement": "\\\\Omega",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "text",\r
+    "replacement": "\\\\text{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "\\"",\r
+    "replacement": "\\\\text{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sr",\r
+    "replacement": "^{2}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "cb",\r
+    "replacement": "^{3}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "rd",\r
+    "replacement": "^{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "_",\r
+    "replacement": "_{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sts",\r
+    "replacement": "_\\\\text{$0}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sq",\r
+    "replacement": "\\\\sqrt{ $0 }$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "//",\r
+    "replacement": "\\\\frac{$0}{$1}$2",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "\\\\bee",\r
+    "replacement": "e^{ $0 }$1",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "invs",\r
+    "replacement": "^{-1}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])(exp|log|ln)",\r
+    "replacement": "[[0]]\\\\[[1]]",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "conj",\r
+    "replacement": "^{*}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "Re",\r
+    "replacement": "\\\\mathrm{Re}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "Im",\r
+    "replacement": "\\\\mathrm{Im}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "bf",\r
+    "replacement": "\\\\mathbf{$0}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "rm",\r
+    "replacement": "\\\\mathrm{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])(det)",\r
+    "replacement": "[[0]]\\\\[[1]]",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "trace",\r
+    "replacement": "\\\\mathrm{Tr}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])hat",\r
+    "replacement": "\\\\hat{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])bar",\r
+    "replacement": "\\\\bar{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])dot",\r
+    "replacement": "\\\\dot{[[0]]}",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])ddot",\r
+    "replacement": "\\\\ddot{[[0]]}",\r
+    "options": "rmA",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])tilde",\r
+    "replacement": "\\\\tilde{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])und",\r
+    "replacement": "\\\\underline{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])vec",\r
+    "replacement": "\\\\vec{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z]),\\\\.",\r
+    "replacement": "\\\\mathbf{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "([a-zA-Z])\\\\.,",\r
+    "replacement": "\\\\mathbf{[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}),\\\\.",\r
+    "replacement": "\\\\boldsymbol{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK})\\\\.,",\r
+    "replacement": "\\\\boldsymbol{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "hat",\r
+    "replacement": "\\\\hat{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "bar",\r
+    "replacement": "\\\\bar{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "dot",\r
+    "replacement": "\\\\dot{$0}$1",\r
+    "options": "mA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "ddot",\r
+    "replacement": "\\\\ddot{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "cdot",\r
+    "replacement": "\\\\cdot",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "tilde",\r
+    "replacement": "\\\\tilde{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "und",\r
+    "replacement": "\\\\underline{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "vec",\r
+    "replacement": "\\\\vec{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "pmod",\r
+    "replacement": "\\\\pmod{\${0:n}}$1",\r
+    "options": "mA",\r
+    "description": "Parenthesized modulo (\\\\pmod{n})"\r
+  },\r
+  {\r
+    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])(\\\\d)",\r
+    "replacement": "[[0]]_{[[1]]}",\r
+    "options": "rmA",\r
+    "priority": -1,\r
+    "excludedMacros": [\r
+      "pu",\r
+      "ce"\r
+    ]\r
+  },\r
+  {\r
+    "trigger": "(\\\\\\\\\${GREEK}|[A-Za-z])_{(\\\\d+)}(\\\\d)",\r
+    "replacement": "[[0]]_{[[1]][[2]]}",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}(\\\\d)",\r
+    "replacement": "\\\\[[0]]{[[1]]}_{[[2]]}",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",\r
+    "replacement": "\\\\[[0]]{[[1]]}_{[[2]][[3]]}",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}(\\\\d)",\r
+    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]]}",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${ACCENT})\\\\{\\\\\\\\(\${ACCENT})\\\\{(\\\\\\\\\${GREEK}|[A-Za-z])\\\\}\\\\}_\\\\{(\\\\d+)\\\\}(\\\\d)",\r
+    "replacement": "\\\\[[0]]{\\\\[[1]]{[[2]]}}_{[[3]][[4]]}",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "xnn",\r
+    "replacement": "x_{n}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "\\\\xii",\r
+    "replacement": "x_{i}",\r
+    "options": "mA",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "xjj",\r
+    "replacement": "x_{j}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "xp1",\r
+    "replacement": "x_{n+1}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "ynn",\r
+    "replacement": "y_{n}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "yii",\r
+    "replacement": "y_{i}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "yjj",\r
+    "replacement": "y_{j}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "ooo",\r
+    "replacement": "\\\\infty",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sum",\r
+    "replacement": "\\\\sum",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "prod",\r
+    "replacement": "\\\\prod",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "\\\\sum",\r
+    "replacement": "\\\\sum_{\${0:i}=\${1:1}}^{\${2:N}} $3",\r
+    "options": "m"\r
+  },\r
+  {\r
+    "trigger": "\\\\prod",\r
+    "replacement": "\\\\prod_{\${0:i}=\${1:1}}^{\${2:N}} $3",\r
+    "options": "m"\r
+  },\r
+  {\r
+    "trigger": "lim",\r
+    "replacement": "\\\\lim_{ \${0:n} \\\\to \${1:\\\\infty} } $2",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "+-",\r
+    "replacement": "\\\\pm",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "-+",\r
+    "replacement": "\\\\mp",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "...",\r
+    "replacement": "\\\\dots",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "nabl",\r
+    "replacement": "\\\\nabla",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "xx",\r
+    "replacement": "\\\\times",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "**",\r
+    "replacement": "\\\\cdot",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "para",\r
+    "replacement": "\\\\parallel",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "deg",\r
+    "replacement": "\\\\degree",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "===",\r
+    "replacement": "\\\\equiv",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "!=",\r
+    "replacement": "\\\\neq",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": ">=",\r
+    "replacement": "\\\\geq",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "<=",\r
+    "replacement": "\\\\leq",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": ">>",\r
+    "replacement": "\\\\gg",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "<<",\r
+    "replacement": "\\\\ll",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "simm",\r
+    "replacement": "\\\\sim",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sim=",\r
+    "replacement": "\\\\simeq",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "prop",\r
+    "replacement": "\\\\propto",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "<->",\r
+    "replacement": "\\\\leftrightarrow ",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "->",\r
+    "replacement": "\\\\to",\r
+    "options": "mA",\r
+    "excludedMacros": [\r
+      "ce"\r
+    ]\r
+  },\r
+  {\r
+    "trigger": "!>",\r
+    "replacement": "\\\\mapsto",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "=>",\r
+    "replacement": "\\\\implies",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "=<",\r
+    "replacement": "\\\\impliedby",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "and",\r
+    "replacement": "\\\\cap",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "orr",\r
+    "replacement": "\\\\cup",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "inn",\r
+    "replacement": "\\\\in",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "notin",\r
+    "replacement": "\\\\not\\\\in",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\\\\\",\r
+    "replacement": "\\\\setminus",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sub=",\r
+    "replacement": "\\\\subseteq",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "sup=",\r
+    "replacement": "\\\\supseteq",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "eset",\r
+    "replacement": "\\\\emptyset",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "set",\r
+    "replacement": "\\\\{ $0 \\\\}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "(n?)e\\\\\\\\xi sts",\r
+    "replacement": "\\\\[[0]]exists",\r
+    "options": "rmA",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "LL",\r
+    "replacement": "\\\\mathcal{L}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "HH",\r
+    "replacement": "\\\\mathcal{H}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "CC",\r
+    "replacement": "\\\\mathbb{C}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "RR",\r
+    "replacement": "\\\\mathbb{R}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "ZZ",\r
+    "replacement": "\\\\mathbb{Z}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "NN",\r
+    "replacement": "\\\\mathbb{N}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "QQ",\r
+    "replacement": "\\\\mathbb{Q}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])(\${GREEK})",\r
+    "replacement": "[[0]]\\\\[[1]]",\r
+    "options": "rmA",\r
+    "description": "Add backslash before Greek letters"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])(\${SYMBOL})",\r
+    "replacement": "[[0]]\\\\[[1]]",\r
+    "options": "rmA",\r
+    "description": "Add backslash before symbols"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS})([A-Za-z])",\r
+    "replacement": "",\r
+    "options": "rmA",\r
+    "priority": 2,\r
+    "handler": "space-after-symbol"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${SYMBOLS}|\${MORE_SYMBOLS})([0-9])",\r
+    "replacement": "\\\\[[0]] [[1]]",\r
+    "options": "mA",\r
+    "description": "Add space after symbols when followed by a number."\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) sr",\r
+    "replacement": "\\\\[[0]]^{2}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) cb",\r
+    "replacement": "\\\\[[0]]^{3}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}|\${SYMBOL}) rd",\r
+    "replacement": "\\\\[[0]]^{$0}$1",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}) hat",\r
+    "replacement": "\\\\hat{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}) dot",\r
+    "replacement": "\\\\dot{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}) bar",\r
+    "replacement": "\\\\bar{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}) vec",\r
+    "replacement": "\\\\vec{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}) tilde",\r
+    "replacement": "\\\\tilde{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(\${GREEK}) und",\r
+    "replacement": "\\\\underline{\\\\[[0]]}",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "par",\r
+    "replacement": "\\\\frac{ \\\\partial \${0:y} }{ \\\\partial \${1:x} } $2",\r
+    "options": "m"\r
+  },\r
+  {\r
+    "trigger": "par([0-9])",\r
+    "replacement": "\\\\frac{ \\\\partial^{[[0]]} \${0:y} }{ \\\\partial \${1:x}^{[[0]]} } $2",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "parn",\r
+    "replacement": "\\\\frac{ \\\\partial^{\${0:n}} \${1:y} }{ \\\\partial \${2:x}^{\${0:n}} } $2",\r
+    "options": "rmA"\r
+  },\r
+  {\r
+    "trigger": "pa([A-Za-z])([A-Za-z])",\r
+    "replacement": "\\\\frac{ \\\\partial [[0]] }{ \\\\partial [[1]] } ",\r
+    "options": "rm"\r
+  },\r
+  {\r
+    "trigger": "ddt",\r
+    "replacement": "\\\\frac{d}{dt} ",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])int",\r
+    "replacement": "[[0]]\\\\int",\r
+    "options": "rmA",\r
+    "priority": -1\r
+  },\r
+  {\r
+    "trigger": "\\\\int",\r
+    "replacement": "\\\\int $0 \\\\, d\${1:x} $2",\r
+    "options": "m"\r
+  },\r
+  {\r
+    "trigger": "dint",\r
+    "replacement": "\\\\int_{\${0:0}}^{\${1:1}} $2 \\\\, d\${3:x} $4",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "oint",\r
+    "replacement": "\\\\oint",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "iint",\r
+    "replacement": "\\\\iint",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "iiint",\r
+    "replacement": "\\\\iiint",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "oinf",\r
+    "replacement": "\\\\int_{0}^{\\\\infty} $0 \\\\, d\${1:x} $2",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "infi",\r
+    "replacement": "\\\\int_{-\\\\infty}^{\\\\infty} $0 \\\\, d\${1:x} $2",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([^\\\\\\\\])(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)",\r
+    "replacement": "[[0]]\\\\[[1]]",\r
+    "options": "rmA",\r
+    "description": "Add backslash before trig funcs"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(arcsin|sin|arccos|cos|arctan|tan|csc|sec|cot)([A-Za-gi-z])",\r
+    "replacement": "\\\\[[0]] [[1]]",\r
+    "options": "rmA",\r
+    "description": "Add space after trig funcs. Skips letter h to allow sinh, cosh, etc."\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\(sinh|cosh|tanh|coth)([A-Za-z])",\r
+    "replacement": "\\\\[[0]] [[1]]",\r
+    "options": "rmA",\r
+    "description": "Add space after hyperbolic trig funcs"\r
+  },\r
+  {\r
+    "trigger": "(arccsc|arcsec|arccot)",\r
+    "replacement": "\\\\operatorname{[[0]]}$0",\r
+    "options": "rmA",\r
+    "description": "Inverse trig functions, Are not built-in MathJax functions",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "U",\r
+    "replacement": "\\\\underbrace{ \${VISUAL} }_{ $0 }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "O",\r
+    "replacement": "\\\\overbrace{ \${VISUAL} }^{ $0 }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "B",\r
+    "replacement": "\\\\underset{ $0 }{ \${VISUAL} }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "C",\r
+    "replacement": "\\\\cancel{ \${VISUAL} }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "K",\r
+    "replacement": "\\\\cancelto{ $0 }{ \${VISUAL} }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "S",\r
+    "replacement": "\\\\sqrt{ \${VISUAL} }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "kbt",\r
+    "replacement": "k_{B}T",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "msun",\r
+    "replacement": "M_{\\\\odot}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "dag",\r
+    "replacement": "^{\\\\dagger}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "o+",\r
+    "replacement": "\\\\oplus ",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "ox",\r
+    "replacement": "\\\\otimes ",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "bra",\r
+    "replacement": "\\\\bra{$0} $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "ket",\r
+    "replacement": "\\\\ket{$0} $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "brk",\r
+    "replacement": "\\\\braket{ $0 | $1 } $2",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "outer",\r
+    "replacement": "\\\\ket{\${0:\\\\psi}} \\\\bra{\${0:\\\\psi}} $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "pu",\r
+    "replacement": "\\\\pu{ $0 }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "cee",\r
+    "replacement": "\\\\ce{ $0 }",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "he4",\r
+    "replacement": "{}^{4}_{2}He ",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "he3",\r
+    "replacement": "{}^{3}_{2}He ",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "iso",\r
+    "replacement": "{}^{\${0:4}}_{\${1:2}}\${2:He}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "([pbBvV]mat)",\r
+    "replacement": "\\\\begin{[[0]]rix}\\n$0\\n\\\\end{[[0]]rix}",\r
+    "options": "rMA",\r
+    "description": "Matrix environments with new lines"\r
+  },\r
+  {\r
+    "trigger": "(matrix|cases|align|array)",\r
+    "replacement": "\\\\begin{[[0]]}\\n$0\\n\\\\end{[[0]]}",\r
+    "options": "rMA",\r
+    "description": "Miscellaneous environments with new lines"\r
+  },\r
+  {\r
+    "trigger": "([pbBvV]mat)",\r
+    "replacement": "\\\\begin{[[0]]rix}$0\\\\end{[[0]]rix}",\r
+    "options": "rnA"\r
+  },\r
+  {\r
+    "trigger": "(matrix|cases|align|array)",\r
+    "replacement": "\\\\begin{[[0]]}$0\\\\end{[[0]]}",\r
+    "options": "rnA"\r
+  },\r
+  {\r
+    "trigger": "avg",\r
+    "replacement": "\\\\langle $0 \\\\rangle $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "norm",\r
+    "replacement": "\\\\lvert $0 \\\\rvert $1",\r
+    "options": "mA",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "Norm",\r
+    "replacement": "\\\\lVert $0 \\\\rVert $1",\r
+    "options": "mA",\r
+    "priority": 1\r
+  },\r
+  {\r
+    "trigger": "ceil",\r
+    "replacement": "\\\\lceil $0 \\\\rceil $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "floor",\r
+    "replacement": "\\\\lfloor $0 \\\\rfloor $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "mod",\r
+    "replacement": "|$0|$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "(",\r
+    "replacement": "(\${VISUAL})",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "[",\r
+    "replacement": "[\${VISUAL}]",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "{",\r
+    "replacement": "{\${VISUAL}}",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "(",\r
+    "replacement": "($0)$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "{",\r
+    "replacement": "{$0}$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "[",\r
+    "replacement": "[$0]$1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "lr(",\r
+    "replacement": "\\\\left( $0 \\\\right) $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "lr{",\r
+    "replacement": "\\\\left\\\\{ $0 \\\\right\\\\} $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "lr[",\r
+    "replacement": "\\\\left[ $0 \\\\right] $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "lr|",\r
+    "replacement": "\\\\left| $0 \\\\right| $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "lra",\r
+    "replacement": "\\\\left< $0 \\\\right> $1",\r
+    "options": "mA"\r
+  },\r
+  {\r
+    "trigger": "\\\\\\\\([A-Za-z]+)(?:\${GREEK}|\${SYMBOL}|\${MORE_SYMBOLS}){0}",\r
+    "replacement": "",\r
+    "options": "rmAU",\r
+    "priority": 3,\r
+    "description": "Disable snippets while typing macros",\r
+    "handler": "protect-macro-prefix"\r
+  },\r
+  {\r
+    "trigger": "tayl",\r
+    "replacement": "\${0:f}(\${1:x} + \${2:h}) = \${0:f}(\${1:x}) + \${0:f}'(\${1:x})\${2:h} + \${0:f}''(\${1:x}) \\\\frac{\${2:h}^{2}}{2!} + \\\\dots$3",\r
+    "options": "mA",\r
+    "description": "Taylor expansion"\r
+  },\r
+  {\r
+    "trigger": "iden(\\\\d)",\r
+    "replacement": "",\r
+    "options": "rmA",\r
+    "description": "N x N identity matrix",\r
+    "handler": "identity-matrix"\r
+  },\r
+  {\r
+    "trigger": "(?<positive_lookbehind>(?:\\\\n|^)[ \\\\t]*>*)(?<marker>\\\\d+[.)]|[-*+])(?<whitespace>[ \\\\t]+)(?<text>.*)dm",\r
+    "replacement": "",\r
+    "options": "rtA",\r
+    "priority": 2,\r
+    "description": "Display math when in a list",\r
+    "handler": "display-math-list"\r
+  }\r
+]\r
+`;var IC=`/*\r
+ * Adapted from Obsidian LaTeX Suite's default_snippet_variables.js at commit\r
+ * 8498f43b8a3dee75fc5442182cfff8fd6cada9c7.\r
+ * Copyright (c) 2022 artisticat1\r
+ * SPDX-License-Identifier: MIT\r
+ */\r
+{\r
+  "\${GREEK}": "(?:alpha|beta|gamma|Gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|mu|nu|xi|omicron|pi|rho|varrho|sigma|Sigma|tau|upsilon|Upsilon|phi|varphi|Phi|chi|psi|omega|Omega)",\r
+  "\${SYMBOL}": "(?:parallel|perp|partial|nabla|hbar|ell|infty|oplus|ominus|otimes|oslash|square|star|dagger|vee|wedge|subseteq|subset|supseteq|supset|emptyset|exists|nexists|forall|implies|impliedby|iff|setminus|neg|lor|land|bigcup|bigcap|cdot|times|simeq|approx)",\r
+  "\${MORE_SYMBOLS}": "(?:leq|geq|neq|gg|ll|equiv|sim|propto|rightarrow|leftarrow|Rightarrow|Leftarrow|leftrightarrow|to|mapsto|cap|cup|in|sum|prod|exp|ln|log|det|dots|vdots|ddots|pm|mp|int|iint|iiint|oint)",\r
+  "\${ACCENT}": "(?:dot|ddot|hat|bar|tilde|vec|underline|overline|mathbf|mathcal|mathrm|mathbb)"\r
+}\r
 `;var ci=te.define(),cr=be.define({create:()=>null,update(t,e){let n=!1;t&&e.docChanged&&e.changes.iterChanges((o,a,l,c,u)=>{o===t.to&&a===t.to&&u.lines>1&&(n=!0)});let i=t&&{from:e.changes.mapPos(t.from,-1),to:e.changes.mapPos(t.to,n?-1:1)};for(let o of e.effects)o.is(ci)&&(i=o.value);if(!i)return null;let r=e.state.selection.main;return(r.empty?r.head>=i.from&&r.head<=i.to:r.from>=i.from&&r.to<=i.to)?i:null}});var wA=new Set(["contentFrom","definition","markerFrom","markerTo","prefixFrom","prefixTo","taskFrom"]);function WC(t){return dt("markdown/analysis-full",()=>{let e=ia(t);return{text:t,nodes:e,math:e.filter(n=>n.kind==="math"||n.kind==="display-math"),updateKind:"full",changed:{from:0,to:t.length}}})}function YC(t,e){let n=t.meta?{...t.meta}:void 0;if(n)for(let[i,r]of Object.entries(n))typeof r=="number"&&wA.has(i)&&(n[i]=e.mapPos(r,1));return{...t,from:e.mapPos(t.from,1),to:e.mapPos(t.to,-1),contentFrom:t.contentFrom==null?void 0:e.mapPos(t.contentFrom,1),contentTo:t.contentTo==null?void 0:e.mapPos(t.contentTo,-1),meta:n}}var _C=/[#*_~`$<>\[\]!^|\\%]/,BC=/^\s*(?:[-+*]|\d+[.)])\s/,RC=/^\s*(?:-[ \t]*){3,}$|^[{}]\s*$/;function CN(t,e){let n=[];if(e.changes.iterChanges((a,l,c,u,h)=>{n.push({fromA:a,toA:l,fromB:c,toB:u,inserted:h.toString()})}),n.length!==1)return!1;let i=n[0];if(e.startState.sliceDoc(i.fromA,i.toA).includes(`
 `)||i.inserted.includes(`
 `))return!1;let s=e.startState.doc.lineAt(i.fromA),o=e.newDoc.lineAt(i.fromB);return _C.test(s.text)||_C.test(o.text)||BC.test(s.text)||BC.test(o.text)||RC.test(s.text)||RC.test(o.text)?!1:!t.nodes.some(a=>a.from<=s.to&&a.to>=s.from)}var yA=16384,DN=/<[A-Za-z/]/,EN=/^ {0,3}(?:`{3,}|~{3,})/m,bA=/^(---|\{)\s*\n/,LC=/^(?:---|\})[ \t]*$/m;function NC(t,e){return DN.test(t)||t.includes("%%")||t.includes("[^")?!1:e||!(t.includes("$$")||t.includes("\\[")||t.includes("\\]")||EN.test(t))}function QN(t,e,n){if(t.length!==e.length)return!1;for(let i=0;i<t.length;i++){let r=t[i],s=e[i];if(r.kind!==s.kind||r.from+n!==s.from||r.to+n!==s.to||r.text!==s.text||(r.contentFrom==null?s.contentFrom!=null:r.contentFrom+n!==s.contentFrom)||(r.contentTo==null?s.contentTo!=null:r.contentTo+n!==s.contentTo))return!1;let o=r.meta??{},a=s.meta??{},l=Object.keys(o);if(l.length!==Object.keys(a).length)return!1;for(let c of l){let u=o[c],h=typeof u=="number"&&wA.has(c)?u+n:u;if(a[c]!==h)return!1}}return!0}var $N=[...wA];function ZC(t,e,n=-1/0){if(!e)return t;let i=t.meta;if(i)for(let r of $N){let s=i[r];typeof s!="number"||s<n||(i===t.meta&&(i={...i}),i[r]=s+e)}return{...t,from:t.from+e,to:t.to+e,contentFrom:t.contentFrom==null?void 0:t.contentFrom+e,contentTo:t.contentTo==null?void 0:t.contentTo+e,meta:i}}function PN(t){let e=1/0,n=-1/0,i=1/0,r=-1/0,s=!1;return t.changes.iterChanges((o,a,l,c,u)=>{e=Math.min(e,o),n=Math.max(n,a),i=Math.min(i,l),r=Math.max(r,c),(/[<>]/.test(u.toString())||/[<>]/.test(t.startState.sliceDoc(o,a)))&&(s=!0)}),{fromA:e,toA:n,fromB:i,toB:r,delimiters:s}}var TN=new Set(["code-block","mermaid","display-math"]);function MN(t,e,n){let i=e.startState.doc,r;for(let l of t.nodes){if(l.from>n.fromA)break;TN.has(l.kind)&&l.to>=n.toA&&(r=l)}if(!r)return null;let s=i.lineAt(r.from),o=i.lineAt(r.to);if(r.from!==s.from||r.to!==o.to||s.number===o.number||n.fromA<=s.to||n.toA>=o.from)return null;if(r.kind==="display-math"){let l=s.text.trim(),c=o.text.trim();if(!(l==="$$"&&c==="$$"||l==="\\["&&c==="\\]"))return null}let a=e.newDoc.length-i.length;return{from:r.from,oldTo:r.to,newTo:r.to+a,container:r}}function FN(t,e){let n=t.newDoc,i=n.lineAt(e.fromB);for(;i.number>1;){let o=n.line(i.number-1);if(!o.length)break;if(i=o,e.fromB-i.from>yA)return null}let r=n.lineAt(e.toB);for(;r.number<n.lines;){let o=n.line(r.number+1);if(!o.length)break;if(r=o,r.to-e.toB>yA)return null}let s=n.length-t.startState.doc.length;return i.from>e.fromA||r.to-s<e.toA?null:{from:i.from,oldTo:r.to-s,newTo:r.to}}function IN(t,e,n){let i=PN(e);if(i.delimiters||!Number.isFinite(i.fromA))return null;let r=MN(t,e,i)??FN(e,i);if(!r||r.newTo-r.from>yA)return null;let o=t.text.slice(r.from,r.oldTo),a=n.slice(r.from,r.newTo),l=!!r.container;if(!NC(o,l)||!NC(a,l))return null;let c=t.nodes[0]?.kind==="frontmatter";if(r.from===0&&(bA.test(o)||bA.test(a))||!c&&bA.test(n)&&(LC.test(o)||LC.test(a)))return null;let u=[],h=[],f=[];for(let g of t.nodes)if(g.to<r.from)u.push(g);else if(g.from>r.oldTo)f.push(g);else if(g.from>=r.from&&g.to<=r.oldTo)h.push(g);else return null;if(!QN(ia(o),h,r.from))return null;let d=ia(a);if(r.container){let g=r.container.kind,O=d.find(A=>A.from===0&&A.to===a.length&&A.kind===g);if(!O||g!=="display-math"&&O.meta?.incomplete!==r.container.meta?.incomplete)return null}let p=e.changes,m=[...u.map(g=>typeof g.meta?.definition=="number"&&g.meta.definition>=r.from?YC(g,p):g),...d.map(g=>ZC(g,r.from)),...f.map(g=>ZC(g,r.newTo-r.oldTo,r.oldTo))];return{text:n,nodes:m,math:m.filter(g=>g.kind==="math"||g.kind==="display-math"),updateKind:"region",changed:{from:r.from,to:r.newTo}}}function _N(t,e){let n=e.newDoc.toString();return CN(t,e)?dt("markdown/analysis-map",()=>{let i=t.nodes.map(o=>YC(o,e.changes)),r=e.newDoc.length,s=0;return e.changes.iterChangedRanges((o,a,l,c)=>{r=Math.min(r,e.newDoc.lineAt(l).from),s=Math.max(s,e.newDoc.lineAt(c).to)}),{text:n,nodes:i,math:i.filter(o=>o.kind==="math"||o.kind==="display-math"),updateKind:"mapped",changed:{from:r,to:s}}}):dt("markdown/analysis-region",()=>IN(t,e,n))??WC(n)}var Ri=be.define({create:t=>WC(t.doc.toString()),update(t,e){return e.docChanged?_N(t,e):t}});function we(t){return t.field(Ri)}function Zs(t,e){let n=0,i=t.math.length;for(;n<i;){let s=n+i>>>1;t.math[s].from<=e.from?n=s+1:i=s}let r=t.math[Math.max(0,n-1)];return r&&(lr(r,e)||e.from===e.to&&e.from===r.to)?r:t.math.slice(n).find(s=>s.from<e.to&&lr(s,e))}function BN(t,e,n){let i=[];for(let s of n){let o=t.doc.lineAt(s.from).from,a=t.doc.lineAt(s.to).to;for(let l=!0;l;){l=!1;for(let c of e){if(c.from>a)break;c.to<o||c.from>=o&&c.to<=a||(o=Math.min(o,t.doc.lineAt(c.from).from),a=Math.max(a,t.doc.lineAt(c.to).to),l=!0)}}i.push({from:o,to:a})}i.sort((s,o)=>s.from-o.from);let r=[];for(let s of i){let o=r.at(-1);o&&s.from<=o.to+1?o.to=Math.max(o.to,s.to):r.push({...s})}return r}var XC=new WeakMap;function Xs(t){let e=XC.get(t);return e||(e=RN(t),XC.set(t,e)),e}function RN(t){let e=t.state,n=we(e);if(t.docChanged&&n.updateKind==="full")return"all";let i=t.changes,r=[];t.docChanged&&r.push(n.changed);let s=t.startState.field(cr,!1),o=e.field(cr,!1);if(t.selection||t.docChanged||s!==o){for(let c of t.startState.selection.ranges)r.push({from:i.mapPos(c.from,-1),to:i.mapPos(c.to,1)});for(let c of e.selection.ranges)r.push(c);s&&r.push({from:i.mapPos(s.from,-1),to:i.mapPos(s.to,1)}),o&&r.push(o)}if(!r.length)return[];let a=BN(e,n.nodes,r);return a.reduce((c,u)=>c+u.to-u.from,0)>e.doc.length/2?"all":a}function Ws(t,e){return t.filter(n=>e.some(i=>n.from>=i.from&&n.from<=i.to))}var xA=md(zC(),1),LN=new Set(["space-after-symbol","protect-macro-prefix","identity-matrix","display-math-list"]);function jC(t){let e=xA.default.parse(t);if(!Array.isArray(e))throw new Error("Snippet file must contain an array");return e.filter(n=>!!n&&typeof n=="object").filter(n=>typeof n.trigger=="string"&&typeof n.replacement=="string").map(n=>({trigger:String(n.trigger),replacement:String(n.replacement),options:typeof n.options=="string"?n.options:"m",priority:typeof n.priority=="number"?n.priority:0,handler:typeof n.handler=="string"&&LN.has(n.handler)?n.handler:void 0,description:typeof n.description=="string"?n.description:void 0,flags:typeof n.flags=="string"?n.flags:void 0,triggerKey:typeof n.triggerKey=="string"?n.triggerKey:void 0,language:typeof n.language=="string"?n.language:void 0,excludedMacros:Array.isArray(n.excludedMacros)?n.excludedMacros.map(String):void 0,excludedEnvironments:Array.isArray(n.excludedEnvironments)?n.excludedEnvironments.map(String):void 0,includedMacros:Array.isArray(n.includedMacros)?n.includedMacros.map(String):void 0})).sort((n,i)=>i.priority-n.priority)}function VC(t){let e=xA.default.parse(t);if(!e||typeof e!="object"||Array.isArray(e))throw new Error("Snippet variables must contain an object");let n={};for(let[i,r]of Object.entries(e)){if(typeof r!="string")continue;let o=/^\$\{([^}]+)\}$/.exec(i)?.[1]??i;/^[A-Z][A-Z0-9_]*$/.test(o)&&(n[o]=r)}return n}function qC(t,e=[],n=""){let i=t.replace(/\[\[(\d+)\]\]/g,(l,c)=>e[Number(c)]??"");i=i.replace(/\$\{VISUAL\}/g,n);let r=[],s="",o=0,a=/\$\{(\d+):([^}]*)\}|\$(\d+)/g;for(let l of i.matchAll(a)){s+=i.slice(o,l.index);let c=Number(l[1]??l[3]),u=l[2]??"",h=s.length;s+=u,r.push({index:c,from:h,to:s.length}),o=l.index+l[0].length}return s+=i.slice(o),r.sort((l,c)=>l.index-c.index||l.from-c.from),{text:s,tabstops:r}}var ur=te.define(),EA=te.define(),HC=Ft.define(),sa=z.define({combine:t=>t.at(-1)??!0});function Li(t){return t.facet(sa)}var QA=be.define({create:()=>null,update(t,e){if(e.isUserEvent("undo")||e.isUserEvent("redo"))return null;let n=t&&{...t,stops:t.stops.map((i,r)=>{let s=r===t.active,o=i.from===i.to,a=s||o?1:-1;return{...i,from:e.changes.mapPos(i.from,s?-1:1),to:e.changes.mapPos(i.to,a)}})};for(let i of e.effects)if(i.is(ur))n=i.value;else if(i.is(EA)){let r=n?n.stops.slice(n.active+1):[],s=[...i.value,...r];n=s.length?{stops:s,active:i.value.length?0:-1}:null}return n}}),ra=[],UC=[],KC=[],vA=new Map,CA={};function JC(t){return t.options.includes("v")||t.replacement.includes("${VISUAL}")}function DA(t){return t.replace(/\$\{([A-Z_]+)\}/g,(e,n)=>CA[n]?`(?:${CA[n]})`:"(?!)")}function NN(t){return t.flatMap(e=>{if(!e.options.includes("r"))return[e];try{let n=(e.flags??"").replace(/[gy]/g,"");return[{...e,expression:new RegExp(`(?:${DA(e.trigger)})$`,n)}]}catch(n){return ut(n,"latex-suite/regex"),[]}})}function ZN(){UC=ra.filter(e=>!e.options.includes("A")),KC=ra.filter(e=>e.options.includes("A")&&(e.options.includes("r")||e.trigger.length===0)),vA=new Map;let t=new Set(ra.flatMap(e=>e.options.includes("A")&&!e.options.includes("r")&&e.trigger.length?[e.trigger.at(-1)]:[]));for(let e of t)vA.set(e,ra.filter(n=>n.options.includes("A")&&(n.options.includes("r")||n.trigger.length===0||n.trigger.endsWith(e))))}function If(t,e){try{let n=VC(e?.trim()?e:IC),i=jC(t?.trim()?t:FC);CA=n,ra=NN(i),ZN()}catch(n){ut(n,"latex-suite/snippets")}}If();function XN(t,e){let n=Math.max(0,e-4e3),i=[];for(let r=n;r<e;r++){if(t[r]==="\\"){let s=/^\\([A-Za-z]+)\s*\{/.exec(t.slice(r,e));if(s){i.push(s[1]),r+=s[0].length-1;continue}r++;continue}t[r]==="{"?i.push(null):t[r]==="}"&&i.pop()}return new Set(i.filter(r=>!!r))}function eD(t,e,n){return!(t.options.includes("c")&&e.code!=="block"||t.options.includes("C")&&e.code!=="inline"||t.options.includes("t")&&(e.math!=="none"||e.code!=="none")||t.options.includes("M")&&e.math!=="display"||t.options.includes("n")&&e.math!=="inline"||t.options.includes("m")&&e.math==="none"||t.excludedMacros?.some(i=>n?.has(i))||t.includedMacros?.length&&!t.includedMacros.some(i=>n?.has(i)))}function $A(t,e,n,i=!1){let r=Math.max(0,e-32768),s=t.sliceDoc(r,e),o=s.length,a=Math.max(0,o-512),l=s.slice(a),c=n?vA.get(l.at(-1)??"")??KC:UC,u,h;for(let f of c){if(n&&JC(f)&&!i)continue;let d=[],p,m=f.trigger,g=o-f.trigger.length;if(f.options.includes("r")){let O=f.expression?.exec(l);if(!O)continue;g=a+O.index,d=O.slice(1),p=O.groups,m=O[0]}else if(!l.endsWith(f.trigger)||f.options.includes("w")&&g>0&&/[\p{L}\p{N}_]/u.test(s[g-1]))continue;if(!u){let O=rc(s,o);u={code:O,math:sc(s,o,O)}}if((f.excludedMacros?.length||f.includedMacros?.length)&&!h&&(h=XN(s,o)),!!eD(f,u,h))return{snippet:f,from:r+g,captures:d,groups:p,matchedText:m}}return null}function WN(t){switch(t.snippet.handler){case"space-after-symbol":{let e=DA(t.snippet.trigger).replace("([A-Za-z])","");return new RegExp(e).test(t.matchedText)?t.matchedText:`\\${t.captures[0]} ${t.captures[1]}`}case"protect-macro-prefix":{let e=t.captures[0]??"",n=DA(t.snippet.trigger).replace("\\\\([A-Za-z]+)","");return new RegExp(`\\b${e}`).test(n)?t.matchedText:null}case"identity-matrix":{let e=Number(t.captures[0]);return!Number.isInteger(e)||e<1||e>9?null:`\\begin{pmatrix}

@@ -1,5 +1,5 @@
 /*
- * Phi Markdown editor - native GTK/WebKit host
+ * Phi Markdown editor - native GTK host
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
@@ -11,11 +11,11 @@
 #include "markdown-editor-bridge.h"
 #include "markdown-resource-scheme.h"
 #include "markdown-vault-adapter.h"
+#include "web-view.h"
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include <json-glib/json-glib.h>
-#include <webkit/webkit.h>
 
 #include <string.h>
 #include <math.h>
@@ -37,8 +37,7 @@ typedef struct {
 struct _PdfvMarkdownEditor {
   GtkBox parent_instance;
   GtkStack *content_stack;
-  WebKitWebView *web_view;
-  WebKitUserContentManager *content_manager;
+  PdfvWebView *web_view;
   PdfvMarkdownVaultAdapter *vault;
   PdfvMarkdownResourceScheme *resources;
   PdfvMarkdownEditorBridge *bridge;
@@ -1210,14 +1209,14 @@ static void on_save_vault_image(GSimpleAction *action, GVariant *parameter,
   g_object_unref(dialog);
 }
 
-static WebKitContextMenuItem *vault_image_menu_item(
+static PdfvWebContextMenuItem *vault_image_menu_item(
     PdfvMarkdownEditor *self, GFile *file, const gchar *name,
     const gchar *label, GCallback callback) {
   GSimpleAction *action = g_simple_action_new(name, NULL);
   g_object_set_data_full(G_OBJECT(action), "phi-image-file",
                          g_object_ref(file), g_object_unref);
   g_signal_connect_object(action, "activate", callback, self, 0);
-  WebKitContextMenuItem *item = webkit_context_menu_item_new_from_gaction(
+  PdfvWebContextMenuItem *item = pdfv_web_context_menu_item_new_from_gaction(
       G_ACTION(action), label, NULL);
   g_object_unref(action);
   return item;
@@ -1232,29 +1231,29 @@ static void on_insert_table(GSimpleAction *action, GVariant *parameter,
                                    NULL);
 }
 
-static void append_insert_table_menu_item(WebKitContextMenu *menu,
+static void append_insert_table_menu_item(PdfvWebContextMenu *menu,
                                           PdfvMarkdownEditor *self) {
   GSimpleAction *action = g_simple_action_new("insert-table", NULL);
   g_signal_connect_object(action, "activate", G_CALLBACK(on_insert_table),
                           self, 0);
-  WebKitContextMenuItem *item = webkit_context_menu_item_new_from_gaction(
+  PdfvWebContextMenuItem *item = pdfv_web_context_menu_item_new_from_gaction(
       G_ACTION(action), "Insert Table", NULL);
   g_object_unref(action);
 
   gint position = 0;
   gboolean found_emoji = FALSE;
-  for (GList *at = webkit_context_menu_get_items(menu); at;
+  for (GList *at = pdfv_web_context_menu_get_items(menu); at;
        at = at->next, position++) {
-    if (webkit_context_menu_item_get_stock_action(at->data) ==
-        WEBKIT_CONTEXT_MENU_ACTION_INSERT_EMOJI) {
+    if (pdfv_web_context_menu_item_get_stock_action(at->data) ==
+        PDFV_WEB_CONTEXT_MENU_ACTION_INSERT_EMOJI) {
       found_emoji = TRUE;
       break;
     }
   }
   if (found_emoji)
-    webkit_context_menu_insert(menu, item, position);
+    pdfv_web_context_menu_insert(menu, item, position);
   else
-    webkit_context_menu_append(menu, item);
+    pdfv_web_context_menu_append(menu, item);
 }
 
 static void on_remove_table_part(GSimpleAction *action, GVariant *parameter,
@@ -1277,10 +1276,10 @@ static void on_remove_table_part(GSimpleAction *action, GVariant *parameter,
 }
 
 static void append_remove_table_part_item(PdfvMarkdownEditor *self,
-                                          WebKitContextMenu *menu,
+                                          PdfvWebContextMenu *menu,
                                           const gchar *kind, gint64 from,
                                           gint index, gboolean removable) {
-  /* WebKit keys actions in one context menu by name. Cell menus contain both
+  /* Engines may key actions in one context menu by name. Cell menus contain both
    * removals, so sharing a name makes their target and enabled state collide. */
   const gchar *action_name = g_str_equal(kind, "row")
       ? "remove-table-row" : "remove-table-column";
@@ -1299,93 +1298,92 @@ static void append_remove_table_part_item(PdfvMarkdownEditor *self,
   gchar *label = g_strdup_printf("Remove %s", g_str_equal(kind, "row")
                                                 ? "Row"
                                                 : "Column");
-  WebKitContextMenuItem *remove_item =
-      webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, NULL);
-  webkit_context_menu_append(menu, remove_item);
+  PdfvWebContextMenuItem *remove_item =
+      pdfv_web_context_menu_item_new_from_gaction(G_ACTION(action), label, NULL);
+  pdfv_web_context_menu_append(menu, remove_item);
   g_free(label);
   g_object_unref(action);
 }
 
 static void append_table_handle_menu(PdfvMarkdownEditor *self,
-                                     WebKitContextMenu *menu,
+                                     PdfvWebContextMenu *menu,
                                      const gchar *kind, gint64 from,
                                      gint index, gboolean removable) {
-  webkit_context_menu_remove_all(menu);
-  WebKitContextMenuAction text_actions[] = {
-      WEBKIT_CONTEXT_MENU_ACTION_CUT,
-      WEBKIT_CONTEXT_MENU_ACTION_COPY,
-      WEBKIT_CONTEXT_MENU_ACTION_PASTE,
-      WEBKIT_CONTEXT_MENU_ACTION_DELETE,
-      WEBKIT_CONTEXT_MENU_ACTION_SELECT_ALL,
+  pdfv_web_context_menu_remove_all(menu);
+  PdfvWebContextMenuAction text_actions[] = {
+      PDFV_WEB_CONTEXT_MENU_ACTION_CUT,
+      PDFV_WEB_CONTEXT_MENU_ACTION_COPY,
+      PDFV_WEB_CONTEXT_MENU_ACTION_PASTE,
+      PDFV_WEB_CONTEXT_MENU_ACTION_DELETE,
+      PDFV_WEB_CONTEXT_MENU_ACTION_SELECT_ALL,
   };
   for (guint i = 0; i < G_N_ELEMENTS(text_actions); i++)
-    webkit_context_menu_append(
-        menu, webkit_context_menu_item_new_from_stock_action(text_actions[i]));
-  webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+    pdfv_web_context_menu_append(
+        menu, pdfv_web_context_menu_item_new_from_stock_action(text_actions[i]));
+  pdfv_web_context_menu_append(menu, pdfv_web_context_menu_item_new_separator());
   append_remove_table_part_item(self, menu, kind, from, index, removable);
 
-  webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
-  webkit_context_menu_append(
-      menu, webkit_context_menu_item_new_from_stock_action(
-                WEBKIT_CONTEXT_MENU_ACTION_INSERT_EMOJI));
+  pdfv_web_context_menu_append(menu, pdfv_web_context_menu_item_new_separator());
+  pdfv_web_context_menu_append(
+      menu, pdfv_web_context_menu_item_new_from_stock_action(
+                PDFV_WEB_CONTEXT_MENU_ACTION_INSERT_EMOJI));
 }
 
-static gboolean is_navigation_context_action(WebKitContextMenuAction action) {
-  return action == WEBKIT_CONTEXT_MENU_ACTION_GO_BACK ||
-      action == WEBKIT_CONTEXT_MENU_ACTION_GO_FORWARD ||
-      action == WEBKIT_CONTEXT_MENU_ACTION_STOP ||
-      action == WEBKIT_CONTEXT_MENU_ACTION_RELOAD;
+static gboolean is_navigation_context_action(PdfvWebContextMenuAction action) {
+  return action == PDFV_WEB_CONTEXT_MENU_ACTION_GO_BACK ||
+      action == PDFV_WEB_CONTEXT_MENU_ACTION_GO_FORWARD ||
+      action == PDFV_WEB_CONTEXT_MENU_ACTION_STOP ||
+      action == PDFV_WEB_CONTEXT_MENU_ACTION_RELOAD;
 }
 
-static void tidy_context_menu_separators(WebKitContextMenu *menu) {
-  GList *items = g_list_copy(webkit_context_menu_get_items(menu));
+static void tidy_context_menu_separators(PdfvWebContextMenu *menu) {
+  GList *items = g_list_copy(pdfv_web_context_menu_get_items(menu));
   gboolean previous_was_separator = TRUE;
-  WebKitContextMenuItem *trailing_separator = NULL;
+  PdfvWebContextMenuItem *trailing_separator = NULL;
   for (GList *at = items; at; at = at->next) {
-    WebKitContextMenuItem *item = at->data;
-    if (!webkit_context_menu_item_is_separator(item)) {
+    PdfvWebContextMenuItem *item = at->data;
+    if (!pdfv_web_context_menu_item_is_separator(item)) {
       previous_was_separator = FALSE;
       trailing_separator = NULL;
       continue;
     }
     if (previous_was_separator) {
-      webkit_context_menu_remove(menu, item);
+      pdfv_web_context_menu_remove(menu, item);
       continue;
     }
     previous_was_separator = TRUE;
     trailing_separator = item;
   }
   if (previous_was_separator && trailing_separator)
-    webkit_context_menu_remove(menu, trailing_separator);
+    pdfv_web_context_menu_remove(menu, trailing_separator);
   g_list_free(items);
 }
 
-static void remove_navigation_context_items(WebKitContextMenu *menu) {
-  GList *items = g_list_copy(webkit_context_menu_get_items(menu));
+static void remove_navigation_context_items(PdfvWebContextMenu *menu) {
+  GList *items = g_list_copy(pdfv_web_context_menu_get_items(menu));
   for (GList *at = items; at; at = at->next) {
-    WebKitContextMenuItem *item = at->data;
+    PdfvWebContextMenuItem *item = at->data;
     if (is_navigation_context_action(
-            webkit_context_menu_item_get_stock_action(item)))
-      webkit_context_menu_remove(menu, item);
+            pdfv_web_context_menu_item_get_stock_action(item)))
+      pdfv_web_context_menu_remove(menu, item);
   }
   g_list_free(items);
   tidy_context_menu_separators(menu);
 }
 
 static void append_table_cell_menu(PdfvMarkdownEditor *self,
-                                   WebKitContextMenu *menu, gint64 from,
+                                   PdfvWebContextMenu *menu, gint64 from,
                                    gint row, gint column,
                                    gboolean row_removable,
                                    gboolean column_removable) {
-  if (webkit_context_menu_get_items(menu))
-    webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+  if (pdfv_web_context_menu_get_items(menu))
+    pdfv_web_context_menu_append(menu, pdfv_web_context_menu_item_new_separator());
   append_remove_table_part_item(self, menu, "row", from, row, row_removable);
   append_remove_table_part_item(self, menu, "column", from, column,
                                 column_removable);
 }
 
-static gboolean on_context_menu(WebKitWebView *view, WebKitContextMenu *menu,
-                                WebKitHitTestResult *hit,
+static gboolean on_context_menu(PdfvWebView *view, PdfvWebContextMenu *menu,
                                 PdfvMarkdownEditor *self) {
   (void)view;
   gboolean table_context_inside = self->table_context_inside;
@@ -1423,39 +1421,37 @@ static gboolean on_context_menu(WebKitWebView *view, WebKitContextMenu *menu,
   } else if (!table_context_inside) {
     append_insert_table_menu_item(menu, self);
   }
-  if (!webkit_hit_test_result_context_is_image(hit))
-    return FALSE;
   GFile *file = vault_image_file_for_uri(
-      self, webkit_hit_test_result_get_image_uri(hit));
+      self, pdfv_web_context_menu_get_image_uri(menu));
   if (!file)
     return FALSE;
 
-  GList *items = g_list_copy(webkit_context_menu_get_items(menu));
+  GList *items = g_list_copy(pdfv_web_context_menu_get_items(menu));
   gint position = 0;
   for (GList *at = items; at; at = at->next, position++) {
-    WebKitContextMenuItem *old_item = at->data;
-    WebKitContextMenuAction stock =
-        webkit_context_menu_item_get_stock_action(old_item);
+    PdfvWebContextMenuItem *old_item = at->data;
+    PdfvWebContextMenuAction stock =
+        pdfv_web_context_menu_item_get_stock_action(old_item);
     const gchar *name = NULL;
     const gchar *label = NULL;
     GCallback callback = NULL;
     switch (stock) {
-    case WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD:
+    case PDFV_WEB_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD:
       name = "copy-vault-image";
       label = "Copy Image";
       callback = G_CALLBACK(on_copy_vault_image);
       break;
-    case WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD:
+    case PDFV_WEB_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD:
       name = "copy-vault-image-address";
       label = "Copy Image Address";
       callback = G_CALLBACK(on_copy_vault_image_address);
       break;
-    case WEBKIT_CONTEXT_MENU_ACTION_OPEN_IMAGE_IN_NEW_WINDOW:
+    case PDFV_WEB_CONTEXT_MENU_ACTION_OPEN_IMAGE_IN_NEW_WINDOW:
       name = "open-vault-image";
       label = "Open Image in New Window";
       callback = G_CALLBACK(on_open_vault_image);
       break;
-    case WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK:
+    case PDFV_WEB_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK:
       name = "save-vault-image";
       label = "Save Image As…";
       callback = G_CALLBACK(on_save_vault_image);
@@ -1463,50 +1459,32 @@ static gboolean on_context_menu(WebKitWebView *view, WebKitContextMenu *menu,
     default:
       continue;
     }
-    WebKitContextMenuItem *replacement = vault_image_menu_item(
+    PdfvWebContextMenuItem *replacement = vault_image_menu_item(
         self, file, name, label, callback);
-    webkit_context_menu_remove(menu, old_item);
-    webkit_context_menu_insert(menu, replacement, position);
+    pdfv_web_context_menu_remove(menu, old_item);
+    pdfv_web_context_menu_insert(menu, replacement, position);
   }
   g_list_free(items);
   g_object_unref(file);
   return FALSE;
 }
 
-static gboolean on_decide_policy(WebKitWebView *view,
-                                 WebKitPolicyDecision *decision,
-                                 WebKitPolicyDecisionType type,
-                                 PdfvMarkdownEditor *self) {
+static gboolean on_decide_navigation(PdfvWebView *view, const gchar *uri,
+                                     gboolean user_gesture,
+                                     gboolean new_window,
+                                     PdfvMarkdownEditor *self) {
   (void)view;
-  if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION &&
-      type != WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION)
-    return FALSE;
-  WebKitNavigationAction *action =
-      webkit_navigation_policy_decision_get_navigation_action(
-          WEBKIT_NAVIGATION_POLICY_DECISION(decision));
-  WebKitURIRequest *request = webkit_navigation_action_get_request(action);
-  const gchar *uri = webkit_uri_request_get_uri(request);
+  (void)new_window;
   if ((uri && g_str_has_prefix(uri, "app://editor/")) ||
       g_strcmp0(uri, "about:blank") == 0)
     return FALSE;
   /* HTTPS documents loaded by a sandboxed iframe are programmatic
-   * navigations. Let WebKit keep those inside the editor; user-initiated
+   * navigations. Let the engine keep those inside the editor; user-initiated
    * links are still routed to the system browser below. */
-  if (uri && g_str_has_prefix(uri, "https://") &&
-      !webkit_navigation_action_is_user_gesture(action))
+  if (uri && g_str_has_prefix(uri, "https://") && !user_gesture)
     return FALSE;
-  webkit_policy_decision_ignore(decision);
   if (uri && *uri)
     g_signal_emit(self, editor_signals[SIGNAL_OPEN_EXTERNAL_URI], 0, uri);
-  return TRUE;
-}
-
-static gboolean on_permission_request(WebKitWebView *view,
-                                      WebKitPermissionRequest *request,
-                                      PdfvMarkdownEditor *self) {
-  (void)view;
-  (void)self;
-  webkit_permission_request_deny(request);
   return TRUE;
 }
 
@@ -1930,7 +1908,7 @@ void pdfv_markdown_editor_set_theme(PdfvMarkdownEditor *self,
     if (!self->theme_accent)
       self->theme_accent = lookup_theme_color(
           GTK_WIDGET(self), "accent_bg_color");
-    webkit_web_view_set_background_color(self->web_view, &background);
+    pdfv_web_view_set_background_color(self->web_view, &background);
   }
   send_theme(self);
 }
@@ -2104,7 +2082,6 @@ static void pdfv_markdown_editor_dispose(GObject *object) {
   g_clear_object(&self->bridge);
   g_clear_object(&self->resources);
   g_clear_object(&self->vault);
-  g_clear_object(&self->content_manager);
   g_clear_object(&self->file);
   g_clear_object(&self->attachment_folder);
   self->web_view = NULL;
@@ -2186,7 +2163,6 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
       g_object_new(PDFV_TYPE_MARKDOWN_EDITOR, NULL);
   self->vault = pdfv_markdown_vault_adapter_new(vault_root);
   self->resources = pdfv_markdown_resource_scheme_new(self->vault);
-  self->content_manager = webkit_user_content_manager_new();
   self->content_stack = GTK_STACK(gtk_stack_new());
   gtk_widget_set_hexpand(GTK_WIDGET(self->content_stack), TRUE);
   gtk_widget_set_vexpand(GTK_WIDGET(self->content_stack), TRUE);
@@ -2204,17 +2180,8 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
     g_weak_ref_init(&related_view_ref, NULL);
     g_once_init_leave(&related_view_ref_initialized, 1);
   }
-  WebKitWebView *related_view = g_weak_ref_get(&related_view_ref);
-  if (related_view) {
-    self->web_view = WEBKIT_WEB_VIEW(g_object_new(
-        WEBKIT_TYPE_WEB_VIEW, "related-view", related_view,
-        "user-content-manager", self->content_manager, NULL));
-  } else {
-    self->web_view = WEBKIT_WEB_VIEW(g_object_new(
-        WEBKIT_TYPE_WEB_VIEW, "web-context",
-        pdfv_markdown_resource_scheme_get_context(self->resources),
-        "user-content-manager", self->content_manager, NULL));
-  }
+  PdfvWebView *related_view = g_weak_ref_get(&related_view_ref);
+  self->web_view = pdfv_web_view_new(related_view);
   g_weak_ref_set(&related_view_ref, self->web_view);
   g_clear_object(&related_view);
   pdfv_markdown_resource_scheme_bind_web_view(self->resources,
@@ -2226,26 +2193,20 @@ PdfvMarkdownEditor *pdfv_markdown_editor_new(GFile *vault_root) {
   gtk_stack_set_visible_child_name(self->content_stack, "loading");
   gtk_box_append(GTK_BOX(self), GTK_WIDGET(self->content_stack));
 
-  WebKitSettings *settings = webkit_web_view_get_settings(self->web_view);
   gboolean performance_diagnostics =
       g_strcmp0(g_getenv("PHI_MARKDOWN_PERF"), "1") == 0;
-  g_object_set(settings, "enable-developer-extras", performance_diagnostics,
-               "enable-html5-database", FALSE,
-               "enable-html5-local-storage", FALSE,
-               "enable-page-cache", FALSE, NULL);
-  self->bridge = pdfv_markdown_editor_bridge_new(self->web_view,
-                                                  self->content_manager);
+  pdfv_web_view_set_developer_extras_enabled(self->web_view,
+                                             performance_diagnostics);
+  self->bridge = pdfv_markdown_editor_bridge_new(self->web_view);
   g_signal_connect(self->bridge, "message", G_CALLBACK(on_bridge_message),
                    self);
   g_signal_connect(self->bridge, "bridge-error",
                    G_CALLBACK(on_bridge_error), self);
-  g_signal_connect(self->web_view, "decide-policy",
-                   G_CALLBACK(on_decide_policy), self);
-  g_signal_connect(self->web_view, "permission-request",
-                   G_CALLBACK(on_permission_request), self);
+  g_signal_connect(self->web_view, "decide-navigation",
+                   G_CALLBACK(on_decide_navigation), self);
   g_signal_connect(self->web_view, "context-menu",
                    G_CALLBACK(on_context_menu), self);
-  webkit_web_view_load_uri(
+  pdfv_web_view_load_uri(
       self->web_view,
       performance_diagnostics ? "app://editor/index.html?phi-perf=1"
                               : "app://editor/index.html");

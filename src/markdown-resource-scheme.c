@@ -1,5 +1,5 @@
 /*
- * Phi Markdown editor - WebKit app:// and vault:// resources
+ * Phi Markdown editor - app:// and vault:// resources
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
@@ -19,23 +19,17 @@
 struct _PdfvMarkdownResourceScheme {
   GObject parent_instance;
   PdfvMarkdownVaultAdapter *vault;
-  WebKitWebContext *context;
 };
 
 #define MARKDOWN_VAULT_DATA "phi-markdown-vault-adapter"
 
-/* All Markdown tabs share a context so WebKit can reuse its web process,
- * compiled JavaScript and resource cache. Vault access remains scoped to the
- * requesting WebView through MARKDOWN_VAULT_DATA. */
-static WebKitWebContext *shared_context;
-
 G_DEFINE_FINAL_TYPE(PdfvMarkdownResourceScheme, pdfv_markdown_resource_scheme,
                     G_TYPE_OBJECT)
 
-static void finish_error(WebKitURISchemeRequest *request, GQuark domain,
+static void finish_error(PdfvWebSchemeRequest *request, GQuark domain,
                          gint code, const gchar *message) {
   GError *error = g_error_new_literal(domain, code, message);
-  webkit_uri_scheme_request_finish_error(request, error);
+  pdfv_web_scheme_request_finish_error(request, error);
   g_error_free(error);
 }
 
@@ -83,10 +77,10 @@ static gchar *editor_asset_filename(const gchar *relative) {
   return g_build_filename(PDFV_EDITOR_DIR, relative, NULL);
 }
 
-static void app_scheme_request(WebKitURISchemeRequest *request,
+static void app_scheme_request(PdfvWebSchemeRequest *request,
                                gpointer user_data) {
   (void)user_data;
-  const gchar *uri = webkit_uri_scheme_request_get_uri(request);
+  const gchar *uri = pdfv_web_scheme_request_get_uri(request);
   GError *error = NULL;
   GUri *parsed = g_uri_parse(uri, G_URI_FLAGS_NONE, &error);
   if (!parsed || g_strcmp0(g_uri_get_host(parsed), "editor") != 0) {
@@ -114,13 +108,13 @@ static void app_scheme_request(WebKitURISchemeRequest *request,
   if (!g_file_get_contents(filename, &contents, &length, &error)) {
     g_debug("Could not serve editor asset '%s': %s", relative,
             error ? error->message : "unknown error");
-    webkit_uri_scheme_request_finish_error(request, error);
+    pdfv_web_scheme_request_finish_error(request, error);
     g_clear_error(&error);
   } else {
     gchar *mime = mime_for_path(relative, contents, length);
     GBytes *bytes = g_bytes_new_take(contents, length);
     GInputStream *stream = g_memory_input_stream_new_from_bytes(bytes);
-    webkit_uri_scheme_request_finish(request, stream, (gint64)length, mime);
+    pdfv_web_scheme_request_finish(request, stream, (gint64)length, mime);
     g_object_unref(stream);
     g_bytes_unref(bytes);
     g_free(mime);
@@ -148,10 +142,10 @@ gchar *pdfv_markdown_resource_scheme_load_default_snippet_variables(
   return load_editor_text_asset("default-snippet-variables.txt", error);
 }
 
-static void vault_scheme_request(WebKitURISchemeRequest *request,
+static void vault_scheme_request(PdfvWebSchemeRequest *request,
                                  gpointer user_data) {
   (void)user_data;
-  WebKitWebView *web_view = webkit_uri_scheme_request_get_web_view(request);
+  PdfvWebView *web_view = pdfv_web_scheme_request_get_web_view(request);
   PdfvMarkdownVaultAdapter *vault = web_view
       ? g_object_get_data(G_OBJECT(web_view), MARKDOWN_VAULT_DATA)
       : NULL;
@@ -160,7 +154,7 @@ static void vault_scheme_request(WebKitURISchemeRequest *request,
                  "Markdown vault is unavailable for this view");
     return;
   }
-  const gchar *uri = webkit_uri_scheme_request_get_uri(request);
+  const gchar *uri = pdfv_web_scheme_request_get_uri(request);
   GError *error = NULL;
   GUri *parsed = g_uri_parse(uri, G_URI_FLAGS_NONE, &error);
   if (!parsed || (g_uri_get_host(parsed) && *g_uri_get_host(parsed))) {
@@ -178,10 +172,10 @@ static void vault_scheme_request(WebKitURISchemeRequest *request,
   GInputStream *stream = pdfv_markdown_vault_adapter_open_read(
       vault, uri_path ? uri_path : "", &size, &content_type, &error);
   if (!stream) {
-    webkit_uri_scheme_request_finish_error(request, error);
+    pdfv_web_scheme_request_finish_error(request, error);
     g_clear_error(&error);
   } else {
-    webkit_uri_scheme_request_finish(request, stream, size, content_type);
+    pdfv_web_scheme_request_finish(request, stream, size, content_type);
     g_object_unref(stream);
   }
   g_free(content_type);
@@ -190,7 +184,6 @@ static void vault_scheme_request(WebKitURISchemeRequest *request,
 
 static void pdfv_markdown_resource_scheme_finalize(GObject *object) {
   PdfvMarkdownResourceScheme *self = PDFV_MARKDOWN_RESOURCE_SCHEME(object);
-  g_clear_object(&self->context);
   g_clear_object(&self->vault);
   G_OBJECT_CLASS(pdfv_markdown_resource_scheme_parent_class)->finalize(object);
 }
@@ -211,39 +204,21 @@ PdfvMarkdownResourceScheme *pdfv_markdown_resource_scheme_new(
   PdfvMarkdownResourceScheme *self =
       g_object_new(PDFV_TYPE_MARKDOWN_RESOURCE_SCHEME, NULL);
   self->vault = g_object_ref(vault);
-  if (!shared_context) {
-    shared_context = webkit_web_context_new();
-    webkit_web_context_set_cache_model(shared_context,
-                                       WEBKIT_CACHE_MODEL_WEB_BROWSER);
-    webkit_web_context_register_uri_scheme(shared_context, "app",
-                                           app_scheme_request, NULL, NULL);
-    webkit_web_context_register_uri_scheme(shared_context, "vault",
-                                           vault_scheme_request, NULL, NULL);
-    WebKitSecurityManager *security =
-        webkit_web_context_get_security_manager(shared_context);
-    webkit_security_manager_register_uri_scheme_as_local(security, "app");
-    webkit_security_manager_register_uri_scheme_as_secure(security, "app");
-    webkit_security_manager_register_uri_scheme_as_cors_enabled(security,
-                                                                 "app");
-    webkit_security_manager_register_uri_scheme_as_local(security, "vault");
-    webkit_security_manager_register_uri_scheme_as_secure(security, "vault");
-    webkit_security_manager_register_uri_scheme_as_cors_enabled(security,
-                                                                 "vault");
+  /* Vault access remains scoped to the requesting view through
+   * MARKDOWN_VAULT_DATA. */
+  static gsize registered;
+  if (g_once_init_enter(&registered)) {
+    pdfv_web_view_register_uri_scheme("app", app_scheme_request, NULL);
+    pdfv_web_view_register_uri_scheme("vault", vault_scheme_request, NULL);
+    g_once_init_leave(&registered, 1);
   }
-  self->context = g_object_ref(shared_context);
   return self;
 }
 
-WebKitWebContext *pdfv_markdown_resource_scheme_get_context(
-    PdfvMarkdownResourceScheme *self) {
-  g_return_val_if_fail(PDFV_IS_MARKDOWN_RESOURCE_SCHEME(self), NULL);
-  return self->context;
-}
-
 void pdfv_markdown_resource_scheme_bind_web_view(
-    PdfvMarkdownResourceScheme *self, WebKitWebView *web_view) {
+    PdfvMarkdownResourceScheme *self, PdfvWebView *web_view) {
   g_return_if_fail(PDFV_IS_MARKDOWN_RESOURCE_SCHEME(self));
-  g_return_if_fail(WEBKIT_IS_WEB_VIEW(web_view));
+  g_return_if_fail(PDFV_IS_WEB_VIEW(web_view));
   g_object_set_data_full(G_OBJECT(web_view), MARKDOWN_VAULT_DATA,
                          g_object_ref(self->vault), g_object_unref);
 }

@@ -1,5 +1,5 @@
 /*
- * Phi Markdown editor - versioned native/WebKit JSON bridge
+ * Phi Markdown editor - versioned native/web JSON bridge
  * Copyright (C) 2026 Vlad Korsakov <ulqba@student.kit.edu>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
@@ -8,8 +8,7 @@
 
 struct _PdfvMarkdownEditorBridge {
   GObject parent_instance;
-  WebKitWebView *web_view;
-  WebKitUserContentManager *content_manager;
+  PdfvWebView *web_view;
 };
 
 enum {
@@ -27,11 +26,9 @@ static void on_javascript_finished(GObject *source, GAsyncResult *result,
                                    gpointer user_data) {
   PdfvMarkdownEditorBridge *self = PDFV_MARKDOWN_EDITOR_BRIDGE(user_data);
   GError *error = NULL;
-  JSCValue *value = webkit_web_view_evaluate_javascript_finish(
-      WEBKIT_WEB_VIEW(source), result, &error);
-  if (!value && error)
+  if (!pdfv_web_view_run_javascript_finish(PDFV_WEB_VIEW(source), result,
+                                           &error))
     g_signal_emit(self, bridge_signals[SIGNAL_ERROR], 0, error->message);
-  g_clear_object(&value);
   g_clear_error(&error);
   g_object_unref(self);
 }
@@ -73,9 +70,9 @@ void pdfv_markdown_editor_bridge_send(PdfvMarkdownEditorBridge *self,
   gchar *script = g_strdup_printf(
       "window.nativeEditorReceive && window.nativeEditorReceive(JSON.parse(%s));",
       quoted);
-  webkit_web_view_evaluate_javascript(
-      self->web_view, script, -1, NULL, "app://editor/native-bridge.js",
-      NULL, on_javascript_finished, g_object_ref(self));
+  pdfv_web_view_run_javascript(
+      self->web_view, script, "app://editor/native-bridge.js", NULL,
+      on_javascript_finished, g_object_ref(self));
 
   g_free(script);
   g_free(quoted);
@@ -86,19 +83,15 @@ void pdfv_markdown_editor_bridge_send(PdfvMarkdownEditorBridge *self,
   g_object_unref(builder);
 }
 
-static void on_script_message(WebKitUserContentManager *manager,
-                              JSCValue *value,
+static void on_script_message(PdfvWebView *web_view, const gchar *source,
                               PdfvMarkdownEditorBridge *self) {
-  (void)manager;
-  gchar *source = jsc_value_is_string(value) ? jsc_value_to_string(value)
-                                              : jsc_value_to_json(value, 0);
+  (void)web_view;
   JsonParser *parser = json_parser_new();
   GError *error = NULL;
   if (!source || !json_parser_load_from_data(parser, source, -1, &error)) {
     g_signal_emit(self, bridge_signals[SIGNAL_ERROR], 0,
                   error ? error->message : "Bridge message was not JSON");
     g_clear_error(&error);
-    g_free(source);
     g_object_unref(parser);
     return;
   }
@@ -106,7 +99,6 @@ static void on_script_message(WebKitUserContentManager *manager,
   if (!JSON_NODE_HOLDS_OBJECT(root)) {
     g_signal_emit(self, bridge_signals[SIGNAL_ERROR], 0,
                   "Bridge message root must be an object");
-    g_free(source);
     g_object_unref(parser);
     return;
   }
@@ -118,7 +110,6 @@ static void on_script_message(WebKitUserContentManager *manager,
   if (protocol != 1 || !type || !*type) {
     g_signal_emit(self, bridge_signals[SIGNAL_ERROR], 0,
                   "Unsupported or incomplete bridge message");
-    g_free(source);
     g_object_unref(parser);
     return;
   }
@@ -130,18 +121,13 @@ static void on_script_message(WebKitUserContentManager *manager,
                             ? json_object_get_object_member(message, "payload")
                             : NULL;
   g_signal_emit(self, bridge_signals[SIGNAL_MESSAGE], 0, type, id, payload);
-  g_free(source);
   g_object_unref(parser);
 }
 
 static void pdfv_markdown_editor_bridge_dispose(GObject *object) {
   PdfvMarkdownEditorBridge *self = PDFV_MARKDOWN_EDITOR_BRIDGE(object);
-  if (self->content_manager) {
-    webkit_user_content_manager_unregister_script_message_handler(
-        self->content_manager, "native", NULL);
-    g_signal_handlers_disconnect_by_data(self->content_manager, self);
-  }
-  g_clear_object(&self->content_manager);
+  if (self->web_view)
+    g_signal_handlers_disconnect_by_data(self->web_view, self);
   g_clear_object(&self->web_view);
   G_OBJECT_CLASS(pdfv_markdown_editor_bridge_parent_class)->dispose(object);
 }
@@ -163,18 +149,12 @@ static void pdfv_markdown_editor_bridge_init(
 }
 
 PdfvMarkdownEditorBridge *pdfv_markdown_editor_bridge_new(
-    WebKitWebView *web_view, WebKitUserContentManager *content_manager) {
-  g_return_val_if_fail(WEBKIT_IS_WEB_VIEW(web_view), NULL);
-  g_return_val_if_fail(WEBKIT_IS_USER_CONTENT_MANAGER(content_manager), NULL);
+    PdfvWebView *web_view) {
+  g_return_val_if_fail(PDFV_IS_WEB_VIEW(web_view), NULL);
   PdfvMarkdownEditorBridge *self =
       g_object_new(PDFV_TYPE_MARKDOWN_EDITOR_BRIDGE, NULL);
   self->web_view = g_object_ref(web_view);
-  self->content_manager = g_object_ref(content_manager);
-  g_signal_connect(content_manager, "script-message-received::native",
+  g_signal_connect(web_view, "script-message::native",
                    G_CALLBACK(on_script_message), self);
-  if (!webkit_user_content_manager_register_script_message_handler(
-          content_manager, "native", NULL)) {
-    g_warning("Could not register the Markdown editor bridge");
-  }
   return self;
 }

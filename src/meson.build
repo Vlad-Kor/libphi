@@ -15,7 +15,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 adw_dep = dependency('libadwaita-1', version: '>= 1.6')
-webkit_dep = dependency('webkitgtk-6.0', version: '>= 2.40')
 json_glib_dep = dependency('json-glib-1.0')
 gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0')
 
@@ -36,7 +35,12 @@ pdfv_sources = [
 	'markdown-editor-bridge.c',
 	'markdown-resource-scheme.c',
 	'markdown-vault-adapter.c',
+	'web-view.c',
 ]
+
+# PdfvWebView has one backend per platform; see web-view-backend.h.
+web_view_deps = [dependency('webkitgtk-6.0', version: '>= 2.40')]
+pdfv_sources += 'web-view-webkit.c'
 
 editor_install_dir = get_option('prefix') / get_option('datadir') / 'phi' / 'editor'
 editor_source_dir = meson.project_source_root() / 'web' / 'editor' / 'dist'
@@ -47,7 +51,7 @@ pdfv_app = executable('pdfv', pdfv_sources,
 		adw_dep,
 		phi_dep,
 		mupdf_dep,
-		webkit_dep,
+		web_view_deps,
 		json_glib_dep,
 		gdk_pixbuf_dep,
 	],
