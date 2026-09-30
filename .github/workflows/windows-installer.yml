@@ -1,0 +1,60 @@
+# Builds the Windows installer from the selected branch. Start it by hand
+# under Actions > Windows installer > Run workflow; the installer is attached
+# to the run as an artifact. Nothing is released or published.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The installer names the commit it was built from.
+          fetch-depth: 1
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: git
+          pacboy: >-
+            gcc:p
+            meson:p
+            ninja:p
+            pkgconf:p
+            gtk4:p
+            libadwaita:p
+            json-glib:p
+            gdk-pixbuf2:p
+            librsvg:p
+            mupdf:p
+            webview2-loader:p
+            gobject-introspection:p
+            python-gobject:p
+            nsis:p
+
+      - name: Run the tests
+        run: |
+          meson setup _build-tests
+          meson test -C _build-tests --print-errorlogs
+
+      - name: Build the installer
+        env:
+          PHI_BUILD_NUMBER: ${{ github.run_number }}
+        run: build-aux/windows/build-installer.sh _installer
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: phi-windows-installer
+          path: _installer/*.exe
+          if-no-files-found: error
