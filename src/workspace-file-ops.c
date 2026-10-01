@@ -233,3 +233,85 @@ GFile *pdfv_workspace_move_item(GFile *root, GFile *source,
   }
   return destination;
 }
+
+static gboolean names_differ_only_in_case(const gchar *left,
+                                          const gchar *right) {
+  gchar *left_folded = g_utf8_casefold(left, -1);
+  gchar *right_folded = g_utf8_casefold(right, -1);
+  gboolean same = g_str_equal(left_folded, right_folded);
+  g_free(left_folded);
+  g_free(right_folded);
+  return same && !g_str_equal(left, right);
+}
+
+GFile *pdfv_workspace_rename_destination(GFile *root, GFile *source,
+                                         const gchar *name, GError **error) {
+  g_return_val_if_fail(G_IS_FILE(root), NULL);
+  g_return_val_if_fail(G_IS_FILE(source), NULL);
+  if (!pdfv_workspace_file_is_within(root, source) ||
+      g_file_equal(root, source)) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                        "Only items inside the workspace can be renamed");
+    return NULL;
+  }
+  GFileType source_type = g_file_query_file_type(
+      source, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
+  if (source_type != G_FILE_TYPE_REGULAR &&
+      source_type != G_FILE_TYPE_DIRECTORY) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                        "The item no longer exists");
+    return NULL;
+  }
+  gchar *clean = validated_name(name, FALSE, error);
+  if (!clean)
+    return NULL;
+  gchar *basename = g_file_get_basename(source);
+  const gchar *extension = source_type == G_FILE_TYPE_REGULAR
+      ? strrchr(basename, '.') : NULL;
+  if (extension && extension != basename) {
+    gsize length = strlen(clean);
+    gsize extension_length = strlen(extension);
+    if (length < extension_length ||
+        g_ascii_strcasecmp(clean + length - extension_length,
+                           extension) != 0) {
+      gchar *with_extension = g_strconcat(clean, extension, NULL);
+      g_free(clean);
+      clean = with_extension;
+    }
+  }
+  if (g_str_equal(clean, basename)) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_EXISTS,
+                        "The item already has that name");
+    g_free(basename);
+    g_free(clean);
+    return NULL;
+  }
+  GFile *parent = g_file_get_parent(source);
+  GFile *destination = g_file_get_child(parent, clean);
+  /* A case-only rename finds the source itself on case-insensitive
+   * filesystems, which is not a collision. */
+  if (!names_differ_only_in_case(basename, clean) &&
+      g_file_query_exists(destination, NULL)) {
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_EXISTS,
+                        "An item with that name already exists there");
+    g_clear_object(&destination);
+  }
+  g_object_unref(parent);
+  g_free(basename);
+  g_free(clean);
+  return destination;
+}
+
+GFile *pdfv_workspace_rename_item(GFile *root, GFile *source,
+                                  const gchar *name, GError **error) {
+  GFile *destination = pdfv_workspace_rename_destination(
+      root, source, name, error);
+  if (!destination)
+    return NULL;
+  if (!g_file_move(source, destination, G_FILE_COPY_NOFOLLOW_SYMLINKS,
+                   NULL, NULL, NULL, error)) {
+    g_object_unref(destination);
+    return NULL;
+  }
+  return destination;
+}

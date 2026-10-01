@@ -116,9 +116,89 @@ static void test_workspace_file_operations(void) {
   g_free(path);
 }
 
+static void test_workspace_rename(void) {
+  GError *error = NULL;
+  gchar *path = g_dir_make_tmp("phi-rename-XXXXXX", &error);
+  g_assert_no_error(error);
+  GFile *root = g_file_new_for_path(path);
+  GFile *folder = pdfv_workspace_create_folder(root, root, "Kurs", &error);
+  g_assert_no_error(error);
+  GFile *note = pdfv_workspace_create_note(root, folder, "Alt", &error);
+  g_assert_no_error(error);
+  GFile *other = pdfv_workspace_create_note(root, folder, "Andere", &error);
+  g_assert_no_error(error);
+
+  /* The extension is kept when the new name omits it. */
+  GFile *renamed = pdfv_workspace_rename_item(root, note, " Neu ", &error);
+  g_assert_no_error(error);
+  gchar *basename = g_file_get_basename(renamed);
+  g_assert_cmpstr(basename, ==, "Neu.md");
+  g_free(basename);
+  g_assert_false(g_file_query_exists(note, NULL));
+  g_assert_true(g_file_query_exists(renamed, NULL));
+
+  GFile *explicit_extension = pdfv_workspace_rename_item(
+      root, renamed, "Neuer.MD", &error);
+  g_assert_no_error(error);
+  basename = g_file_get_basename(explicit_extension);
+  g_assert_cmpstr(basename, ==, "Neuer.MD");
+  g_free(basename);
+
+  GFile *collision = pdfv_workspace_rename_item(
+      root, explicit_extension, "Andere.md", &error);
+  g_assert_null(collision);
+  g_assert_error(error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+  g_clear_error(&error);
+  g_assert_true(g_file_query_exists(explicit_extension, NULL));
+
+  GFile *unchanged = pdfv_workspace_rename_item(
+      root, explicit_extension, "Neuer.MD", &error);
+  g_assert_null(unchanged);
+  g_assert_error(error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+  g_clear_error(&error);
+
+  GFile *invalid = pdfv_workspace_rename_item(
+      root, explicit_extension, "../Neu", &error);
+  g_assert_null(invalid);
+  g_assert_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error(&error);
+
+  GFile *workspace_root = pdfv_workspace_rename_item(root, root, "x", &error);
+  g_assert_null(workspace_root);
+  g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_clear_error(&error);
+
+  /* Folders take the name verbatim and keep their contents. */
+  GFile *renamed_folder = pdfv_workspace_rename_item(
+      root, folder, "Kurs.2026", &error);
+  g_assert_no_error(error);
+  basename = g_file_get_basename(renamed_folder);
+  g_assert_cmpstr(basename, ==, "Kurs.2026");
+  g_free(basename);
+  GFile *moved_note = g_file_get_child(renamed_folder, "Neuer.MD");
+  GFile *moved_other = g_file_get_child(renamed_folder, "Andere.md");
+  g_assert_true(g_file_query_exists(moved_note, NULL));
+
+  delete_file(moved_note);
+  delete_file(moved_other);
+  delete_file(renamed_folder);
+  delete_file(root);
+  g_object_unref(moved_note);
+  g_object_unref(moved_other);
+  g_object_unref(renamed_folder);
+  g_object_unref(explicit_extension);
+  g_object_unref(renamed);
+  g_object_unref(other);
+  g_object_unref(note);
+  g_object_unref(folder);
+  g_object_unref(root);
+  g_free(path);
+}
+
 int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add_func("/workspace/file-operations",
                   test_workspace_file_operations);
+  g_test_add_func("/workspace/rename", test_workspace_rename);
   return g_test_run();
 }

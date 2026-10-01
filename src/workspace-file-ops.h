@@ -25,6 +25,13 @@ GFile *pdfv_workspace_create_folder(GFile *root, GFile *parent,
 GFile *pdfv_workspace_move_item(GFile *root, GFile *source,
                                 GFile *destination_folder, GError **error);
 
+/* A file keeps its extension when the new name omits it, so renaming a note
+ * cannot accidentally hide it from the workspace tree. */
+GFile *pdfv_workspace_rename_destination(GFile *root, GFile *source,
+                                         const gchar *name, GError **error);
+GFile *pdfv_workspace_rename_item(GFile *root, GFile *source,
+                                  const gchar *name, GError **error);
+
 G_END_DECLS
 
 #endif

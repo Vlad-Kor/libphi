@@ -1424,6 +1424,7 @@ static GMenu *workspace_context_menu(GFile *file, gboolean folder) {
     g_object_unref(open);
   }
   GMenu *files = g_menu_new();
+  g_menu_append(files, "Rename…", "win.workspace-context-rename");
   g_menu_append(files, "Open Folder in System Files",
                 "win.workspace-context-open-folder");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(files));
@@ -4043,6 +4044,7 @@ typedef struct {
   GFile *source;
   GFile *destination_folder;
   GFile *expected_destination;
+  gchar *new_name; /* set for a rename in place instead of a move */
   GPtrArray *tabs;
   guint save_index;
   gboolean source_is_folder;
@@ -4056,13 +4058,17 @@ static void workspace_move_request_free(WorkspaceMoveRequest *request) {
   g_clear_object(&request->source);
   g_clear_object(&request->destination_folder);
   g_clear_object(&request->expected_destination);
+  g_free(request->new_name);
   g_clear_pointer(&request->tabs, g_ptr_array_unref);
   g_free(request);
 }
 
 static void workspace_move_failed(WorkspaceMoveRequest *request,
                                   const GError *error) {
-  show_file_operation_error(request->initiator, "Could Not Move Item", error);
+  show_file_operation_error(request->initiator,
+                            request->new_name ? "Could Not Rename Item"
+                                              : "Could Not Move Item",
+                            error);
   workspace_move_request_free(request);
 }
 
@@ -4264,8 +4270,11 @@ static void workspace_trash_execute(WorkspaceMoveRequest *request) {
 
 static void workspace_move_execute(WorkspaceMoveRequest *request) {
   GError *error = NULL;
-  GFile *destination = pdfv_workspace_move_item(
-      request->root, request->source, request->destination_folder, &error);
+  GFile *destination = request->new_name
+      ? pdfv_workspace_rename_item(request->root, request->source,
+                                   request->new_name, &error)
+      : pdfv_workspace_move_item(request->root, request->source,
+                                 request->destination_folder, &error);
   if (!destination) {
     workspace_move_failed(request, error);
     g_clear_error(&error);
@@ -4303,7 +4312,8 @@ static void workspace_move_execute(WorkspaceMoveRequest *request) {
   gchar *basename = g_file_get_basename(destination);
   g_free(request->initiator->workspace_pending_toast);
   request->initiator->workspace_pending_toast =
-      g_strdup_printf("Moved %s", basename);
+      g_strdup_printf(request->new_name ? "Renamed to %s" : "Moved %s",
+                      basename);
   g_free(basename);
 
   for (GList *at = application ? gtk_application_get_windows(application)
@@ -4396,6 +4406,23 @@ static void workspace_move_save_next(WorkspaceMoveRequest *request) {
     workspace_move_execute(request);
 }
 
+static void start_workspace_move(WorkspaceMoveRequest *request) {
+  PdfvWindow *self = request->initiator;
+  request->tabs = g_ptr_array_new_with_free_func(
+      (GDestroyNotify)moved_tab_free);
+  self->workspace_move_running = TRUE;
+
+  collect_workspace_move_tabs(request);
+  if (request->tabs->len > 0) {
+    AdwToast *toast = adw_toast_new(
+        request->new_name ? "Saving open notes before renaming…"
+                          : "Saving open notes before moving…");
+    adw_toast_set_timeout(toast, 2);
+    adw_toast_overlay_add_toast(self->toast_overlay, toast);
+  }
+  workspace_move_save_next(request);
+}
+
 static void begin_workspace_move(PdfvWindow *self, GFile *source,
                                  GFile *destination_folder) {
   if (!self->workspace || self->workspace_move_running)
@@ -4462,18 +4489,94 @@ static void begin_workspace_move(PdfvWindow *self, GFile *source,
   request->destination_folder = g_object_ref(destination_folder);
   request->source_is_folder = source_type == G_FILE_TYPE_DIRECTORY;
   request->expected_destination = expected_destination;
-  request->tabs = g_ptr_array_new_with_free_func(
-      (GDestroyNotify)moved_tab_free);
-  self->workspace_move_running = TRUE;
+  start_workspace_move(request);
+}
 
-  collect_workspace_move_tabs(request);
-  if (request->tabs->len > 0) {
-    AdwToast *toast = adw_toast_new(
-        "Saving open notes before moving…");
-    adw_toast_set_timeout(toast, 2);
-    adw_toast_overlay_add_toast(self->toast_overlay, toast);
+static void begin_workspace_rename(PdfvWindow *self, GFile *source,
+                                   const gchar *name) {
+  if (!self->workspace || self->workspace_move_running)
+    return;
+  GFile *root = pdfv_workspace_get_folder(self->workspace);
+  GError *error = NULL;
+  GFile *expected_destination = pdfv_workspace_rename_destination(
+      root, source, name, &error);
+  if (!expected_destination) {
+    show_file_operation_error(self, "Could Not Rename Item", error);
+    g_clear_error(&error);
+    return;
   }
-  workspace_move_save_next(request);
+  WorkspaceMoveRequest *request = g_new0(WorkspaceMoveRequest, 1);
+  request->initiator = g_object_ref(self);
+  request->root = g_object_ref(root);
+  request->source = g_object_ref(source);
+  request->destination_folder = g_file_get_parent(source);
+  request->source_is_folder = g_file_query_file_type(
+      source, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL) ==
+      G_FILE_TYPE_DIRECTORY;
+  request->expected_destination = expected_destination;
+  request->new_name = g_strdup(name);
+  start_workspace_move(request);
+}
+
+typedef struct {
+  PdfvWindow *window;
+  GFile *file;
+  GtkEntry *entry;
+} WorkspaceRenameRequest;
+
+static void workspace_rename_request_free(WorkspaceRenameRequest *request) {
+  g_clear_object(&request->window);
+  g_clear_object(&request->file);
+  g_clear_object(&request->entry);
+  g_free(request);
+}
+
+static void on_workspace_rename_chosen(GObject *source, GAsyncResult *result,
+                                       gpointer user_data) {
+  WorkspaceRenameRequest *request = user_data;
+  const gchar *response = adw_alert_dialog_choose_finish(
+      ADW_ALERT_DIALOG(source), result);
+  if (g_strcmp0(response, "rename") == 0)
+    begin_workspace_rename(
+        request->window, request->file,
+        gtk_editable_get_text(GTK_EDITABLE(request->entry)));
+  workspace_rename_request_free(request);
+}
+
+static void show_workspace_rename_dialog(PdfvWindow *self, GFile *file,
+                                         gboolean folder) {
+  if (!self->workspace || self->workspace_move_running)
+    return;
+  gchar *basename = g_file_get_basename(file);
+  AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(
+      folder ? "Rename Folder"
+             : file_is_markdown(file) ? "Rename Note" : "Rename Document",
+      NULL));
+  GtkEntry *entry = GTK_ENTRY(gtk_entry_new());
+  gtk_editable_set_text(GTK_EDITABLE(entry), basename);
+  /* Select only the stem so typing a new name keeps the extension. */
+  const gchar *extension = folder ? NULL : strrchr(basename, '.');
+  gint stem = extension && extension != basename
+      ? (gint)g_utf8_pointer_to_offset(basename, extension) : -1;
+  gtk_editable_select_region(GTK_EDITABLE(entry), 0, stem);
+  gtk_entry_set_activates_default(entry, TRUE);
+  adw_alert_dialog_set_extra_child(dialog, GTK_WIDGET(entry));
+  adw_alert_dialog_add_responses(dialog, "cancel", "Cancel",
+                                 "rename", "Rename", NULL);
+  adw_alert_dialog_set_default_response(dialog, "rename");
+  adw_alert_dialog_set_close_response(dialog, "cancel");
+  adw_alert_dialog_set_response_appearance(dialog, "rename",
+                                           ADW_RESPONSE_SUGGESTED);
+  WorkspaceRenameRequest *request = g_new0(WorkspaceRenameRequest, 1);
+  request->window = g_object_ref(self);
+  request->file = g_object_ref(file);
+  request->entry = g_object_ref(entry);
+  adw_alert_dialog_choose(dialog, GTK_WIDGET(self), NULL,
+                          on_workspace_rename_chosen, request);
+  gtk_widget_grab_focus(GTK_WIDGET(entry));
+  /* Focusing an entry selects all of it; restore the stem selection. */
+  gtk_editable_select_region(GTK_EDITABLE(entry), 0, stem);
+  g_free(basename);
 }
 
 static void begin_workspace_trash_item(PdfvWindow *self, GFile *file,
@@ -4907,6 +5010,17 @@ static void action_workspace_context_open_folder(GSimpleAction *action,
   if (self->workspace_context_file)
     open_folder_in_system_files(self, self->workspace_context_file,
                                 self->workspace_context_is_folder);
+}
+
+static void action_workspace_context_rename(GSimpleAction *action,
+                                            GVariant *parameter,
+                                            gpointer user_data) {
+  (void)action;
+  (void)parameter;
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  if (self->workspace_context_file)
+    show_workspace_rename_dialog(self, self->workspace_context_file,
+                                 self->workspace_context_is_folder);
 }
 
 static void action_workspace_context_trash(GSimpleAction *action,
@@ -6643,6 +6757,8 @@ static GActionEntry win_actions[] = {
      .activate = action_workspace_context_open_default},
     {.name = "workspace-context-open-folder",
      .activate = action_workspace_context_open_folder},
+    {.name = "workspace-context-rename",
+     .activate = action_workspace_context_rename},
     {.name = "workspace-context-trash",
      .activate = action_workspace_context_trash},
     {.name = "tab-context-open-new-tab",
