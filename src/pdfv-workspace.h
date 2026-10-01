@@ -48,6 +48,10 @@ void pdfv_workspace_cancel(PdfvWorkspace *self);
 gboolean pdfv_workspace_add_path(PdfvWorkspace *self, GFile *file);
 gboolean pdfv_workspace_remove_path(PdfvWorkspace *self, GFile *file);
 
+/* Watches the folders of the published tree (done after every load) so
+ * changes made outside Phi are patched in and announced by ::tree-changed. */
+void pdfv_workspace_watch_tree(PdfvWorkspace *self);
+
 guint pdfv_workspace_get_pdf_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_document_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_indexed_count(PdfvWorkspace *self);

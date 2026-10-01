@@ -19,6 +19,19 @@
 #define INDEX_CACHE_DIRECTORY "workspace-index-v1"
 #define INDEX_CACHE_VARIANT_TYPE G_VARIANT_TYPE("(sustttas)")
 
+/* Directory monitors are per folder on every GLib backend. inotify watches
+ * are cheap, but each Windows monitor keeps a directory handle and a pending
+ * ReadDirectoryChangesW buffer, so shallow folders are watched first and the
+ * rest only update on the next full scan. */
+#ifdef G_OS_WIN32
+#define MAX_MONITORED_FOLDERS 256
+#else
+#define MAX_MONITORED_FOLDERS 2048
+#endif
+/* Events are coalesced briefly so delete+create saves, rename pairs and
+ * bursts (git checkout, unpacking) are reconciled once against the disk. */
+#define MONITOR_SETTLE_MS 100
+
 struct _PdfvWorkspaceItem {
   GObject parent_instance;
   GFile *file;
@@ -122,10 +135,14 @@ struct _PdfvWorkspace {
   guint indexed_count;
   guint cache_hit_count;
   gint generation;
+  GHashTable *monitors; /* relative folder path ("" for root) -> GFileMonitor */
+  GHashTable *pending_paths; /* GFile set awaiting reconciliation */
+  guint settle_source;
 };
 
 enum {
   SIGNAL_INDEX_UPDATED,
+  SIGNAL_TREE_CHANGED,
   N_SIGNALS,
 };
 
@@ -340,9 +357,20 @@ static void indexed_document_free(IndexedDocument *document) {
   g_free(document);
 }
 
+static void folder_monitor_free(gpointer data) {
+  GFileMonitor *monitor = data;
+  g_signal_handlers_disconnect_by_data(
+      monitor, g_object_get_data(G_OBJECT(monitor), "phi-workspace"));
+  g_file_monitor_cancel(monitor);
+  g_object_unref(monitor);
+}
+
 static void pdfv_workspace_finalize(GObject *object) {
   PdfvWorkspace *self = PDFV_WORKSPACE(object);
   pdfv_workspace_cancel(self);
+  g_clear_handle_id(&self->settle_source, g_source_remove);
+  g_clear_pointer(&self->monitors, g_hash_table_unref);
+  g_clear_pointer(&self->pending_paths, g_hash_table_unref);
   g_clear_object(&self->folder);
   g_clear_object(&self->items);
   g_clear_pointer(&self->index, g_hash_table_unref);
@@ -357,6 +385,11 @@ static void pdfv_workspace_class_init(PdfvWorkspaceClass *klass) {
   workspace_signals[SIGNAL_INDEX_UPDATED] =
       g_signal_new("index-updated", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
                    0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+  /* Emitted after a change made outside Phi was patched into the tree. The
+   * search index is stale until the owner runs pdfv_workspace_load_async(). */
+  workspace_signals[SIGNAL_TREE_CHANGED] =
+      g_signal_new("tree-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+                   0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
 
 static void pdfv_workspace_init(PdfvWorkspace *self) {
@@ -364,6 +397,11 @@ static void pdfv_workspace_init(PdfvWorkspace *self) {
   self->index = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                       (GDestroyNotify)indexed_document_free);
   self->generation = 1;
+  self->monitors = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                                         folder_monitor_free);
+  self->pending_paths = g_hash_table_new_full(g_file_hash,
+                                              (GEqualFunc)g_file_equal,
+                                              g_object_unref, NULL);
 }
 
 PdfvWorkspace *pdfv_workspace_new(GFile *folder) {
@@ -729,6 +767,130 @@ gboolean pdfv_workspace_remove_path(PdfvWorkspace *self, GFile *file) {
   return found;
 }
 
+static gboolean reconcile_pending_paths(gpointer user_data) {
+  PdfvWorkspace *self = PDFV_WORKSPACE(user_data);
+  self->settle_source = 0;
+  GPtrArray *paths = g_ptr_array_new_with_free_func(g_object_unref);
+  GHashTableIter iter;
+  gpointer key = NULL;
+  g_hash_table_iter_init(&iter, self->pending_paths);
+  while (g_hash_table_iter_next(&iter, &key, NULL)) {
+    g_ptr_array_add(paths, key);
+    g_hash_table_iter_steal(&iter);
+  }
+  /* Reconcile against the disk rather than replaying events: the final
+   * state is what matters, whatever order the backend reported it in. */
+  gboolean changed = FALSE;
+  for (guint i = 0; i < paths->len; i++) {
+    GFile *file = g_ptr_array_index(paths, i);
+    GFileType type = g_file_query_file_type(
+        file, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
+    if (type == G_FILE_TYPE_REGULAR || type == G_FILE_TYPE_DIRECTORY)
+      changed |= pdfv_workspace_add_path(self, file);
+    else
+      changed |= pdfv_workspace_remove_path(self, file);
+  }
+  g_ptr_array_unref(paths);
+  if (changed) {
+    pdfv_workspace_watch_tree(self);
+    g_signal_emit(self, workspace_signals[SIGNAL_TREE_CHANGED], 0);
+  }
+  return G_SOURCE_REMOVE;
+}
+
+static void queue_pending_path(PdfvWorkspace *self, GFile *file) {
+  if (!file)
+    return;
+  g_hash_table_add(self->pending_paths, g_object_ref(file));
+  if (!self->settle_source)
+    self->settle_source = g_timeout_add(MONITOR_SETTLE_MS,
+                                        reconcile_pending_paths, self);
+}
+
+static void on_folder_changed(GFileMonitor *monitor, GFile *file,
+                              GFile *other_file, GFileMonitorEvent event,
+                              PdfvWorkspace *self) {
+  (void)monitor;
+  switch (event) {
+  case G_FILE_MONITOR_EVENT_CREATED:
+  case G_FILE_MONITOR_EVENT_DELETED:
+  case G_FILE_MONITOR_EVENT_MOVED_IN:
+  case G_FILE_MONITOR_EVENT_MOVED_OUT:
+  case G_FILE_MONITOR_EVENT_MOVED:
+  case G_FILE_MONITOR_EVENT_RENAMED:
+    queue_pending_path(self, file);
+    queue_pending_path(self, other_file);
+    break;
+  default:
+    /* Content and attribute changes (every note save) never alter the tree;
+     * ignoring them keeps typing from causing any monitor work. */
+    break;
+  }
+}
+
+static void collect_watched_folders(PdfvWorkspace *self, GHashTable *wanted) {
+  g_hash_table_add(wanted, g_strdup(""));
+  /* Breadth first, so the cap drops the deepest folders. */
+  GQueue queue = G_QUEUE_INIT;
+  g_queue_push_tail(&queue, self->items);
+  while (!g_queue_is_empty(&queue) &&
+         g_hash_table_size(wanted) < MAX_MONITORED_FOLDERS) {
+    GListModel *store = g_queue_pop_head(&queue);
+    guint count = g_list_model_get_n_items(store);
+    for (guint i = 0; i < count &&
+                      g_hash_table_size(wanted) < MAX_MONITORED_FOLDERS;
+         i++) {
+      PdfvWorkspaceItem *item = g_list_model_get_item(store, i);
+      if (item->folder) {
+        g_hash_table_add(wanted, g_strdup(item->relative_path));
+        g_queue_push_tail(&queue, item->children);
+      }
+      g_object_unref(item);
+    }
+  }
+  g_queue_clear(&queue);
+}
+
+void pdfv_workspace_watch_tree(PdfvWorkspace *self) {
+  g_return_if_fail(PDFV_IS_WORKSPACE(self));
+  GHashTable *wanted = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                             g_free, NULL);
+  collect_watched_folders(self, wanted);
+
+  GHashTableIter iter;
+  gpointer key = NULL;
+  g_hash_table_iter_init(&iter, self->monitors);
+  while (g_hash_table_iter_next(&iter, &key, NULL)) {
+    if (!g_hash_table_contains(wanted, key))
+      g_hash_table_iter_remove(&iter);
+  }
+  g_hash_table_iter_init(&iter, wanted);
+  while (g_hash_table_iter_next(&iter, &key, NULL)) {
+    const gchar *relative = key;
+    if (g_hash_table_contains(self->monitors, relative))
+      continue;
+    GFile *folder = *relative
+        ? g_file_resolve_relative_path(self->folder, relative)
+        : g_object_ref(self->folder);
+    GError *error = NULL;
+    GFileMonitor *monitor = g_file_monitor_directory(
+        folder, G_FILE_MONITOR_WATCH_MOVES, NULL, &error);
+    g_object_unref(folder);
+    if (!monitor) {
+      /* Unsupported filesystems (and exhausted inotify watches) only lose
+       * live updates; the next full scan still sees the change. */
+      g_debug("Could not watch workspace folder %s: %s", relative,
+              error ? error->message : "unknown error");
+      g_clear_error(&error);
+      continue;
+    }
+    g_object_set_data(G_OBJECT(monitor), "phi-workspace", self);
+    g_signal_connect(monitor, "changed", G_CALLBACK(on_folder_changed), self);
+    g_hash_table_insert(self->monitors, g_strdup(relative), monitor);
+  }
+  g_hash_table_unref(wanted);
+}
+
 typedef enum {
   PDF_JOB_LOAD,
   PDF_JOB_INDEX,
@@ -1071,6 +1233,7 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
     self->items = items;
     g_object_unref(previous_items);
   }
+  pdfv_workspace_watch_tree(self);
 
   g_hash_table_remove_all(self->index);
   self->indexed_count = 0;

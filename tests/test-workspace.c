@@ -563,6 +563,101 @@ static void test_workspace_patch_tree(void) {
   g_free(root_path);
 }
 
+typedef struct {
+  GMainLoop *loop;
+  guint changes;
+  gboolean timed_out;
+} WatchState;
+
+static void on_tree_changed(PdfvWorkspace *workspace, WatchState *state) {
+  (void)workspace;
+  state->changes++;
+  g_main_loop_quit(state->loop);
+}
+
+static gboolean watch_timeout(gpointer user_data) {
+  WatchState *state = user_data;
+  state->timed_out = TRUE;
+  g_main_loop_quit(state->loop);
+  return G_SOURCE_CONTINUE;
+}
+
+static void wait_for_tree_change(WatchState *state) {
+  state->timed_out = FALSE;
+  guint timeout = g_timeout_add_seconds(5, watch_timeout, state);
+  g_main_loop_run(state->loop);
+  g_source_remove(timeout);
+  g_assert_false(state->timed_out);
+}
+
+static gboolean store_has(GListModel *model, const gchar *name) {
+  for (guint i = 0; i < g_list_model_get_n_items(model); i++) {
+    if (g_str_equal(pdfv_workspace_item_get_name(item_at(model, i)), name))
+      return TRUE;
+  }
+  return FALSE;
+}
+
+static void test_workspace_watches_external_changes(void) {
+  GError *error = NULL;
+  gchar *root_path = g_dir_make_tmp("pdfv-workspace-watch-XXXXXX", &error);
+  g_assert_no_error(error);
+  GFile *root = g_file_new_for_path(root_path);
+  GFile *folder = g_file_get_child(root, "Kurs");
+  g_assert_true(g_file_make_directory(folder, NULL, &error));
+  g_assert_no_error(error);
+
+  PdfvWorkspace *workspace = pdfv_workspace_new(root);
+  load_workspace_sync(workspace);
+  WatchState state = {.loop = g_main_loop_new(NULL, FALSE)};
+  g_signal_connect(workspace, "tree-changed", G_CALLBACK(on_tree_changed),
+                   &state);
+  GListModel *items = pdfv_workspace_get_items(workspace);
+  GListModel *children =
+      pdfv_workspace_item_get_children(item_at(items, 0));
+
+  /* Created in a watched subfolder by someone else. */
+  GFile *note = g_file_get_child(folder, "extern.md");
+  write_file(note, "# Extern\n");
+  wait_for_tree_change(&state);
+  g_assert_true(store_has(children, "extern.md"));
+
+  /* Renamed outside Phi. */
+  GFile *renamed = g_file_get_child(folder, "umbenannt.md");
+  g_assert_true(g_file_move(note, renamed, G_FILE_COPY_NONE, NULL, NULL,
+                            NULL, &error));
+  g_assert_no_error(error);
+  wait_for_tree_change(&state);
+  g_assert_false(store_has(children, "extern.md"));
+  g_assert_true(store_has(children, "umbenannt.md"));
+
+  /* Rewriting a note's contents is not a tree change. */
+  guint before = state.changes;
+  write_file(renamed, "# Changed\n");
+  GMainContext *context = g_main_context_default();
+  gint64 until = g_get_monotonic_time() + 400 * G_TIME_SPAN_MILLISECOND;
+  while (g_get_monotonic_time() < until)
+    g_main_context_iteration(context, FALSE);
+  g_assert_cmpuint(state.changes, ==, before);
+
+  g_assert_true(g_file_delete(renamed, NULL, &error));
+  g_assert_no_error(error);
+  wait_for_tree_change(&state);
+  g_assert_cmpuint(g_list_model_get_n_items(children), ==, 0);
+
+  g_object_unref(workspace);
+  g_main_loop_unref(state.loop);
+  g_assert_true(g_file_delete(folder, NULL, &error));
+  g_assert_no_error(error);
+  g_assert_true(g_file_delete(root, NULL, &error));
+  g_assert_no_error(error);
+  g_object_unref(renamed);
+  g_object_unref(note);
+  g_object_unref(folder);
+  g_object_unref(root);
+  g_free(root_path);
+}
+
 int main(int argc, char **argv) {
   GError *error = NULL;
   test_cache_home =
@@ -577,6 +672,8 @@ int main(int argc, char **argv) {
   g_test_add_func("/workspace/reload-publishes-snapshot",
                   test_workspace_reload_publishes_snapshot);
   g_test_add_func("/workspace/patch-tree", test_workspace_patch_tree);
+  g_test_add_func("/workspace/watches-external-changes",
+                  test_workspace_watches_external_changes);
   gint status = g_test_run();
   gchar *version_directory =
       g_build_filename(test_cache_home, "phi-pdf-viewer",

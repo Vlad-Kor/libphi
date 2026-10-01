@@ -99,6 +99,7 @@ struct _PdfvWindow {
   GCancellable *workspace_search_cancellable;
   gboolean workspace_search_running;
   gboolean workspace_index_dirty;
+  guint workspace_rescan_source;
   gboolean workspace_suppress_preview;
   GHashTable *workspace_expanded_paths; /* Relative folder paths */
   GHashTable *workspace_document_cache; /* URI -> PhiDocument */
@@ -3619,6 +3620,7 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
     g_cancellable_cancel(self->workspace_search_cancellable);
   if (self->workspace_preview_cancellable)
     g_cancellable_cancel(self->workspace_preview_cancellable);
+  g_clear_handle_id(&self->workspace_rescan_source, g_source_remove);
   if (self->workspace) {
     pdfv_workspace_cancel(self->workspace);
     g_signal_handlers_disconnect_by_data(self->workspace, self);
@@ -3785,6 +3787,7 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
 static void reload_workspace(PdfvWindow *self, GFile *select_file) {
   if (!self->workspace)
     return;
+  g_clear_handle_id(&self->workspace_rescan_source, g_source_remove);
   if (select_file) {
     g_set_object(&self->workspace_pending_selection, select_file);
     workspace_expand_parents_for(self, select_file);
@@ -3797,6 +3800,27 @@ static void reload_workspace(PdfvWindow *self, GFile *select_file) {
   pdfv_workspace_load_async(self->workspace,
                             self->workspace_scan_cancellable,
                             on_workspace_loaded, g_object_ref(self));
+}
+
+static gboolean workspace_rescan_due(gpointer user_data) {
+  PdfvWindow *self = PDFV_WINDOW(user_data);
+  self->workspace_rescan_source = 0;
+  reload_workspace(self, NULL);
+  return G_SOURCE_REMOVE;
+}
+
+/* A change made outside Phi is already visible (the workspace patched its
+ * tree); only the search index needs the full rescan. External bursts such
+ * as a git checkout restart the delay, so they cost one rescan in total. */
+static void on_workspace_tree_changed(PdfvWorkspace *workspace,
+                                      PdfvWindow *self) {
+  if (workspace != self->workspace)
+    return;
+  restore_workspace_tree_session(self);
+  workspace_sync_selection_to_active(self);
+  g_clear_handle_id(&self->workspace_rescan_source, g_source_remove);
+  self->workspace_rescan_source =
+      g_timeout_add(1000, workspace_rescan_due, self);
 }
 
 typedef struct {
@@ -4759,6 +4783,8 @@ static void open_workspace_folder_internal(PdfvWindow *self, GFile *folder,
   self->workspace = pdfv_workspace_new(folder);
   g_signal_connect(self->workspace, "index-updated",
                    G_CALLBACK(on_workspace_index_updated), self);
+  g_signal_connect(self->workspace, "tree-changed",
+                   G_CALLBACK(on_workspace_tree_changed), self);
   update_markdown_actions(self);
   GAction *search_action =
       g_action_map_lookup_action(G_ACTION_MAP(self), "workspace-search");
@@ -7066,6 +7092,7 @@ static void pdfv_window_dispose(GObject *object) {
     g_cancellable_cancel(self->workspace_search_cancellable);
   if (self->workspace_preview_cancellable)
     g_cancellable_cancel(self->workspace_preview_cancellable);
+  g_clear_handle_id(&self->workspace_rescan_source, g_source_remove);
   if (self->workspace) {
     pdfv_workspace_cancel(self->workspace);
     g_signal_handlers_disconnect_by_data(self->workspace, self);
