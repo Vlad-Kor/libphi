@@ -1,10 +1,24 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { acceptNativeResponse } from "../src/bridge";
 import { renderMarkdown, renderMarkdownInline, sanitizeHtml, wireRenderedContent } from "../src/markdown/render";
 import { defaultSettings, updateRuntimeSettings } from "../src/settings";
 
-afterEach(() => updateRuntimeSettings(defaultSettings));
+// wireRenderedContent() starts math rendering without awaiting it. Without a
+// MathJax stub, jsdom never loads MathJax and the 10 s readiness wait outlives
+// this file; on a slow runner it then reports into a torn-down environment
+// ("window is not defined" as an unhandled rejection).
+beforeEach(() => {
+  (window as unknown as { MathJax?: unknown }).MathJax = {
+    startup: { promise: Promise.resolve() },
+    tex2svg: () => document.createElement("mjx-container"),
+  };
+});
+
+afterEach(() => {
+  updateRuntimeSettings(defaultSettings);
+  delete (window as unknown as { MathJax?: unknown }).MathJax;
+});
 
 describe("rendering security", () => {
   it("removes executable HTML while preserving useful formatting", () => {
