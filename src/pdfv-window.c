@@ -83,7 +83,6 @@ struct _PdfvWindow {
   GtkWidget *workspace_tools;
   gboolean workspace_syncing_selection;
   GFile *workspace_pending_selection;
-  gchar *workspace_pending_toast;
   GFile *workspace_context_file;
   gboolean workspace_context_is_folder;
 
@@ -3637,7 +3636,6 @@ static void close_workspace(PdfvWindow *self, gboolean forget) {
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
   g_clear_object(&self->workspace_pending_selection);
-  g_clear_pointer(&self->workspace_pending_toast, g_free);
   g_clear_object(&self->workspace_context_file);
   self->workspace_browse_tab = NULL;
   workspace_document_cache_clear(self);
@@ -3732,30 +3730,31 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     if (self->workspace_pending_selection)
       workspace_expand_parents_for(self,
                                    self->workspace_pending_selection);
-    GtkTreeListModel *previous_tree = self->workspace_tree;
-    self->workspace_tree = gtk_tree_list_model_new(
-        g_object_ref(pdfv_workspace_get_items(workspace)), FALSE, FALSE,
-        workspace_create_children, self, NULL);
+    /* The workspace keeps its store when the scan matches the tree that
+     * workspace_patch_tree() already showed; keep the model then too. */
+    if (!self->workspace_tree ||
+        gtk_tree_list_model_get_model(self->workspace_tree) !=
+            pdfv_workspace_get_items(workspace)) {
+      GtkTreeListModel *previous_tree = self->workspace_tree;
+      self->workspace_tree = gtk_tree_list_model_new(
+          g_object_ref(pdfv_workspace_get_items(workspace)), FALSE, FALSE,
+          workspace_create_children, self, NULL);
+      GtkSingleSelection *selection = gtk_single_selection_new(NULL);
+      gtk_single_selection_set_autoselect(selection, FALSE);
+      gtk_single_selection_set_can_unselect(selection, TRUE);
+      gtk_single_selection_set_model(selection,
+                                     G_LIST_MODEL(self->workspace_tree));
+      self->workspace_selection = selection;
+      g_signal_connect(selection, "selection-changed",
+                       G_CALLBACK(on_workspace_selection_changed), self);
+      gtk_list_view_set_model(self->workspace_list,
+                              GTK_SELECTION_MODEL(selection));
+      g_object_unref(selection);
+      g_clear_object(&previous_tree);
+    }
     restore_workspace_tree_session(self);
-    GtkSingleSelection *selection = gtk_single_selection_new(NULL);
-    gtk_single_selection_set_autoselect(selection, FALSE);
-    gtk_single_selection_set_can_unselect(selection, TRUE);
-    gtk_single_selection_set_model(selection,
-                                   G_LIST_MODEL(self->workspace_tree));
-    self->workspace_selection = selection;
-    g_signal_connect(selection, "selection-changed",
-                     G_CALLBACK(on_workspace_selection_changed), self);
-    gtk_list_view_set_model(self->workspace_list,
-                            GTK_SELECTION_MODEL(selection));
-    g_object_unref(selection);
-    g_clear_object(&previous_tree);
     workspace_select_pending_file(self);
     workspace_sync_selection_to_active(self);
-    if (self->workspace_pending_toast) {
-      adw_toast_overlay_add_toast(
-          self->toast_overlay, adw_toast_new(self->workspace_pending_toast));
-      g_clear_pointer(&self->workspace_pending_toast, g_free);
-    }
     if (self->workspace_tools)
       gtk_widget_set_sensitive(self->workspace_tools, TRUE);
     adw_view_stack_page_set_visible(self->workspace_sidebar_page, TRUE);
@@ -3778,7 +3777,6 @@ static void on_workspace_loaded(GObject *source, GAsyncResult *result,
     adw_dialog_present(dialog, GTK_WIDGET(self));
     if (self->workspace_tools)
       gtk_widget_set_sensitive(self->workspace_tools, FALSE);
-    g_clear_pointer(&self->workspace_pending_toast, g_free);
   }
   g_clear_error(&error);
   g_object_unref(self);
@@ -3801,11 +3799,52 @@ static void reload_workspace(PdfvWindow *self, GFile *select_file) {
                             on_workspace_loaded, g_object_ref(self));
 }
 
-static void reload_matching_workspaces(PdfvWindow *source,
-                                       GFile *select_file) {
-  if (!source->workspace)
-    return;
-  GFile *root = pdfv_workspace_get_folder(source->workspace);
+typedef struct {
+  PdfvWindow *window;
+  PdfvWorkspace *workspace;
+  GFile *removed;
+  GFile *added;
+  GFile *select_file;
+} WorkspaceTreePatch;
+
+static void workspace_tree_patch_free(WorkspaceTreePatch *patch) {
+  g_clear_object(&patch->window);
+  g_clear_object(&patch->workspace);
+  g_clear_object(&patch->removed);
+  g_clear_object(&patch->added);
+  g_clear_object(&patch->select_file);
+  g_free(patch);
+}
+
+static gboolean workspace_tree_patch_apply(gpointer user_data) {
+  WorkspaceTreePatch *patch = user_data;
+  PdfvWindow *self = patch->window;
+  if (self->workspace != patch->workspace)
+    return G_SOURCE_REMOVE;
+  if (patch->removed)
+    pdfv_workspace_remove_path(self->workspace, patch->removed);
+  if (patch->added)
+    pdfv_workspace_add_path(self->workspace, patch->added);
+  if (patch->select_file) {
+    g_set_object(&self->workspace_pending_selection, patch->select_file);
+    workspace_expand_parents_for(self, patch->select_file);
+  }
+  restore_workspace_tree_session(self);
+  workspace_select_pending_file(self);
+  workspace_sync_selection_to_active(self);
+  /* Still rescan: the index needs the change, and anything the patch could
+   * not express (for example a change made outside Phi) is picked up. */
+  reload_workspace(self, NULL);
+  return G_SOURCE_REMOVE;
+}
+
+/* Shows a filesystem change Phi just made in every window on the same
+ * workspace without waiting for a full rescan. The patch runs from an idle
+ * because moves can complete inside a row's drop handler, and removing that
+ * row synchronously would dispose the widget that is still handling it. */
+static void patch_matching_workspaces(PdfvWindow *source, GFile *root,
+                                      GFile *removed, GFile *added,
+                                      GFile *select_file) {
   GtkApplication *application = gtk_window_get_application(GTK_WINDOW(source));
   for (GList *at = application ? gtk_application_get_windows(application)
                                : NULL;
@@ -3816,7 +3855,15 @@ static void reload_matching_workspaces(PdfvWindow *source,
     if (!window->workspace ||
         !g_file_equal(pdfv_workspace_get_folder(window->workspace), root))
       continue;
-    reload_workspace(window, window == source ? select_file : NULL);
+    WorkspaceTreePatch *patch = g_new0(WorkspaceTreePatch, 1);
+    patch->window = g_object_ref(window);
+    patch->workspace = g_object_ref(window->workspace);
+    patch->removed = removed ? g_object_ref(removed) : NULL;
+    patch->added = added ? g_object_ref(added) : NULL;
+    patch->select_file = window == source && select_file
+        ? g_object_ref(select_file) : NULL;
+    g_idle_add_full(G_PRIORITY_HIGH_IDLE, workspace_tree_patch_apply, patch,
+                    (GDestroyNotify)workspace_tree_patch_free);
   }
 }
 
@@ -3948,6 +3995,7 @@ static void on_workspace_creation_chosen(GObject *source,
     workspace_creation_request_free(request);
     return;
   }
+  patch_matching_workspaces(self, root, NULL, created, created);
   if (!request->folder)
     workspace_open_file(self, created, FALSE);
   gchar *basename = g_file_get_basename(created);
@@ -3955,7 +4003,6 @@ static void on_workspace_creation_chosen(GObject *source,
   adw_toast_overlay_add_toast(self->toast_overlay, adw_toast_new(message));
   g_free(message);
   g_free(basename);
-  reload_matching_workspaces(self, created);
   g_object_unref(created);
   workspace_creation_request_free(request);
 }
@@ -4243,9 +4290,11 @@ static void workspace_trash_execute(WorkspaceMoveRequest *request) {
   }
 
   gchar *basename = g_file_get_basename(request->source);
-  g_free(request->initiator->workspace_pending_toast);
-  request->initiator->workspace_pending_toast =
-      g_strdup_printf("Moved %s to %s", basename, workspace_trash_name());
+  gchar *message = g_strdup_printf("Moved %s to %s", basename,
+                                   workspace_trash_name());
+  adw_toast_overlay_add_toast(request->initiator->toast_overlay,
+                              adw_toast_new(message));
+  g_free(message);
   g_free(basename);
 
   GtkApplication *application = gtk_window_get_application(
@@ -4263,8 +4312,9 @@ static void workspace_trash_execute(WorkspaceMoveRequest *request) {
     remove_workspace_state_after_trash(window, request->source,
                                        request->source_is_folder);
     save_workspace_tab_session(window);
-    reload_workspace(window, NULL);
   }
+  patch_matching_workspaces(request->initiator, request->root,
+                            request->source, NULL, NULL);
   workspace_move_request_free(request);
 }
 
@@ -4310,10 +4360,11 @@ static void workspace_move_execute(WorkspaceMoveRequest *request) {
   }
 
   gchar *basename = g_file_get_basename(destination);
-  g_free(request->initiator->workspace_pending_toast);
-  request->initiator->workspace_pending_toast =
-      g_strdup_printf(request->new_name ? "Renamed to %s" : "Moved %s",
-                      basename);
+  gchar *message = g_strdup_printf(
+      request->new_name ? "Renamed to %s" : "Moved %s", basename);
+  adw_toast_overlay_add_toast(request->initiator->toast_overlay,
+                              adw_toast_new(message));
+  g_free(message);
   g_free(basename);
 
   for (GList *at = application ? gtk_application_get_windows(application)
@@ -4327,9 +4378,9 @@ static void workspace_move_execute(WorkspaceMoveRequest *request) {
                       request->root))
       continue;
     save_workspace_tab_session(window);
-    reload_workspace(window, window == request->initiator
-                                  ? destination : NULL);
   }
+  patch_matching_workspaces(request->initiator, request->root,
+                            request->source, destination, destination);
 
   g_object_unref(destination);
   workspace_move_request_free(request);
@@ -7029,7 +7080,6 @@ static void pdfv_window_dispose(GObject *object) {
   g_clear_object(&self->workspace_preview_cancellable);
   g_clear_object(&self->workspace_preview_file);
   g_clear_object(&self->workspace_pending_selection);
-  g_clear_pointer(&self->workspace_pending_toast, g_free);
   g_clear_object(&self->workspace_context_file);
   g_clear_object(&self->tab_context_page);
   g_clear_object(&self->tab_context_file);

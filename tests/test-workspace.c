@@ -483,6 +483,86 @@ static void test_workspace_reload_publishes_snapshot(void) {
   g_free(root_path);
 }
 
+static PdfvWorkspaceItem *item_at(GListModel *model, guint position) {
+  PdfvWorkspaceItem *item = g_list_model_get_item(model, position);
+  g_assert_nonnull(item);
+  g_object_unref(item); /* the store keeps it alive */
+  return item;
+}
+
+static void write_file(GFile *file, const gchar *contents) {
+  GError *error = NULL;
+  g_assert_true(g_file_replace_contents(file, contents, strlen(contents),
+                                        NULL, FALSE, G_FILE_CREATE_NONE,
+                                        NULL, NULL, &error));
+  g_assert_no_error(error);
+}
+
+static void test_workspace_patch_tree(void) {
+  GError *error = NULL;
+  gchar *root_path = g_dir_make_tmp("pdfv-workspace-patch-XXXXXX", &error);
+  g_assert_no_error(error);
+  GFile *root = g_file_new_for_path(root_path);
+  GFile *note = g_file_get_child(root, "b.md");
+  write_file(note, "# B\n");
+
+  PdfvWorkspace *workspace = pdfv_workspace_new(root);
+  load_workspace_sync(workspace);
+  GListModel *items = pdfv_workspace_get_items(workspace);
+
+  /* Folders sort before files; a new folder brings its contents along. */
+  GFile *folder = g_file_get_child(root, "z folder");
+  g_assert_true(g_file_make_directory(folder, NULL, &error));
+  g_assert_no_error(error);
+  GFile *nested = g_file_get_child(folder, "nested.md");
+  write_file(nested, "# Nested\n");
+  GFile *ignored = g_file_get_child(folder, "image.png");
+  write_file(ignored, "png");
+  g_assert_true(pdfv_workspace_add_path(workspace, folder));
+  g_assert_false(pdfv_workspace_add_path(workspace, folder));
+  g_assert_cmpuint(g_list_model_get_n_items(items), ==, 2);
+  PdfvWorkspaceItem *folder_item = item_at(items, 0);
+  g_assert_true(pdfv_workspace_item_is_folder(folder_item));
+  g_assert_cmpstr(pdfv_workspace_item_get_relative_path(folder_item), ==,
+                  "z folder");
+  GListModel *children = pdfv_workspace_item_get_children(folder_item);
+  g_assert_cmpuint(g_list_model_get_n_items(children), ==, 1);
+  g_assert_cmpstr(pdfv_workspace_item_get_name(item_at(children, 0)), ==,
+                  "nested.md");
+
+  /* Files are inserted in filename order inside existing folders. */
+  GFile *first = g_file_get_child(folder, "a.md");
+  write_file(first, "# A\n");
+  g_assert_true(pdfv_workspace_add_path(workspace, first));
+  g_assert_cmpuint(g_list_model_get_n_items(children), ==, 2);
+  g_assert_cmpstr(pdfv_workspace_item_get_name(item_at(children, 0)), ==,
+                  "a.md");
+  g_assert_false(pdfv_workspace_add_path(workspace, ignored));
+
+  /* A rescan that agrees with the patched tree keeps the same store. */
+  load_workspace_sync(workspace);
+  g_assert_true(pdfv_workspace_get_items(workspace) == items);
+
+  g_assert_true(pdfv_workspace_remove_path(workspace, first));
+  g_assert_false(pdfv_workspace_remove_path(workspace, first));
+  g_assert_cmpuint(g_list_model_get_n_items(children), ==, 1);
+  g_assert_true(pdfv_workspace_remove_path(workspace, folder));
+  g_assert_cmpuint(g_list_model_get_n_items(items), ==, 1);
+
+  /* The filesystem still has the folder, so the rescan republishes. */
+  load_workspace_sync(workspace);
+  g_assert_true(pdfv_workspace_get_items(workspace) != items);
+
+  g_object_unref(workspace);
+  GFile *files[] = {first, nested, ignored, folder, note, root};
+  for (guint i = 0; i < G_N_ELEMENTS(files); i++) {
+    g_assert_true(g_file_delete(files[i], NULL, &error));
+    g_assert_no_error(error);
+    g_object_unref(files[i]);
+  }
+  g_free(root_path);
+}
+
 int main(int argc, char **argv) {
   GError *error = NULL;
   test_cache_home =
@@ -496,6 +576,7 @@ int main(int argc, char **argv) {
                   test_workspace_search);
   g_test_add_func("/workspace/reload-publishes-snapshot",
                   test_workspace_reload_publishes_snapshot);
+  g_test_add_func("/workspace/patch-tree", test_workspace_patch_tree);
   gint status = g_test_run();
   gchar *version_directory =
       g_build_filename(test_cache_home, "phi-pdf-viewer",

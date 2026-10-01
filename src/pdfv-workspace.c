@@ -23,6 +23,7 @@ struct _PdfvWorkspaceItem {
   GObject parent_instance;
   GFile *file;
   gchar *name;
+  gchar *sort_key;
   gchar *relative_path;
   gboolean folder;
   GListStore *children;
@@ -35,6 +36,7 @@ static void pdfv_workspace_item_finalize(GObject *object) {
   g_clear_object(&self->file);
   g_clear_object(&self->children);
   g_free(self->name);
+  g_free(self->sort_key);
   g_free(self->relative_path);
   G_OBJECT_CLASS(pdfv_workspace_item_parent_class)->finalize(object);
 }
@@ -495,7 +497,9 @@ static GPtrArray *scan_folder(GFile *folder, const gchar *parent_path,
       item->children =
           g_ptr_array_new_with_free_func((GDestroyNotify)scan_item_free);
       g_ptr_array_add(children, item);
-      if (filename_is_pdf(name)) {
+      if (!result) {
+        /* Tree-only scan: the index is refreshed by a full load. */
+      } else if (filename_is_pdf(name)) {
         g_ptr_array_add(result->pdf_files, g_object_ref(child_file));
         g_ptr_array_add(result->pdf_paths, g_strdup(relative));
       } else {
@@ -569,6 +573,7 @@ static PdfvWorkspaceItem *workspace_item_from_scan(ScanItem *scan) {
   PdfvWorkspaceItem *item = g_object_new(PDFV_TYPE_WORKSPACE_ITEM, NULL);
   item->file = g_object_ref(scan->file);
   item->name = g_strdup(scan->name);
+  item->sort_key = g_strdup(scan->sort_key);
   item->relative_path = g_strdup(scan->relative_path);
   item->folder = scan->folder;
   for (guint i = 0; i < scan->children->len; i++) {
@@ -578,6 +583,150 @@ static PdfvWorkspaceItem *workspace_item_from_scan(ScanItem *scan) {
     g_object_unref(child);
   }
   return item;
+}
+
+static gboolean scan_matches_store(GPtrArray *scan, GListStore *store) {
+  guint count = g_list_model_get_n_items(G_LIST_MODEL(store));
+  if (count != scan->len)
+    return FALSE;
+  for (guint i = 0; i < count; i++) {
+    ScanItem *expected = g_ptr_array_index(scan, i);
+    PdfvWorkspaceItem *item = g_list_model_get_item(G_LIST_MODEL(store), i);
+    gboolean match = item->folder == expected->folder &&
+        g_str_equal(item->name, expected->name) &&
+        g_str_equal(item->relative_path, expected->relative_path) &&
+        g_file_equal(item->file, expected->file) &&
+        scan_matches_store(expected->children, item->children);
+    g_object_unref(item);
+    if (!match)
+      return FALSE;
+  }
+  return TRUE;
+}
+
+static gint workspace_item_compare(gconstpointer a, gconstpointer b,
+                                   gpointer user_data) {
+  (void)user_data;
+  const PdfvWorkspaceItem *left = a;
+  const PdfvWorkspaceItem *right = b;
+  if (left->folder != right->folder)
+    return left->folder ? -1 : 1;
+  return strcmp(left->sort_key, right->sort_key);
+}
+
+/* Finds the store holding @file, the folder chain must already be present.
+ * Returns a borrowed store, or NULL when the tree does not show @file's
+ * parent (for example inside a hidden folder). */
+static GListStore *store_for_parent(PdfvWorkspace *self, GFile *file,
+                                    gchar **relative_out) {
+  gchar *relative = g_file_get_relative_path(self->folder, file);
+  if (!relative || !*relative) {
+    g_free(relative);
+    return NULL;
+  }
+  GListStore *store = self->items;
+  gchar **parts = g_strsplit(relative, G_DIR_SEPARATOR_S, -1);
+  guint n_parts = g_strv_length(parts);
+  for (guint part = 0; store && part + 1 < n_parts; part++) {
+    GListStore *next = NULL;
+    guint count = g_list_model_get_n_items(G_LIST_MODEL(store));
+    for (guint i = 0; i < count && !next; i++) {
+      PdfvWorkspaceItem *item = g_list_model_get_item(G_LIST_MODEL(store), i);
+      if (item->folder && g_str_equal(item->name, parts[part]))
+        next = item->children;
+      g_object_unref(item);
+    }
+    store = next;
+  }
+  g_strfreev(parts);
+  if (store && relative_out)
+    *relative_out = relative;
+  else
+    g_free(relative);
+  return store;
+}
+
+static gboolean store_find(GListStore *store, const gchar *name,
+                           guint *position) {
+  guint count = g_list_model_get_n_items(G_LIST_MODEL(store));
+  for (guint i = 0; i < count; i++) {
+    PdfvWorkspaceItem *item = g_list_model_get_item(G_LIST_MODEL(store), i);
+    gboolean match = g_str_equal(item->name, name);
+    g_object_unref(item);
+    if (match) {
+      *position = i;
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+gboolean pdfv_workspace_add_path(PdfvWorkspace *self, GFile *file) {
+  g_return_val_if_fail(PDFV_IS_WORKSPACE(self), FALSE);
+  g_return_val_if_fail(G_IS_FILE(file), FALSE);
+  gchar *relative = NULL;
+  GListStore *store = store_for_parent(self, file, &relative);
+  if (!store)
+    return FALSE;
+  GFileInfo *info = g_file_query_info(
+      file, G_FILE_ATTRIBUTE_STANDARD_NAME ","
+            G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+            G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN,
+      G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL, NULL);
+  if (!info) {
+    g_free(relative);
+    return FALSE;
+  }
+  /* Mirror scan_folder()'s filter so the next full scan agrees. */
+  const gchar *name = g_file_info_get_name(info);
+  GFileType type = g_file_info_get_file_type(info);
+  gboolean folder = type == G_FILE_TYPE_DIRECTORY;
+  gboolean shown = folder
+      ? !g_file_info_get_is_hidden(info) && name[0] != '.'
+      : type == G_FILE_TYPE_REGULAR &&
+            (filename_is_pdf(name) || filename_is_markdown(name));
+  guint existing = 0;
+  if (!shown || store_find(store, name, &existing)) {
+    g_object_unref(info);
+    g_free(relative);
+    return FALSE;
+  }
+  ScanItem scan = {
+      .file = file,
+      .name = (gchar *)name,
+      .sort_key = g_utf8_collate_key_for_filename(name, -1),
+      .relative_path = relative,
+      .folder = folder,
+      .children = folder
+          ? scan_folder(file, relative, NULL, NULL, NULL, NULL)
+          : NULL,
+  };
+  if (!scan.children)
+    scan.children =
+        g_ptr_array_new_with_free_func((GDestroyNotify)scan_item_free);
+  PdfvWorkspaceItem *item = workspace_item_from_scan(&scan);
+  g_list_store_insert_sorted(store, item, workspace_item_compare, NULL);
+  g_object_unref(item);
+  g_ptr_array_unref(scan.children);
+  g_free(scan.sort_key);
+  g_object_unref(info);
+  g_free(relative);
+  return TRUE;
+}
+
+gboolean pdfv_workspace_remove_path(PdfvWorkspace *self, GFile *file) {
+  g_return_val_if_fail(PDFV_IS_WORKSPACE(self), FALSE);
+  g_return_val_if_fail(G_IS_FILE(file), FALSE);
+  GListStore *store = store_for_parent(self, file, NULL);
+  if (!store)
+    return FALSE;
+  gchar *name = g_file_get_basename(file);
+  guint position = 0;
+  gboolean found = store_find(store, name, &position);
+  if (found)
+    g_list_store_remove(store, position);
+  g_free(name);
+  return found;
 }
 
 typedef enum {
@@ -904,19 +1053,24 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
   if (!scan)
     return FALSE;
 
-  /* Publish each scan as a new snapshot. Existing GtkTreeListModels may still
-   * be flattening the previous store while the window swaps its sidebar
-   * model, so mutating that store in place can re-enter GTK row disposal. */
-  GListStore *items = g_list_store_new(PDFV_TYPE_WORKSPACE_ITEM);
-  for (guint i = 0; i < scan->roots->len; i++) {
-    PdfvWorkspaceItem *item =
-        workspace_item_from_scan(g_ptr_array_index(scan->roots, i));
-    g_list_store_append(items, item);
-    g_object_unref(item);
+  /* Publish each changed scan as a new snapshot. Existing GtkTreeListModels
+   * may still be flattening the previous store while the window swaps its
+   * sidebar model, so mutating that store in place can re-enter GTK row
+   * disposal. A scan that matches the current tree (the common case after
+   * pdfv_workspace_add_path/remove_path) keeps the store, so the sidebar
+   * neither rebuilds nor loses its scroll position. */
+  if (!scan_matches_store(scan->roots, self->items)) {
+    GListStore *items = g_list_store_new(PDFV_TYPE_WORKSPACE_ITEM);
+    for (guint i = 0; i < scan->roots->len; i++) {
+      PdfvWorkspaceItem *item =
+          workspace_item_from_scan(g_ptr_array_index(scan->roots, i));
+      g_list_store_append(items, item);
+      g_object_unref(item);
+    }
+    GListStore *previous_items = self->items;
+    self->items = items;
+    g_object_unref(previous_items);
   }
-  GListStore *previous_items = self->items;
-  self->items = items;
-  g_object_unref(previous_items);
 
   g_hash_table_remove_all(self->index);
   self->indexed_count = 0;

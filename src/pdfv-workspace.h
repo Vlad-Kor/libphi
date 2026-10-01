@@ -41,6 +41,13 @@ gboolean pdfv_workspace_load_finish(PdfvWorkspace *self, GAsyncResult *result,
                                     GError **error);
 void pdfv_workspace_cancel(PdfvWorkspace *self);
 
+/* Patch the published tree right after Phi itself changed the filesystem, so
+ * the sidebar does not wait for a full rescan. The index is not touched; a
+ * following pdfv_workspace_load_async() refreshes it and keeps the patched
+ * store when the scan agrees with it. Return FALSE when nothing changed. */
+gboolean pdfv_workspace_add_path(PdfvWorkspace *self, GFile *file);
+gboolean pdfv_workspace_remove_path(PdfvWorkspace *self, GFile *file);
+
 guint pdfv_workspace_get_pdf_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_document_count(PdfvWorkspace *self);
 guint pdfv_workspace_get_indexed_count(PdfvWorkspace *self);
